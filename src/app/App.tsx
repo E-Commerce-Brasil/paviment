@@ -1171,6 +1171,7 @@ function ProductModal({
             <div className="divide-y divide-border">
               {results.map((p) => {
                 const price = p[pk] as number | null;
+                const finalPrice = price != null ? calculateFinalPrice(price, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : null;
                 return (
                   <button key={p.id} onClick={() => setSelected(p)}
                     className="w-full text-left px-5 py-3 hover:bg-muted/50 transition-colors group">

@@ -1232,6 +1232,7 @@ function BudgetEditor({
 
   // Delivery address
   const customerAddr = buildFullAddress(customer);
+  const hasCustomerAddress = Boolean(customerAddr);
   const initialDelivery = {
     cep: initBudget.entregaCep || "",
     logradouro: initBudget.entregaLogradouro || "",
@@ -1241,6 +1242,8 @@ function BudgetEditor({
     cidade: initBudget.entregaCidade || "",
     estado: initBudget.entregaEstado || "",
   };
+  const initialDeliveryAddress = buildFullAddress(initialDelivery);
+  const [deliveryMode, setDeliveryMode] = useState<"customer" | "different" | "">(initialDeliveryAddress ? "different" : "");
   const [entrega, setEntrega] = useState(initialDelivery);
   const [consultandoEntregaCep, setConsultandoEntregaCep] = useState(false);
 
@@ -1404,6 +1407,11 @@ function BudgetEditor({
   }
 
   function useCustomerAddress() {
+    if (!hasCustomerAddress) {
+      toast.error("Cliente sem endereço cadastrado. Preencha o endereço de entrega manualmente.");
+      setDeliveryMode("different");
+      return;
+    }
     setEntrega({
       cep: formatCEP(customer.cep || ""),
       logradouro: customer.logradouro || "",
@@ -1413,6 +1421,12 @@ function BudgetEditor({
       cidade: customer.cidade || "",
       estado: customer.estado || "",
     });
+    setDeliveryMode("customer");
+    markDirty();
+  }
+
+  function useDifferentDeliveryAddress() {
+    setDeliveryMode("different");
     markDirty();
   }
 
@@ -1826,65 +1840,87 @@ ${budget.observacoes ? `
 
             {/* Endereço de entrega */}
             <div className="mt-4 pt-4 border-t border-border">
-              <div className="flex items-center justify-between gap-3 mb-2">
+              <div className="mb-3">
                 <p className="text-xs font-medium text-muted-foreground">Endereço de Entrega</p>
+                <p className="text-xs text-muted-foreground mt-1">Onde este pedido deve ser entregue?</p>
+              </div>
+
+              <div className="grid sm:grid-cols-2 gap-2 mb-3">
                 <button
                   type="button"
                   onClick={useCustomerAddress}
+                  disabled={isLocked || !hasCustomerAddress}
+                  className={`text-left rounded-xl border px-3 py-2.5 text-xs transition-colors disabled:opacity-50 ${deliveryMode === "customer" ? "border-primary bg-primary/8 text-primary" : "border-border hover:bg-muted"}`}>
+                  <span className="font-medium block">Entregar no endereço do cliente</span>
+                  <span className="text-muted-foreground block mt-0.5">{hasCustomerAddress ? customerAddr : "Cliente sem endereço cadastrado"}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={useDifferentDeliveryAddress}
                   disabled={isLocked}
-                  className="text-xs border border-border rounded-lg px-2.5 py-1 hover:bg-muted transition-colors disabled:opacity-50">
-                  Usar endereço do cliente
+                  className={`text-left rounded-xl border px-3 py-2.5 text-xs transition-colors disabled:opacity-50 ${deliveryMode === "different" ? "border-primary bg-primary/8 text-primary" : "border-border hover:bg-muted"}`}>
+                  <span className="font-medium block">Entregar em outro endereço</span>
+                  <span className="text-muted-foreground block mt-0.5">Preencher CEP, logradouro, número, bairro, cidade e estado.</span>
                 </button>
               </div>
-              <div className="space-y-2">
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">CEP</label>
-                  <input
-                    value={entrega.cep}
-                    onChange={(e) => handleDeliveryCepChange(e.target.value)}
-                    placeholder="00000-000"
-                    disabled={isLocked}
-                    className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50"
-                  />
-                  {consultandoEntregaCep && <p className="text-xs text-muted-foreground mt-1">Consultando CEP...</p>}
+
+              {!hasCustomerAddress && !deliveryMode && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-700 mb-3">
+                  O cliente não possui endereço cadastrado. Selecione “Entregar em outro endereço” para preencher os dados de entrega.
                 </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <div className="col-span-2">
-                    <label className="text-xs font-medium text-muted-foreground">Logradouro</label>
-                    <input value={entrega.logradouro} onChange={(e) => { setEntrega((f) => ({ ...f, logradouro: e.target.value })); markDirty(); }} disabled={isLocked}
-                      className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
-                  </div>
+              )}
+
+              {deliveryMode && (
+                <div className="space-y-2">
                   <div>
-                    <label className="text-xs font-medium text-muted-foreground">Número</label>
-                    <input value={entrega.numero} onChange={(e) => { setEntrega((f) => ({ ...f, numero: e.target.value })); markDirty(); }} disabled={isLocked}
-                      className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                    <label className="text-xs font-medium text-muted-foreground">CEP</label>
+                    <input
+                      value={entrega.cep}
+                      onChange={(e) => handleDeliveryCepChange(e.target.value)}
+                      placeholder="00000-000"
+                      disabled={isLocked}
+                      className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50"
+                    />
+                    {consultandoEntregaCep && <p className="text-xs text-muted-foreground mt-1">Consultando CEP...</p>}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="col-span-2">
+                      <label className="text-xs font-medium text-muted-foreground">Logradouro</label>
+                      <input value={entrega.logradouro} onChange={(e) => { setEntrega((f) => ({ ...f, logradouro: e.target.value })); markDirty(); }} disabled={isLocked}
+                        className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground">Número</label>
+                      <input value={entrega.numero} onChange={(e) => { setEntrega((f) => ({ ...f, numero: e.target.value })); markDirty(); }} disabled={isLocked}
+                        className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground">Complemento</label>
+                      <input value={entrega.complemento} onChange={(e) => { setEntrega((f) => ({ ...f, complemento: e.target.value })); markDirty(); }} disabled={isLocked}
+                        className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground">Bairro</label>
+                      <input value={entrega.bairro} onChange={(e) => { setEntrega((f) => ({ ...f, bairro: e.target.value })); markDirty(); }} disabled={isLocked}
+                        className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="col-span-2">
+                      <label className="text-xs font-medium text-muted-foreground">Cidade</label>
+                      <input value={entrega.cidade} onChange={(e) => { setEntrega((f) => ({ ...f, cidade: e.target.value })); markDirty(); }} disabled={isLocked}
+                        className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground">Estado</label>
+                      <input value={entrega.estado} onChange={(e) => { setEntrega((f) => ({ ...f, estado: e.target.value.toUpperCase().slice(0, 2) })); markDirty(); }} disabled={isLocked} maxLength={2}
+                        className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                    </div>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground">Complemento</label>
-                    <input value={entrega.complemento} onChange={(e) => { setEntrega((f) => ({ ...f, complemento: e.target.value })); markDirty(); }} disabled={isLocked}
-                      className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground">Bairro</label>
-                    <input value={entrega.bairro} onChange={(e) => { setEntrega((f) => ({ ...f, bairro: e.target.value })); markDirty(); }} disabled={isLocked}
-                      className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
-                  </div>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <div className="col-span-2">
-                    <label className="text-xs font-medium text-muted-foreground">Cidade</label>
-                    <input value={entrega.cidade} onChange={(e) => { setEntrega((f) => ({ ...f, cidade: e.target.value })); markDirty(); }} disabled={isLocked}
-                      className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground">Estado</label>
-                    <input value={entrega.estado} onChange={(e) => { setEntrega((f) => ({ ...f, estado: e.target.value.toUpperCase().slice(0, 2) })); markDirty(); }} disabled={isLocked} maxLength={2}
-                      className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
-                  </div>
-                </div>
-              </div>
+              )}
             </div>
 
             <div className="mt-5 pt-4 border-t border-border space-y-2">

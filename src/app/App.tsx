@@ -1036,6 +1036,7 @@ function ProductModal({
 }) {
   const [q, setQ] = useState("");
   const [superficie, setSuperficie] = useState("");
+  const [formato, setFormato] = useState("");
   const [localUso, setLocalUso] = useState("");
   const [selected, setSelected] = useState<Product | null>(null);
   const [areaInput, setAreaInput] = useState("");
@@ -1050,6 +1051,7 @@ function ProductModal({
       .some((f) => f?.toLowerCase().includes(txt));
     return matchQ &&
       (!superficie || p.superficie === superficie) &&
+      (!formato || p.formato === formato) &&
       (!localUso || String(p.localUso) === localUso);
   }).slice(0, 100);
 
@@ -1061,6 +1063,7 @@ function ProductModal({
   }
 
   const superficies = [...new Set(safeProducts.map((p) => p.superficie).filter(Boolean))].sort();
+  const formatos = [...new Set(safeProducts.map((p) => p.formato).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true }));
 
   if (selected) {
     const priceBase = selected[pk] as number | null;
@@ -1148,14 +1151,19 @@ function ProductModal({
               placeholder="Coleção, cor, formato, referência..."
               className="w-full border border-border rounded-xl pl-9 pr-4 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
           </div>
-          <div className="flex gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <select value={superficie} onChange={(e) => setSuperficie(e.target.value)}
-              className="flex-1 border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
+              className="border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
               <option value="">Todas as superfícies</option>
               {superficies.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
+            <select value={formato} onChange={(e) => setFormato(e.target.value)}
+              className="border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
+              <option value="">Todos os formatos</option>
+              {formatos.map((f) => <option key={f} value={f}>{f}</option>)}
+            </select>
             <select value={localUso} onChange={(e) => setLocalUso(e.target.value)}
-              className="flex-1 border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
+              className="border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
               <option value="">Todos os locais</option>
               <option value="2">Parede</option>
               <option value="3">Piso Interno</option>
@@ -1167,7 +1175,7 @@ function ProductModal({
           {results.length === 0 ? (
             <div className="py-16 text-center text-muted-foreground text-sm">
               <Package size={32} className="mx-auto mb-2 opacity-20" />
-              {q || superficie || localUso ? "Nenhum produto encontrado" : "Digite para buscar"}
+              {q || superficie || formato || localUso ? "Nenhum produto encontrado" : "Digite para buscar"}
             </div>
           ) : (
             <div className="divide-y divide-border">

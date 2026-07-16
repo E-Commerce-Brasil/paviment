@@ -1,0 +1,28 @@
+name: Apply CPF and phone masks
+
+on:
+  push:
+    branches:
+      - feature/mascaras-validacao-cpf-telefone
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/mascaras-validacao-cpf-telefone
+
+      - name: Apply source changes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/app/App.tsx')
+          text = path.read_text(encoding='utf-8')
+
+         

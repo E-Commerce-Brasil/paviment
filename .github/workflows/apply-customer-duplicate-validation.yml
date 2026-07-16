@@ -1,0 +1,28 @@
+name: Apply customer duplicate validation
+
+on:
+  push:
+    branches:
+      - feature/bloquear-clientes-duplicados
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/bloquear-clientes-duplicados
+
+      - name: Update duplicate validation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/app/App.tsx')
+          text = path.read_text()
+
+          old_func = '''async function checkCustomerDuplicate(cpf: string, email: string, excludeId?: string): Promise<string | null>

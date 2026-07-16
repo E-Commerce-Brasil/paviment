@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { createClient } from "@supabase/supabase-js";
 import csvRaw from "../imports/tabela_vilagres.csv?raw";
 import pavimentLogoPrint from "../imports/WhatsApp_Image_2026-07-11_at_10.17.07-3.jpeg";
@@ -74,16 +74,6 @@ interface BudgetItem {
 
 type BudgetStatus = "rascunho" | "enviado_fabrica" | "enviado_cliente" | "fechado" | "cancelado";
 
-interface AddressFields {
-  cep?: string;
-  logradouro?: string;
-  numero?: string;
-  complemento?: string;
-  bairro?: string;
-  cidade?: string;
-  estado?: string;
-}
-
 interface Budget {
   id: string;
   numero: number;
@@ -95,13 +85,6 @@ interface Budget {
   observacoes?: string;
   tecnico?: string;
   enderecoEntrega?: string;
-  entregaCep?: string;
-  entregaLogradouro?: string;
-  entregaNumero?: string;
-  entregaComplemento?: string;
-  entregaBairro?: string;
-  entregaCidade?: string;
-  entregaEstado?: string;
   items: BudgetItem[];
   subtotal: number;
   totalFinal: number;
@@ -184,13 +167,6 @@ function mapBudget(r: any, items: BudgetItem[] = []): Budget {
     observacoes: r.observacoes || "",
     tecnico: r.tecnico || "",
     enderecoEntrega: r.endereco_entrega || "",
-    entregaCep: r.entrega_cep || "",
-    entregaLogradouro: r.entrega_logradouro || "",
-    entregaNumero: r.entrega_numero || "",
-    entregaComplemento: r.entrega_complemento || "",
-    entregaBairro: r.entrega_bairro || "",
-    entregaCidade: r.entrega_cidade || "",
-    entregaEstado: r.entrega_estado || "",
     items,
     subtotal: parseFloat(r.subtotal) || 0,
     totalFinal: parseFloat(r.total_final) || 0,
@@ -538,56 +514,6 @@ function validateCustomerContactFields(cpf: string, telefone: string): boolean {
   return true;
 }
 
-function formatCEP(value: string): string {
-  const digits = onlyDigits(value).slice(0, 8);
-  if (digits.length <= 5) return digits;
-  return `${digits.slice(0, 5)}-${digits.slice(5)}`;
-}
-
-function isValidCEP(value: string): boolean {
-  return onlyDigits(value).length === 8;
-}
-
-async function fetchAddressByCEP(value: string): Promise<Pick<AddressFields, "logradouro" | "bairro" | "cidade" | "estado">> {
-  const cep = onlyDigits(value);
-  if (cep.length !== 8) throw new Error("CEP incompleto");
-
-  const response = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
-  if (!response.ok) throw new Error("Erro de rede");
-  const data = await response.json();
-  if (data.erro) throw new Error("CEP não encontrado");
-
-  return {
-    logradouro: data.logradouro || "",
-    bairro: data.bairro || "",
-    cidade: data.localidade || "",
-    estado: data.uf || "",
-  };
-}
-
-function formatFullAddress({
-  logradouro, numero, complemento, bairro, cidade, estado, cep,
-}: AddressFields): string {
-  const street = [logradouro, numero, complemento].map((v) => v?.trim()).filter(Boolean).join(", ");
-  const cityState = cidade?.trim()
-    ? `${cidade.trim()}${estado?.trim() ? `/${estado.trim()}` : ""}`
-    : estado?.trim() || "";
-  const parts = [street, bairro?.trim(), cityState, cep?.trim() ? `CEP ${cep.trim()}` : ""].filter(Boolean);
-  return parts.join(" - ");
-}
-
-function hasAddressFields(address: AddressFields): boolean {
-  return !!(address.cep || address.logradouro || address.numero || address.complemento || address.bairro || address.cidade || address.estado);
-}
-
-function isCompleteAddress(address: AddressFields): boolean {
-  return !!(address.cep && address.logradouro && address.numero && address.bairro && address.cidade && address.estado);
-}
-
-function clearAutoAddressFields<T extends AddressFields>(address: T): T {
-  return { ...address, logradouro: "", bairro: "", cidade: "", estado: "" };
-}
-
 async function checkCustomerDuplicate(
   nome: string,
   cpf: string,
@@ -630,7 +556,24 @@ async function checkCustomerDuplicate(
 async function createCustomer(form: Omit<Customer, "id" | "createdAt">): Promise<Customer> {
   const { data, error } = await supabase
     .from("customers")
+    .insert(buildCustomerRow(form))
+    .select()
+    .single();
+  if (error) throw error;
+  return mapCustomer(data);
+}
 
+async function updateCustomer(id: string, form: Partial<Customer>): Promise<void> {
+  const { error } = await supabase
+    .from("customers")
+    .update({ ...buildCustomerRow(form), updated_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw error;
+}
+
+async function deleteCustomer(id: string): Promise<void> {
+  const { count, error: ce } = await supabase
+    .from("budgets")
     .select("id", { count: "exact", head: true })
     .eq("customer_id", id);
   if (ce) throw ce;
@@ -690,9 +633,6 @@ async function saveBudgetFields(id: string, patch: {
   status?: string; tabela_preco?: number; frete?: number;
   percentual_imposto?: number; observacoes?: string;
   subtotal?: number; total_final?: number; endereco_entrega?: string;
-  entrega_cep?: string | null; entrega_logradouro?: string | null;
-  entrega_numero?: string | null; entrega_complemento?: string | null;
-  entrega_bairro?: string | null; entrega_cidade?: string | null; entrega_estado?: string | null;
 }): Promise<void> {
   const { error } = await supabase
     .from("budgets")
@@ -1095,29 +1035,12 @@ function BudgetEditor({
   const [duplicating, setDuplicating] = useState(false);
 
   // Delivery address
-  const customerAddress: AddressFields = {
-    cep: customer.cep || "",
-    logradouro: customer.logradouro || "",
-    numero: customer.numero || "",
-    complemento: customer.complemento || "",
-    bairro: customer.bairro || "",
-    cidade: customer.cidade || "",
-    estado: customer.estado || "",
-  };
-  const customerAddr = formatFullAddress(customerAddress);
-  const [deliveryAddress, setDeliveryAddress] = useState<AddressFields>({
-    cep: formatCEP(initBudget.entregaCep || ""),
-    logradouro: initBudget.entregaLogradouro || "",
-    numero: initBudget.entregaNumero || "",
-    complemento: initBudget.entregaComplemento || "",
-    bairro: initBudget.entregaBairro || "",
-    cidade: initBudget.entregaCidade || "",
-    estado: initBudget.entregaEstado || "",
-  });
-  const [deliveryCepLoading, setDeliveryCepLoading] = useState(false);
-  const lastDeliveryCepRef = useRef(onlyDigits(initBudget.entregaCep || ""));
-  const deliveryNumberRef = useRef<HTMLInputElement>(null);
-  const legacyDeliveryAddress = initBudget.enderecoEntrega || "";
+  const customerAddr = [customer.logradouro, customer.numero, customer.complemento, customer.bairro, customer.cidade, customer.estado]
+    .filter(Boolean).join(", ");
+  const [mesmoEndereco, setMesmoEndereco] = useState(
+    !initBudget.enderecoEntrega || initBudget.enderecoEntrega === customerAddr
+  );
+  const [enderecoEntrega, setEnderecoEntrega] = useState(initBudget.enderecoEntrega || "");
 
   const isLocked = budget.status === "enviado_fabrica" || budget.status === "fechado";
 
@@ -1141,47 +1064,9 @@ function BudgetEditor({
 
   function markDirty() { setIsDirty(true); }
 
-  async function lookupDeliveryCep(value: string) {
-    const cep = onlyDigits(value);
-    if (cep.length !== 8 || cep === lastDeliveryCepRef.current || deliveryCepLoading) return;
-    lastDeliveryCepRef.current = cep;
-    setDeliveryCepLoading(true);
-    try {
-      const address = await fetchAddressByCEP(cep);
-      setDeliveryAddress((current) => ({ ...current, ...address }));
-      setTimeout(() => deliveryNumberRef.current?.focus(), 0);
-      markDirty();
-    } catch (error: any) {
-      setDeliveryAddress((current) => clearAutoAddressFields(current));
-      toast.error(error.message === "CEP não encontrado"
-        ? "CEP não encontrado. Preencha o endereço manualmente."
-        : "Não foi possível consultar o CEP. Preencha o endereço manualmente.");
-    } finally {
-      setDeliveryCepLoading(false);
-    }
-  }
-
-  function updateDeliveryAddress<K extends keyof AddressFields>(key: K, value: AddressFields[K]) {
-    const nextValue = key === "cep" ? formatCEP(String(value || "")) : value;
-    setDeliveryAddress((current) => ({ ...current, [key]: nextValue }));
-    markDirty();
-    if (key === "cep") void lookupDeliveryCep(String(nextValue || ""));
-  }
-
-  function useCustomerAddressForDelivery() {
-    if (!isCompleteAddress(customerAddress)) {
-      toast.error("O cliente não possui endereço completo cadastrado.");
-      return;
-    }
-    setDeliveryAddress({ ...customerAddress, cep: formatCEP(customerAddress.cep || "") });
-    lastDeliveryCepRef.current = onlyDigits(customerAddress.cep || "");
-    markDirty();
-  }
-
   function updateLocal(patch: Partial<Budget>) {
     const updated = { ...budget, ...patch };
     const subtotal = updated.items.reduce((s, i) => s + i.subtotal, 0);
-
     const totalFinal = subtotal + subtotal * (updated.percentualImposto / 100) + updated.frete;
     const final = { ...updated, subtotal: round2(subtotal), totalFinal: round2(totalFinal) };
     setBudget(final);
@@ -1276,30 +1161,10 @@ function BudgetEditor({
   async function handleSaveDraft() {
     setSaving(true);
     try {
-      const entrega = hasAddressFields(deliveryAddress)
-        ? formatFullAddress(deliveryAddress)
-        : legacyDeliveryAddress.trim();
+      const entrega = mesmoEndereco ? customerAddr : enderecoEntrega.trim();
       await persistTotals(budget);
-      await saveBudgetFields(budget.id, {
-        endereco_entrega: entrega,
-        entrega_cep: deliveryAddress.cep || null,
-        entrega_logradouro: deliveryAddress.logradouro || null,
-        entrega_numero: deliveryAddress.numero || null,
-        entrega_complemento: deliveryAddress.complemento || null,
-        entrega_bairro: deliveryAddress.bairro || null,
-        entrega_cidade: deliveryAddress.cidade || null,
-        entrega_estado: deliveryAddress.estado || null,
-      });
-      updateLocal({
-        enderecoEntrega: entrega,
-        entregaCep: deliveryAddress.cep || "",
-        entregaLogradouro: deliveryAddress.logradouro || "",
-        entregaNumero: deliveryAddress.numero || "",
-        entregaComplemento: deliveryAddress.complemento || "",
-        entregaBairro: deliveryAddress.bairro || "",
-        entregaCidade: deliveryAddress.cidade || "",
-        entregaEstado: deliveryAddress.estado || "",
-      });
+      await saveBudgetFields(budget.id, { endereco_entrega: entrega });
+      updateLocal({ enderecoEntrega: entrega });
       setIsDirty(false);
       toast.success("Rascunho salvo!");
     } catch (e: any) { toast.error("Erro: " + e.message); }
@@ -1355,10 +1220,6 @@ function BudgetEditor({
       });
     } catch { /* logo omitido se falhar */ }
     const dateStr = new Date(budget.createdAt).toLocaleDateString("pt-BR");
-
-    const printDeliveryAddress = hasAddressFields(deliveryAddress)
-      ? formatFullAddress(deliveryAddress)
-      : legacyDeliveryAddress;
 
     const rows = budget.items.map((item) => {
       const p = item.product;
@@ -1428,7 +1289,6 @@ function BudgetEditor({
   <tr><td>Cidade - CEP</td><td>${customer.cidade || ""}${customer.estado ? " / " + customer.estado : ""}</td></tr>
   <tr><td>E-mail</td><td>${customer.email || ""}</td></tr>
   ${budget.tecnico ? `<tr><td>Técnico Responsável</td><td>${budget.tecnico}</td></tr>` : ""}
-  ${printDeliveryAddress ? `<tr><td>Endereço de Entrega</td><td>${printDeliveryAddress}</td></tr>` : ""}
 </table>
 
 <div class="section-header">PRODUTOS / ESPECIFICAÇÕES</div>
@@ -1701,64 +1561,29 @@ ${budget.observacoes ? `
 
             {/* Endereço de entrega */}
             <div className="mt-4 pt-4 border-t border-border">
-              <div className="flex items-center justify-between gap-2 mb-3">
-                <p className="text-xs font-medium text-muted-foreground">Endereço de Entrega</p>
-                <button type="button" onClick={useCustomerAddressForDelivery} disabled={isLocked}
-                  className="text-xs text-primary hover:underline disabled:opacity-40 disabled:no-underline">
-                  Usar endereço do cliente
-                </button>
-              </div>
-              {legacyDeliveryAddress && !hasAddressFields(deliveryAddress) && (
-                <p className="text-xs text-muted-foreground bg-muted/50 rounded-xl p-3 mb-3 leading-relaxed">
-                  Endereço salvo anteriormente: {legacyDeliveryAddress}
-                </p>
-              )}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">CEP</label>
-                  <div className="relative">
-                    <input value={deliveryAddress.cep || ""} onChange={(e) => updateDeliveryAddress("cep", e.target.value)}
-                      placeholder="00000-000" inputMode="numeric" disabled={isLocked}
-                      className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
-                    {deliveryCepLoading && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">Consultando CEP...</span>}
-                  </div>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">Número</label>
-                  <input ref={deliveryNumberRef} value={deliveryAddress.numero || ""} onChange={(e) => updateDeliveryAddress("numero", e.target.value)}
-                    placeholder="123" inputMode="numeric" disabled={isLocked}
-                    className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
-                </div>
-                <div className="col-span-2">
-                  <label className="text-xs font-medium text-muted-foreground">Logradouro</label>
-                  <input value={deliveryAddress.logradouro || ""} onChange={(e) => updateDeliveryAddress("logradouro", e.target.value)}
-                    placeholder="Rua, Av, Trav..." disabled={isLocked}
-                    className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">Complemento</label>
-                  <input value={deliveryAddress.complemento || ""} onChange={(e) => updateDeliveryAddress("complemento", e.target.value)}
-                    placeholder="Sala, bloco..." disabled={isLocked}
-                    className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">Bairro</label>
-                  <input value={deliveryAddress.bairro || ""} onChange={(e) => updateDeliveryAddress("bairro", e.target.value)}
+              <p className="text-xs font-medium text-muted-foreground mb-2">Endereço de Entrega</p>
+              <div className="flex flex-col gap-2">
+                <label className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border cursor-pointer transition-all text-sm ${mesmoEndereco ? "border-primary bg-primary/5 text-primary" : "border-border hover:border-primary/30"}`}>
+                  <input type="radio" name="entrega" checked={mesmoEndereco} onChange={() => { setMesmoEndereco(true); markDirty(); }} className="accent-primary" />
+                  <span>Mesmo endereço de cadastro</span>
+                </label>
+                {mesmoEndereco && customerAddr && (
+                  <p className="text-xs text-muted-foreground pl-3">{customerAddr}</p>
+                )}
+                <label className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border cursor-pointer transition-all text-sm ${!mesmoEndereco ? "border-primary bg-primary/5 text-primary" : "border-border hover:border-primary/30"}`}>
+                  <input type="radio" name="entrega" checked={!mesmoEndereco} onChange={() => { setMesmoEndereco(false); markDirty(); }} className="accent-primary" />
+                  <span>Endereço de entrega diferente</span>
+                </label>
+                {!mesmoEndereco && (
+                  <textarea
+                    value={enderecoEntrega}
+                    onChange={(e) => { setEnderecoEntrega(e.target.value); markDirty(); }}
+                    placeholder="Rua, número, bairro, cidade/UF, CEP"
+                    rows={2}
                     disabled={isLocked}
-                    className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">Cidade</label>
-                  <input value={deliveryAddress.cidade || ""} onChange={(e) => updateDeliveryAddress("cidade", e.target.value)}
-                    disabled={isLocked}
-                    className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">Estado</label>
-                  <input value={deliveryAddress.estado || ""} onChange={(e) => updateDeliveryAddress("estado", e.target.value)}
-                    maxLength={2} disabled={isLocked}
-                    className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
-                </div>
+                    className="w-full border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50 resize-none"
+                  />
+                )}
               </div>
             </div>
 
@@ -1782,7 +1607,6 @@ ${budget.observacoes ? `
                 className="w-full flex items-center justify-center gap-2 border border-border py-2.5 rounded-xl text-xs hover:bg-muted transition-colors text-muted-foreground hover:text-foreground">
                 <Printer size={13} /> Imprimir / Gerar PDF
               </button>
-
             </div>
           </div>
 
@@ -1909,11 +1733,7 @@ function CustomerView({
     ...initCustomer,
     cpf: formatCPF(initCustomer.cpf || ""),
     telefone: formatPhone(initCustomer.telefone || ""),
-    cep: formatCEP(initCustomer.cep || ""),
   });
-  const [editCepLoading, setEditCepLoading] = useState(false);
-  const lastEditCepRef = useRef(onlyDigits(initCustomer.cep || ""));
-  const editNumberRef = useRef<HTMLInputElement>(null);
   const [showTecnicoModal, setShowTecnicoModal] = useState(false);
   const [tecnicoSelecionado, setTecnicoSelecionado] = useState("");
   const [tecnicoCustom, setTecnicoCustom] = useState("");
@@ -1928,31 +1748,6 @@ function CustomerView({
   }
 
   useEffect(() => { loadBudgets(); }, [customer.id]);
-
-  async function lookupEditCep(value: string) {
-    const cep = onlyDigits(value);
-    if (cep.length !== 8 || cep === lastEditCepRef.current || editCepLoading) return;
-    lastEditCepRef.current = cep;
-    setEditCepLoading(true);
-    try {
-      const address = await fetchAddressByCEP(cep);
-      setEditForm((current) => ({ ...current, ...address }));
-      setTimeout(() => editNumberRef.current?.focus(), 0);
-    } catch (error: any) {
-      setEditForm((current) => clearAutoAddressFields(current));
-      toast.error(error.message === "CEP não encontrado"
-        ? "CEP não encontrado. Preencha o endereço manualmente."
-        : "Não foi possível consultar o CEP. Preencha o endereço manualmente.");
-    } finally {
-      setEditCepLoading(false);
-    }
-  }
-
-  function updateEditCep(value: string) {
-    const formatted = formatCEP(value);
-    setEditForm((current) => ({ ...current, cep: formatted }));
-    void lookupEditCep(formatted);
-  }
 
   function openTecnicoModal() {
     setTecnicoSelecionado("");
@@ -2180,15 +1975,6 @@ function CustomerView({
                   className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
               </div>
               <p className="text-xs font-semibold text-muted-foreground pt-1">Endereço</p>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">CEP</label>
-                <div className="relative">
-                  <input value={editForm.cep || ""} onChange={(e) => updateEditCep(e.target.value)}
-                    placeholder="00000-000" inputMode="numeric"
-                    className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
-                  {editCepLoading && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">Consultando CEP...</span>}
-                </div>
-              </div>
               <div className="grid grid-cols-3 gap-3">
                 <div className="col-span-2">
                   <label className="text-xs font-medium text-muted-foreground">Logradouro</label>
@@ -2198,8 +1984,8 @@ function CustomerView({
                 </div>
                 <div>
                   <label className="text-xs font-medium text-muted-foreground">Número</label>
-                  <input ref={editNumberRef} value={editForm.numero || ""} onChange={(e) => setEditForm((f) => ({ ...f, numero: e.target.value }))}
-                    placeholder="123" inputMode="numeric"
+                  <input value={editForm.numero || ""} onChange={(e) => setEditForm((f) => ({ ...f, numero: e.target.value }))}
+                    placeholder="123"
                     className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                 </div>
               </div>
@@ -2223,11 +2009,17 @@ function CustomerView({
                     className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground">Estado</label>
+                  <label className="text-xs font-medium text-muted-foreground">UF</label>
                   <input value={editForm.estado || ""} onChange={(e) => setEditForm((f) => ({ ...f, estado: e.target.value }))}
                     maxLength={2}
                     className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                 </div>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">CEP</label>
+                <input value={editForm.cep || ""} onChange={(e) => setEditForm((f) => ({ ...f, cep: e.target.value }))}
+                  placeholder="00000-000"
+                  className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
               </div>
               <div className="flex gap-2 pt-1">
                 <button onClick={() => setShowEdit(false)} className="flex-1 border border-border rounded-xl py-2.5 text-sm hover:bg-muted transition-colors">Cancelar</button>
@@ -2384,7 +2176,6 @@ function ProductEditModal({ product, onSave, onClose }: {
             ))}
           </div>
 
-
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">m²/caixa</label>
@@ -2507,6 +2298,7 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
             className="w-full border border-border rounded-xl pl-9 pr-4 py-2.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/25" />
         </div>
         <select value={superficie} onChange={(e) => setSuperficie(e.target.value)}
+
           className="border border-border rounded-xl px-3 py-2.5 text-xs bg-card focus:outline-none">
           <option value="">Todas as superfícies</option>
           {superficies.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -2647,9 +2439,6 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
   const [searching, setSearching] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ nome: "", cpf: "", email: "", telefone: "", cep: "", logradouro: "", numero: "", complemento: "", bairro: "", cidade: "", estado: "" });
-  const [createCepLoading, setCreateCepLoading] = useState(false);
-  const lastCreateCepRef = useRef("");
-  const createNumberRef = useRef<HTMLInputElement>(null);
   const [creating, setCreating] = useState(false);
 
   // Orçamentos tab state
@@ -2687,31 +2476,6 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
     }, 300);
     return () => clearTimeout(t);
   }, [filterTecnico, filterStatus, filterCliente, filterDataInicio, filterDataFim]);
-
-  async function lookupCreateCep(value: string) {
-    const cep = onlyDigits(value);
-    if (cep.length !== 8 || cep === lastCreateCepRef.current || createCepLoading) return;
-    lastCreateCepRef.current = cep;
-    setCreateCepLoading(true);
-    try {
-      const address = await fetchAddressByCEP(cep);
-      setForm((current) => ({ ...current, ...address }));
-      setTimeout(() => createNumberRef.current?.focus(), 0);
-    } catch (error: any) {
-      setForm((current) => clearAutoAddressFields(current));
-      toast.error(error.message === "CEP não encontrado"
-        ? "CEP não encontrado. Preencha o endereço manualmente."
-        : "Não foi possível consultar o CEP. Preencha o endereço manualmente.");
-    } finally {
-      setCreateCepLoading(false);
-    }
-  }
-
-  function updateCreateCep(value: string) {
-    const formatted = formatCEP(value);
-    setForm((current) => ({ ...current, cep: formatted }));
-    void lookupCreateCep(formatted);
-  }
 
   useEffect(() => {
     if (!q.trim()) { setResults([]); return; }
@@ -2883,15 +2647,6 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
                             className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                         </div>
                         <p className="text-xs font-semibold text-muted-foreground pt-1">Endereço</p>
-                        <div>
-                          <label className="text-xs font-medium text-muted-foreground">CEP</label>
-                          <div className="relative">
-                            <input value={form.cep} onChange={(e) => updateCreateCep(e.target.value)}
-                              placeholder="00000-000" inputMode="numeric"
-                              className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
-                            {createCepLoading && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">Consultando CEP...</span>}
-                          </div>
-                        </div>
                         <div className="grid grid-cols-3 gap-3">
                           <div className="col-span-2">
                             <label className="text-xs font-medium text-muted-foreground">Logradouro</label>
@@ -2901,8 +2656,8 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
                           </div>
                           <div>
                             <label className="text-xs font-medium text-muted-foreground">Número</label>
-                            <input ref={createNumberRef} value={form.numero} onChange={(e) => setForm((f) => ({ ...f, numero: e.target.value }))}
-                              placeholder="123" inputMode="numeric"
+                            <input value={form.numero} onChange={(e) => setForm((f) => ({ ...f, numero: e.target.value }))}
+                              placeholder="123"
                               className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                           </div>
                         </div>
@@ -2926,11 +2681,17 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
                               className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                           </div>
                           <div>
-                            <label className="text-xs font-medium text-muted-foreground">Estado</label>
+                            <label className="text-xs font-medium text-muted-foreground">UF</label>
                             <input value={form.estado} onChange={(e) => setForm((f) => ({ ...f, estado: e.target.value }))}
                               placeholder="SP" maxLength={2}
                               className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                           </div>
+                        </div>
+                        <div>
+                          <label className="text-xs font-medium text-muted-foreground">CEP</label>
+                          <input value={form.cep} onChange={(e) => setForm((f) => ({ ...f, cep: e.target.value }))}
+                            placeholder="00000-000"
+                            className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                         </div>
                         <button onClick={handleCreate} disabled={creating}
                           className="w-full bg-primary text-primary-foreground py-3 rounded-xl text-sm font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2">
@@ -2984,7 +2745,6 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
                   <input type="date" value={filterDataFim} onChange={(e) => setFilterDataFim(e.target.value)}
                     className="w-full border border-border rounded-xl px-3 py-2 text-xs bg-card focus:outline-none focus:ring-2 focus:ring-primary/20" />
                 </div>
-
               </div>
 
               {/* Lista de orçamentos */}

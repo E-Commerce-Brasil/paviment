@@ -42,9 +42,13 @@ interface Product {
   preco2: number | null;
   preco3: number | null;
   preco4: number | null;
+  descontinuado: boolean;
+}
+
+interface PricingSettings {
+  id?: string;
   impostoPercentual: number;
   taxaCartaoPercentual: number;
-  descontinuado: boolean;
 }
 
 interface Customer {
@@ -129,8 +133,6 @@ function mapProduct(r: any): Product {
     preco2: r.preco2 != null ? parseFloat(r.preco2) : null,
     preco3: r.preco3 != null ? parseFloat(r.preco3) : null,
     preco4: r.preco4 != null ? parseFloat(r.preco4) : null,
-    impostoPercentual: r.imposto_percentual != null ? parseFloat(r.imposto_percentual) || 0 : 0,
-    taxaCartaoPercentual: r.taxa_cartao_percentual != null ? parseFloat(r.taxa_cartao_percentual) || 0 : 0,
     descontinuado: r.descontinuado ?? false,
   };
 }
@@ -213,11 +215,17 @@ CREATE TABLE IF NOT EXISTS products (
   espessura_mm DECIMAL(10,2) DEFAULT 0,
   preco1 DECIMAL(12,4), preco2 DECIMAL(12,4),
   preco3 DECIMAL(12,4), preco4 DECIMAL(12,4),
-  imposto_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
-  taxa_cartao_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE products DISABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS pricing_settings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  imposto_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
+  taxa_cartao_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE pricing_settings DISABLE ROW LEVEL SECURITY;
 
 CREATE TABLE IF NOT EXISTS customers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -335,8 +343,6 @@ function buildProductsFromCSV(csvText: string): Omit<Product, "id">[] {
       preco2: parsePrice(row[18]),
       preco3: parsePrice(row[19]),
       preco4: parsePrice(row[20]),
-      impostoPercentual: 0,
-      taxaCartaoPercentual: 0,
     });
   }
   return products;
@@ -377,8 +383,6 @@ async function seedProducts(products: Omit<Product, "id">[]): Promise<void> {
     preco2: p.preco2,
     preco3: p.preco3,
     preco4: p.preco4,
-    imposto_percentual: p.impostoPercentual || 0,
-    taxa_cartao_percentual: p.taxaCartaoPercentual || 0,
   }));
   // Insert in batches of 50
   for (let i = 0; i < rows.length; i += 50) {
@@ -438,6 +442,72 @@ async function fetchAllProducts(): Promise<Product[]> {
   const { data, error } = await supabase.from("products").select("*").order("linha");
   if (error) throw error;
   return (data || []).map(mapProduct);
+}
+
+async function loadPricingSettings(): Promise<PricingSettings> {
+  const { data, error } = await supabase
+    .from("pricing_settings")
+    .select("*")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+
+  if (data) {
+    return {
+      id: data.id,
+      impostoPercentual: parseDecimalInput(data.imposto_percentual),
+      taxaCartaoPercentual: parseDecimalInput(data.taxa_cartao_percentual),
+    };
+  }
+
+  const { data: created, error: createError } = await supabase
+    .from("pricing_settings")
+    .insert({ imposto_percentual: 0, taxa_cartao_percentual: 0 })
+    .select()
+    .single();
+  if (createError) throw createError;
+
+  return {
+    id: created.id,
+    impostoPercentual: parseDecimalInput(created.imposto_percentual),
+    taxaCartaoPercentual: parseDecimalInput(created.taxa_cartao_percentual),
+  };
+}
+
+async function savePricingSettings(settings: PricingSettings): Promise<PricingSettings> {
+  const payload = {
+    imposto_percentual: parseDecimalInput(settings.impostoPercentual),
+    taxa_cartao_percentual: parseDecimalInput(settings.taxaCartaoPercentual),
+    updated_at: new Date().toISOString(),
+  };
+
+  if (settings.id) {
+    const { data, error } = await supabase
+      .from("pricing_settings")
+      .update(payload)
+      .eq("id", settings.id)
+      .select()
+      .single();
+    if (error) throw error;
+    return {
+      id: data.id,
+      impostoPercentual: parseDecimalInput(data.imposto_percentual),
+      taxaCartaoPercentual: parseDecimalInput(data.taxa_cartao_percentual),
+    };
+  }
+
+  const { data, error } = await supabase
+    .from("pricing_settings")
+    .insert(payload)
+    .select()
+    .single();
+  if (error) throw error;
+  return {
+    id: data.id,
+    impostoPercentual: parseDecimalInput(data.imposto_percentual),
+    taxaCartaoPercentual: parseDecimalInput(data.taxa_cartao_percentual),
+  };
 }
 
 async function searchCustomers(q: string): Promise<Customer[]> {
@@ -695,8 +765,12 @@ async function runMigrations(): Promise<void> {
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_cidade TEXT;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_estado TEXT;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
-      ALTER TABLE products ADD COLUMN IF NOT EXISTS imposto_percentual NUMERIC(8,4) NOT NULL DEFAULT 0;
-      ALTER TABLE products ADD COLUMN IF NOT EXISTS taxa_cartao_percentual NUMERIC(8,4) NOT NULL DEFAULT 0;
+      CREATE TABLE IF NOT EXISTS pricing_settings (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        imposto_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
+        taxa_cartao_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS logradouro TEXT;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS numero_end TEXT;
@@ -852,7 +926,7 @@ function parseDecimalInput(value: unknown): number {
   return parsed;
 }
 
-function calculateProductFinalPrice(
+function calculateFinalPrice(
   precoBase: number | null | undefined,
   impostoPercentual: number | string | null | undefined,
   taxaCartaoPercentual: number | string | null | undefined
@@ -941,10 +1015,11 @@ function SetupScreen({ onVerify }: { onVerify: () => void }) {
 // ── Product Search Modal ──────────────────────────────────────────
 
 function ProductModal({
-  allProducts, tabelaPreco, onSelect, onClose,
+  allProducts, tabelaPreco, pricingSettings, onSelect, onClose,
 }: {
   allProducts: Product[];
   tabelaPreco: 1 | 2 | 3 | 4;
+  pricingSettings: PricingSettings;
   onSelect: (product: Product, areaM2: number) => void;
   onClose: () => void;
 }) {
@@ -976,7 +1051,7 @@ function ProductModal({
 
   if (selected) {
     const priceBase = selected[pk] as number | null;
-    const price = priceBase != null ? calculateProductFinalPrice(priceBase, selected.impostoPercentual, selected.taxaCartaoPercentual) : null;
+    const price = priceBase != null ? calculateFinalPrice(priceBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : null;
     const area = parseFloat(areaInput.replace(",", ".")) || 0;
     const caixas = selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : 0;
 
@@ -1085,7 +1160,6 @@ function ProductModal({
             <div className="divide-y divide-border">
               {results.map((p) => {
                 const price = p[pk] as number | null;
-                const finalPrice = price != null ? calculateProductFinalPrice(price, p.impostoPercentual, p.taxaCartaoPercentual) : null;
                 return (
                   <button key={p.id} onClick={() => setSelected(p)}
                     className="w-full text-left px-5 py-3 hover:bg-muted/50 transition-colors group">
@@ -1120,9 +1194,9 @@ function ProductModal({
 // ── Budget Editor ─────────────────────────────────────────────────
 
 function BudgetEditor({
-  budget: initBudget, allProducts, customer, onBack, onGoHome, onBudgetChange, onOpenBudget,
+  budget: initBudget, allProducts, pricingSettings, customer, onBack, onGoHome, onBudgetChange, onOpenBudget,
 }: {
-  budget: Budget; allProducts: Product[]; customer: Customer;
+  budget: Budget; allProducts: Product[]; pricingSettings: PricingSettings; customer: Customer;
   onBack: () => void; onGoHome: () => void; onBudgetChange: (b: Budget) => void;
   onOpenBudget?: (b: Budget) => void;
 }) {
@@ -1209,7 +1283,7 @@ function BudgetEditor({
       return;
     }
     const precoBase = product[priceKey(budget.tabelaPreco)] as number | null;
-    const precoM2 = calculateProductFinalPrice(precoBase, product.impostoPercentual, product.taxaCartaoPercentual);
+    const precoM2 = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
     const caixas = Math.ceil(areaM2 / product.m2PorCaixa);
     setSaving(true);
     try {
@@ -1365,7 +1439,7 @@ function BudgetEditor({
     const updatedItems = budget.items.map((item) => {
       const newPrecoBase = item.product[pk] as number | null;
       if (!newPrecoBase) return item;
-      const newPreco = calculateProductFinalPrice(newPrecoBase, item.product.impostoPercentual, item.product.taxaCartaoPercentual);
+      const newPreco = calculateFinalPrice(newPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
       return { ...item, precoM2: newPreco, subtotal: round2(item.areaM2 * newPreco) };
     });
     setSaving(true);
@@ -1875,7 +1949,7 @@ ${budget.observacoes ? `
 
 
       {showModal && (
-        <ProductModal allProducts={allProducts} tabelaPreco={budget.tabelaPreco}
+        <ProductModal allProducts={allProducts} tabelaPreco={budget.tabelaPreco} pricingSettings={pricingSettings}
           onSelect={handleAddProduct} onClose={() => setShowModal(false)} />
       )}
 
@@ -1933,9 +2007,9 @@ ${budget.observacoes ? `
 // ── Customer View ─────────────────────────────────────────────────
 
 function CustomerView({
-  customer: initCustomer, allProducts, onBack, onOpenBudget,
+  customer: initCustomer, allProducts, pricingSettings, onBack, onOpenBudget,
 }: {
-  customer: Customer; allProducts: Product[];
+  customer: Customer; allProducts: Product[]; pricingSettings: PricingSettings;
   onBack: () => void;
   onOpenBudget: (b: Budget, c: Customer) => void;
 }) {
@@ -2359,8 +2433,6 @@ async function updateProduct(id: string, patch: Partial<Omit<Product, "id">>): P
     colecao: patch.colecao, cor: patch.cor, superficie: patch.superficie,
     m2_por_caixa: patch.m2PorCaixa, pecas_por_caixa: patch.pecasPorCaixa,
     preco1: patch.preco1, preco2: patch.preco2, preco3: patch.preco3, preco4: patch.preco4,
-    imposto_percentual: patch.impostoPercentual ?? 0,
-    taxa_cartao_percentual: patch.taxaCartaoPercentual ?? 0,
     descontinuado: patch.descontinuado ?? false,
   }).eq("id", id);
   if (error) throw error;
@@ -2393,8 +2465,6 @@ function ProductEditModal({ product, onSave, onClose }: {
         preco2: form.preco2 != null && form.preco2 !== "" ? parseFloat(String(form.preco2).replace(",", ".")) : null,
         preco3: form.preco3 != null && form.preco3 !== "" ? parseFloat(String(form.preco3).replace(",", ".")) : null,
         preco4: form.preco4 != null && form.preco4 !== "" ? parseFloat(String(form.preco4).replace(",", ".")) : null,
-        impostoPercentual: parseDecimalInput(form.impostoPercentual),
-        taxaCartaoPercentual: parseDecimalInput(form.taxaCartaoPercentual),
         m2PorCaixa: parseFloat(String(form.m2PorCaixa).replace(",", ".")) || 0,
         pecasPorCaixa: parseInt(String(form.pecasPorCaixa)) || 0,
       };
@@ -2406,23 +2476,6 @@ function ProductEditModal({ product, onSave, onClose }: {
   }
 
   const inputCls = "w-full border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25";
-  const percentInputCls = inputCls + " font-mono";
-  const impostoPreview = parseDecimalInput(form.impostoPercentual);
-  const taxaPreview = parseDecimalInput(form.taxaCartaoPercentual);
-
-  function setNonNegativeDecimal(key: "impostoPercentual" | "taxaCartaoPercentual", value: string) {
-    if (value.trim() === "") {
-      setForm((f) => ({ ...f, [key]: "" }));
-      return;
-    }
-
-    const normalized = value.replace(",", ".");
-    const parsed = parseFloat(normalized);
-    if (!Number.isFinite(parsed) || Number.isNaN(parsed) || parsed < 0) return;
-
-    setForm((f) => ({ ...f, [key]: value }));
-  }
-
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
       <div className="bg-card rounded-2xl shadow-2xl w-full max-w-lg border border-border flex flex-col max-h-[90vh]">
@@ -2472,54 +2525,6 @@ function ProductEditModal({ product, onSave, onClose }: {
             </div>
           </div>
 
-          <div className="rounded-2xl border border-border bg-muted/20 p-4 space-y-3">
-            <div>
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Composição interna do preço</p>
-              <p className="text-xs text-muted-foreground mt-1">Preço final calculado é o valor que será usado no orçamento.</p>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">Impostos (%)</label>
-                <input
-                  value={String(form.impostoPercentual ?? "")}
-                  onChange={(e) => setNonNegativeDecimal("impostoPercentual", e.target.value)}
-                  inputMode="decimal"
-                  placeholder="0"
-                  className={percentInputCls}
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">Taxa de cartão (%)</label>
-                <input
-                  value={String(form.taxaCartaoPercentual ?? "")}
-                  onChange={(e) => setNonNegativeDecimal("taxaCartaoPercentual", e.target.value)}
-                  inputMode="decimal"
-                  placeholder="0"
-                  className={percentInputCls}
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {([1, 2, 3, 4] as const).map((t) => {
-                const base = parseDecimalInput(form[`preco${t}`]);
-                const finalPrice = calculateProductFinalPrice(base, impostoPreview, taxaPreview);
-                return (
-                  <div key={t} className="rounded-xl bg-card border border-border px-3 py-2">
-                    <p className="text-[11px] text-muted-foreground">Tabela {t}</p>
-                    <div className="flex items-center justify-between gap-2 text-xs mt-1">
-                      <span>Preço-base</span>
-                      <span className="font-mono">{fmtBRL(base)}</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-2 text-xs mt-1 font-semibold text-primary">
-                      <span>Preço final calculado</span>
-                      <span className="font-mono">{fmtBRL(finalPrice)}</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
           {/* Descontinuado */}
           <div className={`flex items-center justify-between rounded-xl border p-4 transition-colors ${form.descontinuado ? "border-amber-300 bg-amber-50" : "border-border bg-muted/20"}`}>
             <div>
@@ -2552,7 +2557,7 @@ function ProductEditModal({ product, onSave, onClose }: {
 
 // ── All Products List ─────────────────────────────────────────────
 
-function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] }) {
+function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingSettingsChange }: { allProducts: Product[]; pricingSettings: PricingSettings; onPricingSettingsChange: (settings: PricingSettings) => void }) {
   const [products, setProducts] = useState<Product[]>(initProducts);
   const [q, setQ] = useState("");
   const [superficie, setSuperficie] = useState("");
@@ -2562,6 +2567,18 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ ok: number; total: number } | null>(null);
   const [showDescontinuados, setShowDescontinuados] = useState(false);
+  const [pricingForm, setPricingForm] = useState({
+    imposto: String(pricingSettings.impostoPercentual || ""),
+    taxa: String(pricingSettings.taxaCartaoPercentual || ""),
+  });
+  const [savingPricing, setSavingPricing] = useState(false);
+
+  useEffect(() => {
+    setPricingForm({
+      imposto: String(pricingSettings.impostoPercentual || ""),
+      taxa: String(pricingSettings.taxaCartaoPercentual || ""),
+    });
+  }, [pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual]);
 
   const superficies = [...new Set(products.map((p) => p.superficie).filter(Boolean))].sort();
 
@@ -2582,6 +2599,33 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
   function handleProductSaved(updated: Product) {
     setProducts((ps) => ps.map((p) => p.id === updated.id ? updated : p));
     setEditingProduct(null);
+  }
+
+  function handlePricingInput(key: "imposto" | "taxa", value: string) {
+    if (value.trim() === "") {
+      setPricingForm((f) => ({ ...f, [key]: "" }));
+      return;
+    }
+    const parsed = parseFloat(value.replace(",", "."));
+    if (!Number.isFinite(parsed) || Number.isNaN(parsed) || parsed < 0) return;
+    setPricingForm((f) => ({ ...f, [key]: value }));
+  }
+
+  async function handleSavePricingSettings() {
+    setSavingPricing(true);
+    try {
+      const saved = await savePricingSettings({
+        ...pricingSettings,
+        impostoPercentual: parseDecimalInput(pricingForm.imposto),
+        taxaCartaoPercentual: parseDecimalInput(pricingForm.taxa),
+      });
+      onPricingSettingsChange(saved);
+      toast.success("Composição interna do preço salva!");
+    } catch (e: any) {
+      toast.error("Erro ao salvar composição: " + e.message);
+    } finally {
+      setSavingPricing(false);
+    }
   }
 
   async function handleImportCSV(e: React.ChangeEvent<HTMLInputElement>) {
@@ -2674,6 +2718,46 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
         </div>
       )}
 
+      <div className="bg-card border border-border rounded-2xl p-5 shadow-sm space-y-4">
+        <div>
+          <h3 className="font-semibold text-sm">Composição interna do preço</h3>
+          <p className="text-xs text-muted-foreground mt-1">Esses percentuais serão incorporados ao preço dos produtos no orçamento e não serão exibidos ao cliente.</p>
+        </div>
+        <div className="grid sm:grid-cols-[1fr_1fr_auto] gap-3 items-end">
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">Impostos (%)</label>
+            <input
+              value={pricingForm.imposto}
+              onChange={(e) => handlePricingInput("imposto", e.target.value)}
+              inputMode="decimal"
+              placeholder="0"
+              className="w-full border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">Taxa de cartão (%)</label>
+            <input
+              value={pricingForm.taxa}
+              onChange={(e) => handlePricingInput("taxa", e.target.value)}
+              inputMode="decimal"
+              placeholder="0"
+              className="w-full border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono"
+            />
+          </div>
+          <button
+            onClick={handleSavePricingSettings}
+            disabled={savingPricing}
+            className="bg-primary text-primary-foreground rounded-xl px-4 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {savingPricing ? <Spinner size={14} /> : <Save size={14} />} Salvar composição
+          </button>
+        </div>
+        <div className="rounded-xl bg-muted/40 border border-border px-4 py-3 text-sm flex justify-between gap-3">
+          <span className="text-muted-foreground">Exemplo com preço-base de R$ 1.000,00</span>
+          <span className="font-semibold font-mono text-primary">Preço final: {fmtBRL(calculateFinalPrice(1000, pricingForm.imposto, pricingForm.taxa))}</span>
+        </div>
+      </div>
+
       <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-sm">
         <div className="px-5 py-2.5 border-b border-border bg-muted/30 flex items-center justify-between">
           <p className="text-xs text-muted-foreground">{filtered.length} produtos · Tabela {tabela}</p>
@@ -2688,14 +2772,12 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
                 <th className="text-left px-3 py-2.5 font-medium hidden lg:table-cell">Superfície</th>
                 <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">m²/cx</th>
                 <th className="text-right px-3 py-2.5 font-medium">Preço-base</th>
-                <th className="text-right px-3 py-2.5 font-medium">Preço final</th>
                 <th className="w-10 px-3 py-2.5"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {filtered.slice(0, 200).map((p) => {
                 const price = p[pk] as number | null;
-                const finalPrice = price != null ? calculateProductFinalPrice(price, p.impostoPercentual, p.taxaCartaoPercentual) : null;
                 return (
                   <tr key={p.id} className={`transition-colors group ${p.descontinuado ? "bg-amber-50/50 hover:bg-amber-50" : "hover:bg-muted/20"}`}>
                     <td className="px-5 py-2.5">
@@ -2716,11 +2798,6 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
                     <td className="px-3 py-2.5 text-right">
                       {price
                         ? <span className="font-mono text-muted-foreground">{fmtBRL(price)}</span>
-                        : <span className="text-xs text-amber-600">Consultar</span>}
-                    </td>
-                    <td className="px-3 py-2.5 text-right">
-                      {finalPrice != null
-                        ? <span className="font-semibold font-mono text-primary">{fmtBRL(finalPrice)}</span>
                         : <span className="text-xs text-amber-600">Consultar</span>}
                     </td>
                     <td className="px-3 py-2.5 text-center">
@@ -2751,9 +2828,11 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
 
 // ── Customer Search (Home) ────────────────────────────────────────
 
-function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
+function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSettingsChange, onOpenBudgetById }: {
   onSelect: (c: Customer) => void;
   allProducts: Product[];
+  pricingSettings: PricingSettings;
+  onPricingSettingsChange: (settings: PricingSettings) => void;
   onOpenBudgetById: (budgetId: string, customerId: string) => void;
 }) {
   const [tab, setTab] = useState<"orcamentos" | "clientes" | "produtos">("orcamentos");
@@ -3175,7 +3254,7 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
         )}
 
         {tab === "clientes" && <AllCustomersTab onSelect={onSelect} />}
-        {tab === "produtos" && <AllProductsTab allProducts={allProducts} />}
+        {tab === "produtos" && <AllProductsTab allProducts={allProducts} pricingSettings={pricingSettings} onPricingSettingsChange={onPricingSettingsChange} />}
       </div>
     </div>
   );
@@ -3194,6 +3273,7 @@ export default function App() {
   const [initMsg, setInitMsg] = useState("Verificando banco de dados...");
   const [initError, setInitError] = useState<string | null>(null);
   const [allProducts, setAllProducts] = useState<Product[]>([]);
+  const [pricingSettings, setPricingSettings] = useState<PricingSettings>({ impostoPercentual: 0, taxaCartaoPercentual: 0 });
 
   async function init() {
     setAppState("loading");
@@ -3204,6 +3284,9 @@ export default function App() {
       const tablesOk = await checkTablesExist();
       if (tablesOk) await seedTecnicosOnExistingBudgets().catch(() => {});
       if (!tablesOk) { setAppState("setup"); return; }
+
+      setInitMsg("Carregando composição interna do preço...");
+      setPricingSettings(await loadPricingSettings());
 
       setInitMsg("Verificando catálogo...");
       const count = await getProductCount();
@@ -3266,6 +3349,8 @@ export default function App() {
         <CustomerSearch
           onSelect={(c) => setView({ type: "customer", customer: c })}
           allProducts={allProducts}
+          pricingSettings={pricingSettings}
+          onPricingSettingsChange={setPricingSettings}
           onOpenBudgetById={async (budgetId, customerId) => {
             try {
               const [full, { data: cData }] = await Promise.all([
@@ -3281,6 +3366,7 @@ export default function App() {
         <CustomerView
           customer={view.customer}
           allProducts={allProducts}
+          pricingSettings={pricingSettings}
           onBack={() => setView({ type: "home" })}
           onOpenBudget={(b, c) => setView({ type: "budget", budget: b, customer: c })}
         />
@@ -3289,6 +3375,7 @@ export default function App() {
         <BudgetEditor
           budget={view.budget}
           allProducts={allProducts}
+          pricingSettings={pricingSettings}
           customer={view.customer}
           onBack={() => setView({ type: "customer", customer: view.customer })}
           onGoHome={() => setView({ type: "home" })}

@@ -1030,7 +1030,7 @@ function ProductModal({
 }: {
   allProducts: Product[];
   tabelaPreco: 1 | 2 | 3 | 4;
-  pricingSettings: PricingSettings;
+  pricingSettings?: PricingSettings;
   onSelect: (product: Product, areaM2: number) => void;
   onClose: () => void;
 }) {
@@ -1040,8 +1040,10 @@ function ProductModal({
   const [selected, setSelected] = useState<Product | null>(null);
   const [areaInput, setAreaInput] = useState("");
   const pk = priceKey(tabelaPreco);
+  const safeProducts = Array.isArray(allProducts) ? allProducts : [];
+  const effectivePricingSettings = pricingSettings || { impostoPercentual: 0, taxaCartaoPercentual: 0 };
 
-  const results = allProducts.filter((p) => {
+  const results = safeProducts.filter((p) => {
     if (p.descontinuado) return false;
     const txt = q.toLowerCase();
     const matchQ = !q || [p.linha, p.colecao, p.cor, p.formato, p.referencia, p.superficie]
@@ -1058,11 +1060,11 @@ function ProductModal({
     onSelect(selected, area);
   }
 
-  const superficies = [...new Set(allProducts.map((p) => p.superficie).filter(Boolean))].sort();
+  const superficies = [...new Set(safeProducts.map((p) => p.superficie).filter(Boolean))].sort();
 
   if (selected) {
     const priceBase = selected[pk] as number | null;
-    const price = priceBase != null ? calculateFinalPrice(priceBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : null;
+    const price = priceBase != null ? calculateFinalPrice(priceBase, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
     const area = parseFloat(areaInput.replace(",", ".")) || 0;
     const caixas = selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : 0;
 
@@ -1171,7 +1173,7 @@ function ProductModal({
             <div className="divide-y divide-border">
               {results.map((p) => {
                 const price = p[pk] as number | null;
-                const finalPrice = price != null ? calculateFinalPrice(price, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : null;
+                const finalPrice = price != null ? calculateFinalPrice(price, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
                 return (
                   <button key={p.id} onClick={() => setSelected(p)}
                     className="w-full text-left px-5 py-3 hover:bg-muted/50 transition-colors group">

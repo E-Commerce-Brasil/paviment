@@ -806,6 +806,7 @@ async function addBudgetItem(budgetId: string, item: {
   productId: string; product: Product;
   areaM2: number; caixas: number; precoM2: number; subtotal: number;
 }): Promise<BudgetItem> {
+  const subtotal = round2(item.subtotal);
   const { data, error } = await supabase
     .from("budget_items")
     .insert({
@@ -814,12 +815,22 @@ async function addBudgetItem(budgetId: string, item: {
       area_m2: item.areaM2,
       caixas: item.caixas,
       preco_m2: item.precoM2,
-      subtotal: round2(item.subtotal),
+      subtotal,
     })
-    .select("*, products(*)")
+    .select("*")
     .single();
   if (error) throw error;
-  return mapItem(data);
+
+  return {
+    id: data.id,
+    productId: data.product_id,
+    product: item.product,
+    areaM2: parseFloat(data.area_m2),
+    caixas: data.caixas,
+    precoM2: parseFloat(data.preco_m2),
+    subtotal: parseFloat(data.subtotal),
+    observacao: data.observacao || "",
+  };
 }
 
 async function updateBudgetItem(id: string, areaM2: number, caixas: number, precoM2: number): Promise<void> {
@@ -1282,12 +1293,24 @@ function BudgetEditor({
       return;
     }
     const precoBase = product[priceKey(budget.tabelaPreco)] as number | null;
+    if (precoBase == null || !Number.isFinite(Number(precoBase)) || Number(precoBase) <= 0) {
+      toast.error(`Preço não disponível para a tabela ${budget.tabelaPreco}.`);
+      return;
+    }
+    if (!product.m2PorCaixa || product.m2PorCaixa <= 0) {
+      toast.error("Produto sem m²/caixa válido. Corrija o cadastro antes de adicionar.");
+      return;
+    }
     const precoM2 = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
+    if (!Number.isFinite(precoM2) || precoM2 <= 0) {
+      toast.error("Não foi possível calcular o preço final do produto.");
+      return;
+    }
     const caixas = Math.ceil(areaM2 / product.m2PorCaixa);
     setSaving(true);
     try {
       const newItem = await addBudgetItem(budget.id, {
-        productId: product.id, product, areaM2, caixas, precoM2, subtotal: areaM2 * precoM2,
+        productId: product.id, product, areaM2, caixas, precoM2, subtotal: round2(areaM2 * precoM2),
       });
       const b = updateLocal({ items: [...budget.items, newItem] });
       await persistTotals(b);

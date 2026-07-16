@@ -745,7 +745,7 @@ async function getBudgetWithItems(budgetId: string): Promise<Budget> {
 async function createBudget(customerId: string, tecnico: string): Promise<Budget> {
   const { data, error } = await supabase
     .from("budgets")
-    .insert({ customer_id: customerId, status: "rascunho", tabela_preco: 1, frete: 0, percentual_imposto: 0.65, tecnico })
+    .insert({ customer_id: customerId, status: "rascunho", tabela_preco: 1, frete: 0, percentual_imposto: 0, tecnico })
     .select()
     .single();
   if (error) throw error;
@@ -798,7 +798,7 @@ async function saveBudgetFields(id: string, patch: {
 
 async function recalcBudgetTotals(budget: Budget): Promise<void> {
   const subtotal = budget.items.reduce((s, i) => s + i.subtotal, 0);
-  const totalFinal = subtotal + subtotal * (budget.percentualImposto / 100) + budget.frete;
+  const totalFinal = subtotal + budget.frete;
   await saveBudgetFields(budget.id, { subtotal: round2(subtotal), total_final: round2(totalFinal) });
 }
 
@@ -848,7 +848,7 @@ async function duplicateBudget(original: Budget, tecnico: string): Promise<Budge
       status: "rascunho",
       tabela_preco: original.tabelaPreco,
       frete: original.frete,
-      percentual_imposto: original.percentualImposto,
+      percentual_imposto: 0,
       observacoes: original.observacoes,
       tecnico,
       endereco_entrega: original.enderecoEntrega || null,
@@ -1204,7 +1204,6 @@ function BudgetEditor({
   const [showModal, setShowModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [frete, setFrete] = useState(String(initBudget.frete || "0"));
-  const [imposto, setImposto] = useState(String(initBudget.percentualImposto || "0.65"));
   const [obs, setObs] = useState(initBudget.observacoes || "");
   const [editFinancials, setEditFinancials] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
@@ -1256,7 +1255,7 @@ function BudgetEditor({
   function updateLocal(patch: Partial<Budget>) {
     const updated = { ...budget, ...patch };
     const subtotal = updated.items.reduce((s, i) => s + i.subtotal, 0);
-    const totalFinal = subtotal + subtotal * (updated.percentualImposto / 100) + updated.frete;
+    const totalFinal = subtotal + updated.frete;
     const final = { ...updated, subtotal: round2(subtotal), totalFinal: round2(totalFinal) };
     setBudget(final);
     onBudgetChange(final);
@@ -1268,7 +1267,7 @@ function BudgetEditor({
       subtotal: b.subtotal,
       total_final: b.totalFinal,
       frete: b.frete,
-      percentual_imposto: b.percentualImposto,
+      percentual_imposto: 0,
       observacoes: b.observacoes,
       status: b.status,
       tabela_preco: b.tabelaPreco,
@@ -1336,10 +1335,9 @@ function BudgetEditor({
 
   async function handleSaveFinancials() {
     const fr = parseFloat(frete.replace(",", ".")) || 0;
-    const imp = parseFloat(imposto.replace(",", ".")) || 0;
     setSaving(true);
     try {
-      const b = updateLocal({ frete: fr, percentualImposto: imp, observacoes: obs });
+      const b = updateLocal({ frete: fr, percentualImposto: 0, observacoes: obs });
       await persistTotals(b);
       markDirty();
       setEditFinancials(false);
@@ -1456,8 +1454,6 @@ function BudgetEditor({
     finally { setSaving(false); }
   }
 
-  const impostoVal = round2(budget.subtotal * (budget.percentualImposto / 100));
-
   async function printBudget() {
     const fmtBRLStr = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -1561,7 +1557,6 @@ function BudgetEditor({
 <div class="clearfix">
   <table class="totals-box">
     ${budget.frete > 0 ? `<tr><td>Frete</td><td>${fmtBRLStr(budget.frete)}</td></tr>` : ""}
-    ${budget.percentualImposto > 0 ? `<tr><td>Impostos (${budget.percentualImposto}%)</td><td>${fmtBRLStr(impostoVal)}</td></tr>` : ""}
     <tr><td>TOTAL</td><td>${fmtBRLStr(budget.totalFinal)}</td></tr>
   </table>
 </div>
@@ -1768,7 +1763,7 @@ ${budget.observacoes ? `
                     placeholder="Condições de pagamento, prazo de entrega..."
                     className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 resize-none" />
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div>
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-medium text-muted-foreground">Frete (R$)</label>
@@ -1781,15 +1776,9 @@ ${budget.observacoes ? `
                     <input type="text" value={frete} onChange={(e) => setFrete(e.target.value)} placeholder="0,00"
                       className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono" />
                   </div>
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">Impostos (%)</label>
-                    <input type="text" value={imposto} onChange={(e) => setImposto(e.target.value)} placeholder="0,65"
-                      className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono" />
-                    <p className="text-xs text-muted-foreground mt-1">padrão: 0,65%</p>
-                  </div>
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={() => { setEditFinancials(false); setFrete(String(budget.frete)); setImposto(String(budget.percentualImposto)); setObs(budget.observacoes || ""); }}
+                  <button onClick={() => { setEditFinancials(false); setFrete(String(budget.frete)); setObs(budget.observacoes || ""); }}
                     className="flex-1 border border-border rounded-xl py-2 text-xs hover:bg-muted transition-colors">Cancelar</button>
                   <button onClick={handleSaveFinancials} disabled={saving}
                     className="flex-1 bg-primary text-primary-foreground rounded-xl py-2 text-xs font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-1.5">
@@ -1802,10 +1791,6 @@ ${budget.observacoes ? `
                 <div className="flex justify-between">
                   <span className="text-muted-foreground text-xs">Frete</span>
                   <span className="font-mono text-xs">{fmtBRL(budget.frete)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground text-xs">Impostos</span>
-                  <span className="font-mono text-xs">{budget.percentualImposto}%</span>
                 </div>
                 {budget.observacoes
                   ? <p className="text-xs text-muted-foreground bg-muted/50 rounded-xl p-3 mt-2 leading-relaxed">{budget.observacoes}</p>
@@ -1912,12 +1897,6 @@ ${budget.observacoes ? `
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Frete</span>
                   <span className="font-mono">{fmtBRL(budget.frete)}</span>
-                </div>
-              )}
-              {budget.percentualImposto > 0 && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Impostos ({budget.percentualImposto}%)</span>
-                  <span className="font-mono">{fmtBRL(impostoVal)}</span>
                 </div>
               )}
               <div className="border-t border-border pt-3 flex justify-between items-baseline">

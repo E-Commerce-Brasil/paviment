@@ -1,0 +1,7 @@
+ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_cep TEXT;
+ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_logradouro TEXT;
+ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_numero TEXT;
+ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_complemento TEXT;
+ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_bairro TEXT;
+ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_cidade TEXT;
+ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_estado TEXT;

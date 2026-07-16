@@ -85,6 +85,13 @@ interface Budget {
   observacoes?: string;
   tecnico?: string;
   enderecoEntrega?: string;
+  entregaCep?: string;
+  entregaLogradouro?: string;
+  entregaNumero?: string;
+  entregaComplemento?: string;
+  entregaBairro?: string;
+  entregaCidade?: string;
+  entregaEstado?: string;
   items: BudgetItem[];
   subtotal: number;
   totalFinal: number;
@@ -167,6 +174,13 @@ function mapBudget(r: any, items: BudgetItem[] = []): Budget {
     observacoes: r.observacoes || "",
     tecnico: r.tecnico || "",
     enderecoEntrega: r.endereco_entrega || "",
+    entregaCep: r.entrega_cep || "",
+    entregaLogradouro: r.entrega_logradouro || "",
+    entregaNumero: r.entrega_numero || "",
+    entregaComplemento: r.entrega_complemento || "",
+    entregaBairro: r.entrega_bairro || "",
+    entregaCidade: r.entrega_cidade || "",
+    entregaEstado: r.entrega_estado || "",
     items,
     subtotal: parseFloat(r.subtotal) || 0,
     totalFinal: parseFloat(r.total_final) || 0,
@@ -478,6 +492,52 @@ function formatPhone(value: string): string {
   return `(${ddd}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
 }
 
+function formatCEP(value: string): string {
+  const digits = onlyDigits(value).slice(0, 8);
+  if (digits.length <= 5) return digits;
+  return `${digits.slice(0, 5)}-${digits.slice(5)}`;
+}
+
+function isValidCEP(value: string): boolean {
+  return onlyDigits(value).length === 8;
+}
+
+interface ViaCepAddress {
+  logradouro: string;
+  bairro: string;
+  localidade: string;
+  uf: string;
+}
+
+async function fetchAddressByCEP(value: string): Promise<ViaCepAddress | null> {
+  const cep = onlyDigits(value);
+  if (!isValidCEP(cep)) return null;
+
+  const response = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+  if (!response.ok) throw new Error("network");
+
+  const data = await response.json();
+  if (data.erro) return null;
+
+  return {
+    logradouro: data.logradouro || "",
+    bairro: data.bairro || "",
+    localidade: data.localidade || "",
+    uf: data.uf || "",
+  };
+}
+
+function buildFullAddress(address: {
+  logradouro?: string; numero?: string; complemento?: string; bairro?: string;
+  cidade?: string; estado?: string; cep?: string;
+}): string {
+  const street = [address.logradouro, address.numero, address.complemento].filter(Boolean).join(", ");
+  const district = address.bairro || "";
+  const cityState = address.cidade ? `${address.cidade}${address.estado ? `/${address.estado}` : ""}` : (address.estado || "");
+  const cep = address.cep ? `CEP ${address.cep}` : "";
+  return [street, district, cityState, cep].filter(Boolean).join(" - ");
+}
+
 function isValidCPF(value: string): boolean {
   const digits = onlyDigits(value);
   if (digits.length !== 11) return false;
@@ -617,6 +677,13 @@ async function runMigrations(): Promise<void> {
     await supabase.rpc("exec_sql", { sql: `
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS tecnico TEXT;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS endereco_entrega TEXT;
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_cep TEXT;
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_logradouro TEXT;
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_numero TEXT;
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_complemento TEXT;
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_bairro TEXT;
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_cidade TEXT;
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_estado TEXT;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS logradouro TEXT;
@@ -632,7 +699,9 @@ async function runMigrations(): Promise<void> {
 async function saveBudgetFields(id: string, patch: {
   status?: string; tabela_preco?: number; frete?: number;
   percentual_imposto?: number; observacoes?: string;
-  subtotal?: number; total_final?: number; endereco_entrega?: string;
+  subtotal?: number; total_final?: number; endereco_entrega?: string | null;
+  entrega_cep?: string | null; entrega_logradouro?: string | null; entrega_numero?: string | null;
+  entrega_complemento?: string | null; entrega_bairro?: string | null; entrega_cidade?: string | null; entrega_estado?: string | null;
 }): Promise<void> {
   const { error } = await supabase
     .from("budgets")
@@ -696,6 +765,14 @@ async function duplicateBudget(original: Budget, tecnico: string): Promise<Budge
       percentual_imposto: original.percentualImposto,
       observacoes: original.observacoes,
       tecnico,
+      endereco_entrega: original.enderecoEntrega || null,
+      entrega_cep: original.entregaCep || null,
+      entrega_logradouro: original.entregaLogradouro || null,
+      entrega_numero: original.entregaNumero || null,
+      entrega_complemento: original.entregaComplemento || null,
+      entrega_bairro: original.entregaBairro || null,
+      entrega_cidade: original.entregaCidade || null,
+      entrega_estado: original.entregaEstado || null,
       subtotal: original.subtotal,
       total_final: original.totalFinal,
     })
@@ -1035,12 +1112,18 @@ function BudgetEditor({
   const [duplicating, setDuplicating] = useState(false);
 
   // Delivery address
-  const customerAddr = [customer.logradouro, customer.numero, customer.complemento, customer.bairro, customer.cidade, customer.estado]
-    .filter(Boolean).join(", ");
-  const [mesmoEndereco, setMesmoEndereco] = useState(
-    !initBudget.enderecoEntrega || initBudget.enderecoEntrega === customerAddr
-  );
-  const [enderecoEntrega, setEnderecoEntrega] = useState(initBudget.enderecoEntrega || "");
+  const customerAddr = buildFullAddress(customer);
+  const initialDelivery = {
+    cep: initBudget.entregaCep || "",
+    logradouro: initBudget.entregaLogradouro || "",
+    numero: initBudget.entregaNumero || "",
+    complemento: initBudget.entregaComplemento || "",
+    bairro: initBudget.entregaBairro || "",
+    cidade: initBudget.entregaCidade || "",
+    estado: initBudget.entregaEstado || "",
+  };
+  const [entrega, setEntrega] = useState(initialDelivery);
+  const [consultandoEntregaCep, setConsultandoEntregaCep] = useState(false);
 
   const isLocked = budget.status === "enviado_fabrica" || budget.status === "fechado";
 
@@ -1158,13 +1241,75 @@ function BudgetEditor({
     finally { setSaving(false); }
   }
 
+
+  async function handleDeliveryCepChange(value: string) {
+    const cep = formatCEP(value);
+    setEntrega((f) => ({ ...f, cep }));
+    markDirty();
+
+    if (!isValidCEP(cep)) return;
+
+    setConsultandoEntregaCep(true);
+    try {
+      const address = await fetchAddressByCEP(cep);
+      if (!address) {
+        toast.error("CEP não encontrado. Preencha o endereço manualmente.");
+        return;
+      }
+
+      setEntrega((f) => ({
+        ...f,
+        cep,
+        logradouro: address.logradouro,
+        bairro: address.bairro,
+        cidade: address.localidade,
+        estado: address.uf,
+      }));
+    } catch {
+      toast.error("Não foi possível consultar o CEP. Preencha o endereço manualmente.");
+    } finally {
+      setConsultandoEntregaCep(false);
+    }
+  }
+
+  function useCustomerAddress() {
+    setEntrega({
+      cep: formatCEP(customer.cep || ""),
+      logradouro: customer.logradouro || "",
+      numero: customer.numero || "",
+      complemento: customer.complemento || "",
+      bairro: customer.bairro || "",
+      cidade: customer.cidade || "",
+      estado: customer.estado || "",
+    });
+    markDirty();
+  }
+
   async function handleSaveDraft() {
     setSaving(true);
     try {
-      const entrega = mesmoEndereco ? customerAddr : enderecoEntrega.trim();
+      const enderecoEntrega = buildFullAddress(entrega);
       await persistTotals(budget);
-      await saveBudgetFields(budget.id, { endereco_entrega: entrega });
-      updateLocal({ enderecoEntrega: entrega });
+      await saveBudgetFields(budget.id, {
+        endereco_entrega: enderecoEntrega,
+        entrega_cep: entrega.cep || null,
+        entrega_logradouro: entrega.logradouro || null,
+        entrega_numero: entrega.numero || null,
+        entrega_complemento: entrega.complemento || null,
+        entrega_bairro: entrega.bairro || null,
+        entrega_cidade: entrega.cidade || null,
+        entrega_estado: entrega.estado || null,
+      });
+      updateLocal({
+        enderecoEntrega,
+        entregaCep: entrega.cep,
+        entregaLogradouro: entrega.logradouro,
+        entregaNumero: entrega.numero,
+        entregaComplemento: entrega.complemento,
+        entregaBairro: entrega.bairro,
+        entregaCidade: entrega.cidade,
+        entregaEstado: entrega.estado,
+      });
       setIsDirty(false);
       toast.success("Rascunho salvo!");
     } catch (e: any) { toast.error("Erro: " + e.message); }
@@ -1289,6 +1434,7 @@ function BudgetEditor({
   <tr><td>Cidade - CEP</td><td>${customer.cidade || ""}${customer.estado ? " / " + customer.estado : ""}</td></tr>
   <tr><td>E-mail</td><td>${customer.email || ""}</td></tr>
   ${budget.tecnico ? `<tr><td>Técnico Responsável</td><td>${budget.tecnico}</td></tr>` : ""}
+  ${budget.enderecoEntrega ? `<tr><td>Endereço de Entrega</td><td>${budget.enderecoEntrega}</td></tr>` : ""}
 </table>
 
 <div class="section-header">PRODUTOS / ESPECIFICAÇÕES</div>
@@ -1561,29 +1707,64 @@ ${budget.observacoes ? `
 
             {/* Endereço de entrega */}
             <div className="mt-4 pt-4 border-t border-border">
-              <p className="text-xs font-medium text-muted-foreground mb-2">Endereço de Entrega</p>
-              <div className="flex flex-col gap-2">
-                <label className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border cursor-pointer transition-all text-sm ${mesmoEndereco ? "border-primary bg-primary/5 text-primary" : "border-border hover:border-primary/30"}`}>
-                  <input type="radio" name="entrega" checked={mesmoEndereco} onChange={() => { setMesmoEndereco(true); markDirty(); }} className="accent-primary" />
-                  <span>Mesmo endereço de cadastro</span>
-                </label>
-                {mesmoEndereco && customerAddr && (
-                  <p className="text-xs text-muted-foreground pl-3">{customerAddr}</p>
-                )}
-                <label className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border cursor-pointer transition-all text-sm ${!mesmoEndereco ? "border-primary bg-primary/5 text-primary" : "border-border hover:border-primary/30"}`}>
-                  <input type="radio" name="entrega" checked={!mesmoEndereco} onChange={() => { setMesmoEndereco(false); markDirty(); }} className="accent-primary" />
-                  <span>Endereço de entrega diferente</span>
-                </label>
-                {!mesmoEndereco && (
-                  <textarea
-                    value={enderecoEntrega}
-                    onChange={(e) => { setEnderecoEntrega(e.target.value); markDirty(); }}
-                    placeholder="Rua, número, bairro, cidade/UF, CEP"
-                    rows={2}
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <p className="text-xs font-medium text-muted-foreground">Endereço de Entrega</p>
+                <button
+                  type="button"
+                  onClick={useCustomerAddress}
+                  disabled={isLocked}
+                  className="text-xs border border-border rounded-lg px-2.5 py-1 hover:bg-muted transition-colors disabled:opacity-50">
+                  Usar endereço do cliente
+                </button>
+              </div>
+              <div className="space-y-2">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground">CEP</label>
+                  <input
+                    value={entrega.cep}
+                    onChange={(e) => handleDeliveryCepChange(e.target.value)}
+                    placeholder="00000-000"
                     disabled={isLocked}
-                    className="w-full border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50 resize-none"
+                    className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50"
                   />
-                )}
+                  {consultandoEntregaCep && <p className="text-xs text-muted-foreground mt-1">Consultando CEP...</p>}
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="col-span-2">
+                    <label className="text-xs font-medium text-muted-foreground">Logradouro</label>
+                    <input value={entrega.logradouro} onChange={(e) => { setEntrega((f) => ({ ...f, logradouro: e.target.value })); markDirty(); }} disabled={isLocked}
+                      className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Número</label>
+                    <input value={entrega.numero} onChange={(e) => { setEntrega((f) => ({ ...f, numero: e.target.value })); markDirty(); }} disabled={isLocked}
+                      className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Complemento</label>
+                    <input value={entrega.complemento} onChange={(e) => { setEntrega((f) => ({ ...f, complemento: e.target.value })); markDirty(); }} disabled={isLocked}
+                      className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Bairro</label>
+                    <input value={entrega.bairro} onChange={(e) => { setEntrega((f) => ({ ...f, bairro: e.target.value })); markDirty(); }} disabled={isLocked}
+                      className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="col-span-2">
+                    <label className="text-xs font-medium text-muted-foreground">Cidade</label>
+                    <input value={entrega.cidade} onChange={(e) => { setEntrega((f) => ({ ...f, cidade: e.target.value })); markDirty(); }} disabled={isLocked}
+                      className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Estado</label>
+                    <input value={entrega.estado} onChange={(e) => { setEntrega((f) => ({ ...f, estado: e.target.value.toUpperCase().slice(0, 2) })); markDirty(); }} disabled={isLocked} maxLength={2}
+                      className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1733,11 +1914,42 @@ function CustomerView({
     ...initCustomer,
     cpf: formatCPF(initCustomer.cpf || ""),
     telefone: formatPhone(initCustomer.telefone || ""),
+    cep: formatCEP(initCustomer.cep || ""),
   });
   const [showTecnicoModal, setShowTecnicoModal] = useState(false);
   const [tecnicoSelecionado, setTecnicoSelecionado] = useState("");
   const [tecnicoCustom, setTecnicoCustom] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [consultandoEditCep, setConsultandoEditCep] = useState(false);
+
+  async function handleEditCepChange(value: string) {
+    const cep = formatCEP(value);
+    setEditForm((f) => ({ ...f, cep }));
+
+    if (!isValidCEP(cep)) return;
+
+    setConsultandoEditCep(true);
+    try {
+      const address = await fetchAddressByCEP(cep);
+      if (!address) {
+        toast.error("CEP não encontrado. Preencha o endereço manualmente.");
+        return;
+      }
+
+      setEditForm((f) => ({
+        ...f,
+        cep,
+        logradouro: address.logradouro,
+        bairro: address.bairro,
+        cidade: address.localidade,
+        estado: address.uf,
+      }));
+    } catch {
+      toast.error("Não foi possível consultar o CEP. Preencha o endereço manualmente.");
+    } finally {
+      setConsultandoEditCep(false);
+    }
+  }
 
   async function loadBudgets() {
     setLoading(true);
@@ -1975,6 +2187,13 @@ function CustomerView({
                   className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
               </div>
               <p className="text-xs font-semibold text-muted-foreground pt-1">Endereço</p>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">CEP</label>
+                <input value={editForm.cep || ""} onChange={(e) => handleEditCepChange(e.target.value)}
+                  placeholder="00000-000"
+                  className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+                {consultandoEditCep && <p className="text-xs text-muted-foreground mt-1">Consultando CEP...</p>}
+              </div>
               <div className="grid grid-cols-3 gap-3">
                 <div className="col-span-2">
                   <label className="text-xs font-medium text-muted-foreground">Logradouro</label>
@@ -2009,17 +2228,11 @@ function CustomerView({
                     className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground">UF</label>
-                  <input value={editForm.estado || ""} onChange={(e) => setEditForm((f) => ({ ...f, estado: e.target.value }))}
+                  <label className="text-xs font-medium text-muted-foreground">Estado</label>
+                  <input value={editForm.estado || ""} onChange={(e) => setEditForm((f) => ({ ...f, estado: e.target.value.toUpperCase().slice(0, 2) }))}
                     maxLength={2}
                     className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                 </div>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">CEP</label>
-                <input value={editForm.cep || ""} onChange={(e) => setEditForm((f) => ({ ...f, cep: e.target.value }))}
-                  placeholder="00000-000"
-                  className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
               </div>
               <div className="flex gap-2 pt-1">
                 <button onClick={() => setShowEdit(false)} className="flex-1 border border-border rounded-xl py-2.5 text-sm hover:bg-muted transition-colors">Cancelar</button>
@@ -2440,6 +2653,7 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ nome: "", cpf: "", email: "", telefone: "", cep: "", logradouro: "", numero: "", complemento: "", bairro: "", cidade: "", estado: "" });
   const [creating, setCreating] = useState(false);
+  const [consultandoCustomerCep, setConsultandoCustomerCep] = useState(false);
 
   // Orçamentos tab state
   const [recentBudgets, setRecentBudgets] = useState<BudgetSummary[]>([]);
@@ -2488,8 +2702,37 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
     return () => clearTimeout(t);
   }, [q]);
 
-  async function handleCreate() {
-    if (!form.nome.trim()) { toast.error("Nome é obrigatório"); return; }
+
+  async function handleCustomerCepChange(value: string) {
+    const cep = formatCEP(value);
+    setForm((f) => ({ ...f, cep }));
+
+    if (!isValidCEP(cep)) return;
+
+    setConsultandoCustomerCep(true);
+    try {
+      const address = await fetchAddressByCEP(cep);
+      if (!address) {
+        toast.error("CEP não encontrado. Preencha o endereço manualmente.");
+        return;
+      }
+
+      setForm((f) => ({
+        ...f,
+        cep,
+        logradouro: address.logradouro,
+        bairro: address.bairro,
+        cidade: address.localidade,
+        estado: address.uf,
+      }));
+    } catch {
+      toast.error("Não foi possível consultar o CEP. Preencha o endereço manualmente.");
+    } finally {
+      setConsultandoCustomerCep(false);
+    }
+  }
+
+  async function handleCreate() {    if (!form.nome.trim()) { toast.error("Nome é obrigatório"); return; }
     if (!validateCustomerContactFields(form.cpf, form.telefone)) return;
     setCreating(true);
     try {
@@ -2647,6 +2890,13 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
                             className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                         </div>
                         <p className="text-xs font-semibold text-muted-foreground pt-1">Endereço</p>
+                        <div>
+                          <label className="text-xs font-medium text-muted-foreground">CEP</label>
+                          <input value={form.cep} onChange={(e) => handleCustomerCepChange(e.target.value)}
+                            placeholder="00000-000"
+                            className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+                          {consultandoCustomerCep && <p className="text-xs text-muted-foreground mt-1">Consultando CEP...</p>}
+                        </div>
                         <div className="grid grid-cols-3 gap-3">
                           <div className="col-span-2">
                             <label className="text-xs font-medium text-muted-foreground">Logradouro</label>
@@ -2681,17 +2931,11 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
                               className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                           </div>
                           <div>
-                            <label className="text-xs font-medium text-muted-foreground">UF</label>
-                            <input value={form.estado} onChange={(e) => setForm((f) => ({ ...f, estado: e.target.value }))}
+                            <label className="text-xs font-medium text-muted-foreground">Estado</label>
+                            <input value={form.estado} onChange={(e) => setForm((f) => ({ ...f, estado: e.target.value.toUpperCase().slice(0, 2) }))}
                               placeholder="SP" maxLength={2}
                               className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                           </div>
-                        </div>
-                        <div>
-                          <label className="text-xs font-medium text-muted-foreground">CEP</label>
-                          <input value={form.cep} onChange={(e) => setForm((f) => ({ ...f, cep: e.target.value }))}
-                            placeholder="00000-000"
-                            className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                         </div>
                         <button onClick={handleCreate} disabled={creating}
                           className="w-full bg-primary text-primary-foreground py-3 rounded-xl text-sm font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2">

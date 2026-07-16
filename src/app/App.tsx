@@ -421,7 +421,7 @@ async function searchCustomers(q: string): Promise<Customer[]> {
   const { data, error } = await supabase
     .from("customers")
     .select("*")
-    .or(`nome.ilike.%${q}%,cpf.ilike.%${q}%,email.ilike.%${q}%`)
+    .or(`nome.ilike.%${q}%,cpf.ilike.%${q}%,telefone.ilike.%${q}%,email.ilike.%${q}%`)
     .order("nome")
     .limit(30);
   if (error) throw error;
@@ -444,18 +444,113 @@ function buildCustomerRow(form: Partial<Customer>) {
   };
 }
 
-async function checkCustomerDuplicate(cpf: string, email: string, excludeId?: string): Promise<string | null> {
-  const filters: string[] = [];
-  const cpfClean = cpf.replace(/\D/g, "");
-  if (cpfClean.length >= 11) filters.push(`cpf.eq.${cpf}`);
-  if (email.trim()) filters.push(`email.ilike.${email.trim()}`);
-  if (filters.length === 0) return null;
-  let query = supabase.from("customers").select("id,nome,cpf,email").or(filters.join(","));
+function normalizeCustomerName(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function onlyDigits(value: string): string {
+  return value.replace(/\D/g, "");
+}
+
+function normalizeCustomerEmail(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function formatCPF(value: string): string {
+  const digits = onlyDigits(value).slice(0, 11);
+  if (digits.length <= 3) return digits;
+  if (digits.length <= 6) return `${digits.slice(0, 3)}.${digits.slice(3)}`;
+  if (digits.length <= 9) return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
+  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+}
+
+function formatPhone(value: string): string {
+  const digits = onlyDigits(value).slice(0, 11);
+  if (digits.length <= 2) return digits ? `(${digits}` : "";
+
+  const ddd = digits.slice(0, 2);
+  if (digits.length <= 6) return `(${ddd}) ${digits.slice(2)}`;
+
+  if (digits.length <= 10) {
+    return `(${ddd}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
+  }
+
+  return `(${ddd}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+}
+
+function isValidCPF(value: string): boolean {
+  const digits = onlyDigits(value);
+  if (digits.length !== 11) return false;
+  if (/^(\d)\1{10}$/.test(digits)) return false;
+
+  const calcDigit = (factor: number) => {
+    let total = 0;
+    for (let i = 0; i < factor - 1; i++) {
+      total += Number(digits[i]) * (factor - i);
+    }
+    const remainder = (total * 10) % 11;
+    return remainder === 10 ? 0 : remainder;
+  };
+
+  return calcDigit(10) === Number(digits[9]) && calcDigit(11) === Number(digits[10]);
+}
+
+function isValidPhone(value: string): boolean {
+  const digits = onlyDigits(value);
+  return digits.length === 10 || digits.length === 11;
+}
+
+function validateCustomerContactFields(cpf: string, telefone: string): boolean {
+  if (cpf.trim() && !isValidCPF(cpf)) {
+    toast.error("Informe um CPF válido.");
+    return false;
+  }
+
+  if (telefone.trim() && !isValidPhone(telefone)) {
+    toast.error("Informe um telefone válido com DDD.");
+    return false;
+  }
+
+  return true;
+}
+
+async function checkCustomerDuplicate(
+  nome: string,
+  cpf: string,
+  telefone: string,
+  email: string,
+  excludeId?: string
+): Promise<string | null> {
+  const normalizedName = normalizeCustomerName(nome);
+  const cpfDigits = onlyDigits(cpf);
+  const phoneDigits = onlyDigits(telefone);
+  const normalizedEmail = normalizeCustomerEmail(email);
+
+  let query = supabase.from("customers").select("id,nome,cpf,telefone,email");
   if (excludeId) query = query.neq("id", excludeId);
-  const { data } = await query.limit(1);
-  if (!data || data.length === 0) return null;
-  const dup = data[0];
-  return `Já existe um cliente com ${dup.cpf === cpf && cpfClean.length >= 11 ? "este CPF" : "este e-mail"}: ${dup.nome}`;
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  for (const customer of data || []) {
+    if (normalizedName && normalizeCustomerName(customer.nome || "") === normalizedName) {
+      return `Já existe um cliente com este nome: ${customer.nome}`;
+    }
+
+    if (cpfDigits.length === 11 && onlyDigits(customer.cpf || "") === cpfDigits) {
+      return `Já existe um cliente com este CPF: ${customer.nome}`;
+    }
+
+    if (phoneDigits && onlyDigits(customer.telefone || "") === phoneDigits) {
+      return `Já existe um cliente com este telefone: ${customer.nome}`;
+    }
+
+    if (normalizedEmail && normalizeCustomerEmail(customer.email || "") === normalizedEmail) {
+      return `Já existe um cliente com este e-mail: ${customer.nome}`;
+    }
+  }
+
+  return null;
 }
 
 async function createCustomer(form: Omit<Customer, "id" | "createdAt">): Promise<Customer> {
@@ -1634,7 +1729,11 @@ function CustomerView({
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
-  const [editForm, setEditForm] = useState({ ...initCustomer });
+  const [editForm, setEditForm] = useState({
+    ...initCustomer,
+    cpf: formatCPF(initCustomer.cpf || ""),
+    telefone: formatPhone(initCustomer.telefone || ""),
+  });
   const [showTecnicoModal, setShowTecnicoModal] = useState(false);
   const [tecnicoSelecionado, setTecnicoSelecionado] = useState("");
   const [tecnicoCustom, setTecnicoCustom] = useState("");
@@ -1676,8 +1775,9 @@ function CustomerView({
 
   async function saveEdit() {
     if (!editForm.nome?.trim()) { toast.error("Nome é obrigatório"); return; }
+    if (!validateCustomerContactFields(editForm.cpf || "", editForm.telefone || "")) return;
     try {
-      const dupMsg = await checkCustomerDuplicate(editForm.cpf || "", editForm.email || "", customer.id);
+      const dupMsg = await checkCustomerDuplicate(editForm.nome || "", editForm.cpf || "", editForm.telefone || "", editForm.email || "", customer.id);
       if (dupMsg) { toast.error(dupMsg); return; }
       await updateCustomer(customer.id, editForm);
       const updated = { ...customer, ...editForm };
@@ -1857,13 +1957,13 @@ function CustomerView({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-medium text-muted-foreground">CPF</label>
-                  <input value={editForm.cpf || ""} onChange={(e) => setEditForm((f) => ({ ...f, cpf: e.target.value }))}
+                  <input value={editForm.cpf || ""} onChange={(e) => setEditForm((f) => ({ ...f, cpf: formatCPF(e.target.value) }))}
                     placeholder="000.000.000-00"
                     className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-muted-foreground">Telefone</label>
-                  <input value={editForm.telefone || ""} onChange={(e) => setEditForm((f) => ({ ...f, telefone: e.target.value }))}
+                  <input value={editForm.telefone || ""} onChange={(e) => setEditForm((f) => ({ ...f, telefone: formatPhone(e.target.value) }))}
                     placeholder="(00) 00000-0000"
                     className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                 </div>
@@ -2198,6 +2298,7 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
             className="w-full border border-border rounded-xl pl-9 pr-4 py-2.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/25" />
         </div>
         <select value={superficie} onChange={(e) => setSuperficie(e.target.value)}
+
           className="border border-border rounded-xl px-3 py-2.5 text-xs bg-card focus:outline-none">
           <option value="">Todas as superfícies</option>
           {superficies.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -2389,9 +2490,10 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
 
   async function handleCreate() {
     if (!form.nome.trim()) { toast.error("Nome é obrigatório"); return; }
+    if (!validateCustomerContactFields(form.cpf, form.telefone)) return;
     setCreating(true);
     try {
-      const dupMsg = await checkCustomerDuplicate(form.cpf, form.email);
+      const dupMsg = await checkCustomerDuplicate(form.nome, form.cpf, form.telefone, form.email);
       if (dupMsg) { toast.error(dupMsg); setCreating(false); return; }
       const c = await createCustomer(form);
       toast.success("Cliente cadastrado!");
@@ -2527,13 +2629,13 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
                         <div className="grid grid-cols-2 gap-3">
                           <div>
                             <label className="text-xs font-medium text-muted-foreground">CPF</label>
-                            <input value={form.cpf} onChange={(e) => setForm((f) => ({ ...f, cpf: e.target.value }))}
+                            <input value={form.cpf} onChange={(e) => setForm((f) => ({ ...f, cpf: formatCPF(e.target.value) }))}
                               placeholder="000.000.000-00"
                               className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                           </div>
                           <div>
                             <label className="text-xs font-medium text-muted-foreground">Telefone</label>
-                            <input value={form.telefone} onChange={(e) => setForm((f) => ({ ...f, telefone: e.target.value }))}
+                            <input value={form.telefone} onChange={(e) => setForm((f) => ({ ...f, telefone: formatPhone(e.target.value) }))}
                               placeholder="(00) 00000-0000"
                               className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                           </div>

@@ -1031,7 +1031,7 @@ function ProductModal({
   allProducts: Product[];
   tabelaPreco: 1 | 2 | 3 | 4;
   pricingSettings?: PricingSettings;
-  onSelect: (product: Product, areaM2: number) => void;
+  onSelect: (product: Product, areaM2: number, tabelaPreco: 1 | 2 | 3 | 4) => void;
   onClose: () => void;
 }) {
   const [q, setQ] = useState("");
@@ -1040,7 +1040,8 @@ function ProductModal({
   const [localUso, setLocalUso] = useState("");
   const [selected, setSelected] = useState<Product | null>(null);
   const [areaInput, setAreaInput] = useState("");
-  const pk = priceKey(tabelaPreco);
+  const [selectedTabela, setSelectedTabela] = useState<1 | 2 | 3 | 4>(tabelaPreco);
+  const pk = priceKey(selectedTabela);
   const safeProducts = Array.isArray(allProducts) ? allProducts : [];
   const effectivePricingSettings = pricingSettings || { impostoPercentual: 0, taxaCartaoPercentual: 0 };
 
@@ -1059,7 +1060,7 @@ function ProductModal({
     if (!selected) return;
     const area = parseFloat(areaInput.replace(",", "."));
     if (!area || area <= 0) { toast.error("Informe a área em m²"); return; }
-    onSelect(selected, area);
+    onSelect(selected, area, selectedTabela);
   }
 
   const superficies = [...new Set(safeProducts.map((p) => p.superficie).filter(Boolean))].sort();
@@ -1087,16 +1088,27 @@ function ProductModal({
             <p className="text-xs text-muted-foreground mt-0.5 font-mono">{selected.formato} · Ref: {selected.referencia}</p>
             <p className="text-xs text-muted-foreground">{LOCAL_USO[selected.localUso]} · {selected.m2PorCaixa} m²/cx · {selected.espessuraMm}mm</p>
           </div>
+          <div className="mb-4">
+            <p className="text-xs font-medium text-muted-foreground mb-1.5">Tabela de preço deste produto</p>
+            <div className="grid grid-cols-4 gap-1.5">
+              {([1, 2, 3, 4] as const).map((t) => (
+                <button key={t} type="button" onClick={() => setSelectedTabela(t)}
+                  className={`rounded-lg py-1.5 text-xs font-semibold border transition-colors ${selectedTabela === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                  Tabela {t}
+                </button>
+              ))}
+            </div>
+          </div>
           {price ? (
             <div className="bg-primary/8 rounded-xl p-3 mb-4 flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Tabela {tabelaPreco}</span>
+              <span className="text-sm text-muted-foreground">Tabela {selectedTabela}</span>
               <span className="text-xl font-semibold text-primary font-mono">
                 {fmtBRL(price)}<span className="text-sm font-normal text-muted-foreground">/m²</span>
               </span>
             </div>
           ) : (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 flex items-center gap-2 text-sm text-amber-700">
-              <AlertTriangle size={14} /> Preço não disponível para tabela {tabelaPreco}
+              <AlertTriangle size={14} /> Preço não disponível para tabela {selectedTabela}
             </div>
           )}
           <label className="block text-xs font-medium text-muted-foreground mb-1">Área necessária (m²)</label>
@@ -1140,7 +1152,7 @@ function ProductModal({
         <div className="px-5 py-4 border-b border-border flex items-center justify-between">
           <div>
             <h3 className="font-semibold">Buscar Produto</h3>
-            <p className="text-xs text-muted-foreground">Tabela {tabelaPreco} ativa</p>
+            <p className="text-xs text-muted-foreground">Escolha a tabela no nível do produto</p>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X size={18} /></button>
         </div>
@@ -1150,6 +1162,15 @@ function ProductModal({
             <input type="text" value={q} onChange={(e) => setQ(e.target.value)} autoFocus
               placeholder="Coleção, cor, formato, referência..."
               className="w-full border border-border rounded-xl pl-9 pr-4 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+          </div>
+          <div className="flex items-center gap-1.5 border border-border rounded-xl px-3 py-2 bg-muted/30">
+            <span className="text-xs text-muted-foreground mr-1">Tabela do produto:</span>
+            {([1, 2, 3, 4] as const).map((t) => (
+              <button key={t} type="button" onClick={() => setSelectedTabela(t)}
+                className={`w-7 h-6 rounded text-xs font-semibold transition-all ${selectedTabela === t ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>
+                {t}
+              </button>
+            ))}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <select value={superficie} onChange={(e) => setSuperficie(e.target.value)}
@@ -1299,16 +1320,16 @@ function BudgetEditor({
     });
   }
 
-  async function handleAddProduct(product: Product, areaM2: number) {
+  async function handleAddProduct(product: Product, areaM2: number, itemTabelaPreco: 1 | 2 | 3 | 4) {
     const already = budget.items.find((i) => i.productId === product.id);
     if (already) {
       setShowModal(false);
       toast.warning(`"${product.linha}" já está no orçamento — edite a metragem diretamente na tabela.`);
       return;
     }
-    const precoBase = product[priceKey(budget.tabelaPreco)] as number | null;
+    const precoBase = product[priceKey(itemTabelaPreco)] as number | null;
     if (precoBase == null || !Number.isFinite(Number(precoBase)) || Number(precoBase) <= 0) {
-      toast.error(`Preço não disponível para a tabela ${budget.tabelaPreco}.`);
+      toast.error(`Preço não disponível para a tabela ${itemTabelaPreco}.`);
       return;
     }
     if (!product.m2PorCaixa || product.m2PorCaixa <= 0) {
@@ -1481,23 +1502,12 @@ function BudgetEditor({
   }
 
   async function changeTabela(t: 1 | 2 | 3 | 4) {
-    const pk = priceKey(t);
-    const updatedItems = budget.items.map((item) => {
-      const newPrecoBase = item.product[pk] as number | null;
-      if (!newPrecoBase) return item;
-      const newPreco = calculateFinalPrice(newPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
-      return { ...item, precoM2: newPreco, subtotal: round2(item.areaM2 * newPreco) };
-    });
     setSaving(true);
     try {
-      // Update each item price in DB
-      await Promise.all(updatedItems.map((item) =>
-        updateBudgetItem(item.id, item.areaM2, item.caixas, item.precoM2)
-      ));
-      const b = updateLocal({ tabelaPreco: t, items: updatedItems });
-      await persistTotals(b);
+      await saveBudgetFields(budget.id, { tabela_preco: t });
+      updateLocal({ tabelaPreco: t });
       markDirty();
-      toast.info(`Tabela ${t} — preços recalculados`);
+      toast.info(`Tabela ${t} definida como padrão para novos produtos`);
     } catch (e: any) { toast.error("Erro: " + e.message); }
     finally { setSaving(false); }
   }
@@ -1645,7 +1655,7 @@ ${budget.observacoes ? `
         </div>
         <div className="px-5 py-2.5 flex flex-wrap items-center gap-4 text-sm">
           <div className="flex items-center gap-2">
-            <span className="text-xs opacity-60">Tabela:</span>
+            <span className="text-xs opacity-60">Tabela padrão:</span>
             {([1, 2, 3, 4] as const).map((t) => (
               <button key={t} onClick={() => changeTabela(t)}
                 className={`w-7 h-7 rounded text-xs font-semibold transition-all ${budget.tabelaPreco === t ? "bg-white text-primary" : "bg-white/10 hover:bg-white/20"}`}>
@@ -1990,7 +2000,7 @@ ${budget.observacoes ? `
               </div>
             )}
             <p className="mt-4 text-xs text-muted-foreground text-right">
-              #{budget.numero} · {fmtDate(budget.createdAt)} · Tabela {budget.tabelaPreco}
+              #{budget.numero} · {fmtDate(budget.createdAt)} · tabela padrão {budget.tabelaPreco}
             </p>
           </div>
         </div>

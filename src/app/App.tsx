@@ -1446,6 +1446,22 @@ function BudgetEditor({
     finally { setSaving(false); }
   }
 
+  function handlePixDiscountChange(value: string) {
+    if (value.trim() === "") {
+      setDescontoPix("");
+      return;
+    }
+
+    const parsed = parseFloat(value.replace(",", "."));
+    if (!Number.isFinite(parsed) || Number.isNaN(parsed) || parsed < 0) return;
+    if (parsed > 3) {
+      toast.error("O desconto máximo permitido para PIX é de 3%.");
+      return;
+    }
+
+    setDescontoPix(value);
+  }
+
   async function handleSaveFinancials() {
     const fr = parseFloat(frete.replace(",", ".")) || 0;
     const forma = formaPagamento;
@@ -1912,7 +1928,7 @@ ${budget.observacoes ? `
                   ) : formaPagamento === "avista_pix" ? (
                     <div>
                       <label className="text-xs font-medium text-muted-foreground block mb-1">Desconto PIX (%)</label>
-                      <input type="text" value={descontoPix} onChange={(e) => setDescontoPix(e.target.value)} placeholder="Até 3"
+                      <input type="text" value={descontoPix} onChange={(e) => handlePixDiscountChange(e.target.value)} placeholder="Até 3"
                         className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono" />
                       <p className="text-[11px] text-muted-foreground mt-1">Máximo permitido: 3%</p>
                     </div>

@@ -818,10 +818,10 @@ async function saveBudgetFields(id: string, patch: {
   if (error) throw error;
 }
 
-function calculatePaymentDiscount(subtotal: number, frete: number, formaPagamento: FormaPagamento, descontoPixPercentual: number): number {
+function calculatePaymentDiscount(subtotal: number, _frete: number, formaPagamento: FormaPagamento, descontoPixPercentual: number): number {
   if (formaPagamento !== "avista_pix") return 0;
   const percent = Math.min(parseDecimalInput(descontoPixPercentual), 3);
-  return round2((subtotal + frete) * (percent / 100));
+  return round2(subtotal * (percent / 100));
 }
 
 function calculateBudgetTotal(subtotal: number, frete: number, formaPagamento: FormaPagamento, descontoPixPercentual: number): number {

@@ -43,6 +43,10 @@ interface Product {
   preco3: number | null;
   preco4: number | null;
   descontinuado: boolean;
+  marca: string;
+  categoriaComplementar: string;
+  tipoRejunte: string;
+  tipoEmbalagem: string;
 }
 
 interface PricingSettings {
@@ -140,6 +144,10 @@ function mapProduct(r: any): Product {
     preco3: r.preco3 != null ? parseFloat(r.preco3) : null,
     preco4: r.preco4 != null ? parseFloat(r.preco4) : null,
     descontinuado: r.descontinuado ?? false,
+    marca: r.marca || "Villagres",
+    categoriaComplementar: r.categoria_complementar || "",
+    tipoRejunte: r.tipo_rejunte || "",
+    tipoEmbalagem: r.tipo_embalagem || "",
   };
 }
 
@@ -225,6 +233,10 @@ CREATE TABLE IF NOT EXISTS products (
   espessura_mm DECIMAL(10,2) DEFAULT 0,
   preco1 DECIMAL(12,4), preco2 DECIMAL(12,4),
   preco3 DECIMAL(12,4), preco4 DECIMAL(12,4),
+  marca TEXT DEFAULT 'Villagres',
+  categoria_complementar TEXT,
+  tipo_rejunte TEXT,
+  tipo_embalagem TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE products DISABLE ROW LEVEL SECURITY;
@@ -789,6 +801,10 @@ async function runMigrations(): Promise<void> {
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS desconto_pix_percentual NUMERIC(5,2) DEFAULT 0;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS desconto_pix_inclui_frete BOOLEAN DEFAULT FALSE;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS marca TEXT DEFAULT 'Villagres';
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS categoria_complementar TEXT;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS tipo_rejunte TEXT;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS tipo_embalagem TEXT;
       CREATE TABLE IF NOT EXISTS pricing_settings (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         imposto_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
@@ -1101,6 +1117,7 @@ function ProductModal({
   onClose: () => void;
 }) {
   const [q, setQ] = useState("");
+  const [marcaFiltro, setMarcaFiltro] = useState("");
   const [superficie, setSuperficie] = useState("");
   const [formato, setFormato] = useState("");
   const [localUso, setLocalUso] = useState("");
@@ -1114,9 +1131,10 @@ function ProductModal({
   const results = safeProducts.filter((p) => {
     if (p.descontinuado) return false;
     const txt = q.toLowerCase();
-    const matchQ = !q || [p.linha, p.colecao, p.cor, p.formato, p.referencia, p.superficie]
+    const matchQ = !q || [p.linha, p.colecao, p.cor, p.formato, p.referencia, p.superficie, p.marca, p.categoriaComplementar, p.tipoRejunte, p.tipoEmbalagem]
       .some((f) => f?.toLowerCase().includes(txt));
     return matchQ &&
+      (!marcaFiltro || p.marca === marcaFiltro) &&
       (!superficie || p.superficie === superficie) &&
       (!formato || p.formato === formato) &&
       (!localUso || String(p.localUso) === localUso);
@@ -1226,7 +1244,7 @@ function ProductModal({
           <div className="relative">
             <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <input type="text" value={q} onChange={(e) => setQ(e.target.value)} autoFocus
-              placeholder="Coleção, cor, formato, referência..."
+              placeholder="Marca, coleção, cor, formato, referência..."
               className="w-full border border-border rounded-xl pl-9 pr-4 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
           </div>
           <div className="flex items-center gap-1.5 border border-border rounded-xl px-3 py-2 bg-muted/30">
@@ -1238,7 +1256,13 @@ function ProductModal({
               </button>
             ))}
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+            <select value={marcaFiltro} onChange={(e) => setMarcaFiltro(e.target.value)}
+              className="border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
+              <option value="">Todas as marcas</option>
+              <option value="Villagres">Villagres</option>
+              <option value="Villacol">Villacol</option>
+            </select>
             <select value={superficie} onChange={(e) => setSuperficie(e.target.value)}
               className="border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
               <option value="">Todas as superfícies</option>
@@ -1262,7 +1286,7 @@ function ProductModal({
           {results.length === 0 ? (
             <div className="py-16 text-center text-muted-foreground text-sm">
               <Package size={32} className="mx-auto mb-2 opacity-20" />
-              {q || superficie || formato || localUso ? "Nenhum produto encontrado" : "Digite para buscar"}
+              {q || marcaFiltro || superficie || formato || localUso ? "Nenhum produto encontrado" : "Digite para buscar"}
             </div>
           ) : (
             <div className="divide-y divide-border">
@@ -1276,10 +1300,11 @@ function ProductModal({
                       <div className="min-w-0">
                         <p className="font-medium text-sm">
                           {p.linha}
+                          <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground border border-border font-medium">{p.marca || "Villagres"}</span>
                           {p.cor && p.cor !== "única" && p.cor !== "-"
                             ? <span className="text-muted-foreground font-normal"> · {p.cor}</span> : null}
                         </p>
-                        <p className="text-xs text-muted-foreground mt-0.5">{p.formato} · {p.superficie} · {LOCAL_USO[p.localUso]}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">{p.marca === "Villacol" ? [p.categoriaComplementar, p.tipoRejunte || p.tipoEmbalagem].filter(Boolean).join(" · ") : `${p.formato} · ${p.superficie} · ${LOCAL_USO[p.localUso]}`}</p>
                         <p className="text-xs text-muted-foreground font-mono">{p.referencia} · {p.colecao}</p>
                       </div>
                       <div className="text-right shrink-0">
@@ -2756,10 +2781,67 @@ async function updateProduct(id: string, patch: Partial<Omit<Product, "id">>): P
     referencia: patch.referencia, formato: patch.formato, linha: patch.linha,
     colecao: patch.colecao, cor: patch.cor, superficie: patch.superficie,
     m2_por_caixa: patch.m2PorCaixa, pecas_por_caixa: patch.pecasPorCaixa,
+    m2_por_pallet: patch.m2PorPallet, cx_por_pallet: patch.cxPorPallet,
+    peso_bruto_m2: patch.pesoBrutoM2, peso_bruto_cx: patch.pesoBrutoCx, espessura_mm: patch.espessuraMm,
     preco1: patch.preco1, preco2: patch.preco2, preco3: patch.preco3, preco4: patch.preco4,
     descontinuado: patch.descontinuado ?? false,
+    marca: patch.marca || "Villagres",
+    categoria_complementar: patch.categoriaComplementar || null,
+    tipo_rejunte: patch.tipoRejunte || null,
+    tipo_embalagem: patch.tipoEmbalagem || null,
   }).eq("id", id);
   if (error) throw error;
+}
+
+async function createProduct(product: Omit<Product, "id">): Promise<Product> {
+  const { data, error } = await supabase.from("products").insert({
+    referencia: product.referencia, formato: product.formato, linha: product.linha,
+    colecao: product.colecao, cor: product.cor, superficie: product.superficie,
+    faces: product.faces, variacao: product.variacao, local_uso: product.localUso, derivacao: product.derivacao,
+    m2_por_caixa: product.m2PorCaixa, pecas_por_caixa: product.pecasPorCaixa,
+    m2_por_pallet: product.m2PorPallet, cx_por_pallet: product.cxPorPallet,
+    peso_bruto_m2: product.pesoBrutoM2, peso_bruto_cx: product.pesoBrutoCx, espessura_mm: product.espessuraMm,
+    preco1: product.preco1, preco2: product.preco2, preco3: product.preco3, preco4: product.preco4,
+    descontinuado: product.descontinuado ?? false,
+    marca: product.marca || "Villagres",
+    categoria_complementar: product.categoriaComplementar || null,
+    tipo_rejunte: product.tipoRejunte || null,
+    tipo_embalagem: product.tipoEmbalagem || null,
+  }).select().single();
+  if (error) throw error;
+  return mapProduct(data);
+}
+
+function createEmptyProduct(marca: "Villagres" | "Villacol" = "Villagres"): Product {
+  return {
+    id: "",
+    marca,
+    categoriaComplementar: marca === "Villacol" ? "Argamassa" : "",
+    tipoRejunte: "",
+    tipoEmbalagem: "",
+    formato: "",
+    referencia: "",
+    linha: marca === "Villacol" ? "Argamassa" : "",
+    colecao: "",
+    cor: "",
+    superficie: "",
+    faces: 0,
+    variacao: "",
+    localUso: 3,
+    derivacao: "",
+    m2PorCaixa: marca === "Villacol" ? 1 : 0,
+    pecasPorCaixa: marca === "Villacol" ? 1 : 0,
+    m2PorPallet: 0,
+    cxPorPallet: 0,
+    pesoBrutoM2: 0,
+    pesoBrutoCx: 0,
+    espessuraMm: 0,
+    preco1: null,
+    preco2: null,
+    preco3: null,
+    preco4: null,
+    descontinuado: false,
+  };
 }
 
 // ── Product Edit Modal ────────────────────────────────────────────
@@ -2771,6 +2853,10 @@ function ProductEditModal({ product, onSave, onClose }: {
 }) {
   const [form, setForm] = useState({ ...product });
   const [saving, setSaving] = useState(false);
+  const isNew = !product.id;
+  const isVillacol = form.marca === "Villacol";
+  const isRejunte = isVillacol && form.categoriaComplementar === "Rejunte";
+  const isArgamassa = isVillacol && form.categoriaComplementar === "Argamassa";
 
   function field(key: keyof Product) {
     return {
@@ -2780,21 +2866,58 @@ function ProductEditModal({ product, onSave, onClose }: {
     };
   }
 
+  function handleMarcaChange(marca: string) {
+    setForm((f) => ({
+      ...f,
+      marca,
+      categoriaComplementar: marca === "Villacol" ? f.categoriaComplementar || "Argamassa" : "",
+      linha: marca === "Villacol" ? f.categoriaComplementar || "Argamassa" : f.linha,
+      m2PorCaixa: marca === "Villacol" && !f.m2PorCaixa ? 1 : f.m2PorCaixa,
+      pecasPorCaixa: marca === "Villacol" && !f.pecasPorCaixa ? 1 : f.pecasPorCaixa,
+    }));
+  }
+
+  function handleCategoriaComplementarChange(categoria: string) {
+    setForm((f) => ({
+      ...f,
+      categoriaComplementar: categoria,
+      linha: categoria,
+      cor: categoria === "Argamassa" ? "" : f.cor,
+      tipoRejunte: categoria === "Rejunte" ? f.tipoRejunte : "",
+      tipoEmbalagem: categoria === "Argamassa" ? f.tipoEmbalagem : "",
+    }));
+  }
+
   async function handleSave() {
+    if (!form.referencia.trim()) { toast.error("Informe a referência do produto."); return; }
+    if (!form.linha.trim()) { toast.error("Informe o nome do produto."); return; }
     setSaving(true);
     try {
-      const normalizedProduct = {
+      const normalizedProduct: Product = {
         ...form,
+        marca: form.marca || "Villagres",
+        categoriaComplementar: form.marca === "Villacol" ? form.categoriaComplementar || "Argamassa" : "",
+        tipoRejunte: form.marca === "Villacol" && form.categoriaComplementar === "Rejunte" ? form.tipoRejunte : "",
+        tipoEmbalagem: form.marca === "Villacol" && form.categoriaComplementar === "Argamassa" ? form.tipoEmbalagem : "",
         preco1: form.preco1 != null && form.preco1 !== "" ? parseFloat(String(form.preco1).replace(",", ".")) : null,
         preco2: form.preco2 != null && form.preco2 !== "" ? parseFloat(String(form.preco2).replace(",", ".")) : null,
         preco3: form.preco3 != null && form.preco3 !== "" ? parseFloat(String(form.preco3).replace(",", ".")) : null,
         preco4: form.preco4 != null && form.preco4 !== "" ? parseFloat(String(form.preco4).replace(",", ".")) : null,
-        m2PorCaixa: parseFloat(String(form.m2PorCaixa).replace(",", ".")) || 0,
-        pecasPorCaixa: parseInt(String(form.pecasPorCaixa)) || 0,
+        m2PorCaixa: parseFloat(String(form.m2PorCaixa).replace(",", ".")) || (form.marca === "Villacol" ? 1 : 0),
+        pecasPorCaixa: parseInt(String(form.pecasPorCaixa)) || (form.marca === "Villacol" ? 1 : 0),
+        pesoBrutoCx: parseFloat(String(form.pesoBrutoCx).replace(",", ".")) || 0,
+        pesoBrutoM2: parseFloat(String(form.pesoBrutoM2).replace(",", ".")) || 0,
+        espessuraMm: parseFloat(String(form.espessuraMm).replace(",", ".")) || 0,
       };
-      await updateProduct(form.id, normalizedProduct);
-      onSave(normalizedProduct);
-      toast.success("Produto atualizado!");
+      if (isNew) {
+        const created = await createProduct(normalizedProduct);
+        onSave(created);
+        toast.success("Produto criado!");
+      } else {
+        await updateProduct(form.id, normalizedProduct);
+        onSave(normalizedProduct);
+        toast.success("Produto atualizado!");
+      }
     } catch (e: any) { toast.error("Erro: " + e.message); }
     finally { setSaving(false); }
   }
@@ -2802,38 +2925,101 @@ function ProductEditModal({ product, onSave, onClose }: {
   const inputCls = "w-full border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25";
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-card rounded-2xl shadow-2xl w-full max-w-lg border border-border flex flex-col max-h-[90vh]">
+      <div className="bg-card rounded-2xl shadow-2xl w-full max-w-2xl border border-border flex flex-col max-h-[90vh]">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <div>
-            <h3 className="font-semibold">Editar Produto</h3>
-            <p className="text-xs text-muted-foreground font-mono">Ref: {product.referencia}</p>
+            <h3 className="font-semibold">{isNew ? "Novo Produto" : "Editar Produto"}</h3>
+            <p className="text-xs text-muted-foreground font-mono">{isNew ? "Cadastre Villagres ou Villacol" : `Ref: ${product.referencia}`}</p>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X size={18} /></button>
         </div>
 
         <div className="overflow-y-auto flex-1 px-6 py-4 space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            {([["Linha", "linha"], ["Coleção", "colecao"], ["Cor", "cor"], ["Formato", "formato"], ["Superfície", "superficie"], ["Referência", "referencia"]] as const).map(([label, key]) => (
-              <div key={key}>
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">{label}</label>
-                <input {...field(key)} className={inputCls} />
-              </div>
-            ))}
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Marca</label>
+              <select value={form.marca} onChange={(e) => handleMarcaChange(e.target.value)} className={inputCls}>
+                <option value="Villagres">Villagres</option>
+                <option value="Villacol">Villacol</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Referência</label>
+              <input {...field("referencia")} className={inputCls} />
+            </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">m²/caixa</label>
-              <input {...field("m2PorCaixa")} className={inputCls} />
+          {isVillacol ? (
+            <div className="space-y-3 rounded-xl border border-border p-4 bg-muted/20">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Produto Villacol</label>
+                  <select value={form.categoriaComplementar || "Argamassa"} onChange={(e) => handleCategoriaComplementarChange(e.target.value)} className={inputCls}>
+                    <option value="Argamassa">Argamassa</option>
+                    <option value="Rejunte">Rejunte</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Nome comercial</label>
+                  <input {...field("linha")} placeholder={form.categoriaComplementar || "Argamassa"} className={inputCls} />
+                </div>
+              </div>
+              {isRejunte && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Cor do rejunte</label>
+                    <input {...field("cor")} placeholder="Ex.: Branco, Cinza" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Tipo de rejunte</label>
+                    <input {...field("tipoRejunte")} placeholder="Ex.: Acrílico, Cimentício" className={inputCls} />
+                  </div>
+                </div>
+              )}
+              {isArgamassa && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Tipo de embalagem</label>
+                    <input {...field("tipoEmbalagem")} placeholder="Ex.: Saco 20 kg" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Peso da embalagem (kg)</label>
+                    <input {...field("pesoBrutoCx")} inputMode="decimal" placeholder="20" className={inputCls} />
+                  </div>
+                </div>
+              )}
             </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">Peças/caixa</label>
-              <input {...field("pecasPorCaixa")} className={inputCls} />
-            </div>
-          </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                {([ ["Linha", "linha"], ["Coleção", "colecao"], ["Cor", "cor"], ["Formato", "formato"], ["Superfície", "superficie"] ] as const).map(([label, key]) => (
+                  <div key={key}>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">{label}</label>
+                    <input {...field(key)} className={inputCls} />
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">m²/caixa</label>
+                  <input {...field("m2PorCaixa")} inputMode="decimal" className={inputCls} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Peças/caixa</label>
+                  <input {...field("pecasPorCaixa")} inputMode="numeric" className={inputCls} />
+                </div>
+              </div>
+            </>
+          )}
+
+          {isVillacol && (
+            <p className="text-xs text-muted-foreground rounded-xl bg-blue-50 border border-blue-100 px-3 py-2">
+              Produtos Villacol entram como itens complementares. Use m²/caixa = 1 para controlar por unidade/embalagem no orçamento.
+            </p>
+          )}
 
           <div>
-            <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Tabelas de Preço (R$/m²)</p>
+            <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Tabelas de Preço {isVillacol ? "(R$/unidade ou embalagem)" : "(R$/m²)"}</p>
             <div className="grid grid-cols-4 gap-2">
               {([1, 2, 3, 4] as const).map((t) => (
                 <div key={t}>
@@ -2842,6 +3028,7 @@ function ProductEditModal({ product, onSave, onClose }: {
                     value={String(form[`preco${t}`] ?? "")}
                     onChange={(e) => setForm((f) => ({ ...f, [`preco${t}`]: e.target.value === "" ? null : e.target.value }))}
                     placeholder="—"
+                    inputMode="decimal"
                     className={inputCls + " text-center font-mono"}
                   />
                 </div>
@@ -2871,7 +3058,7 @@ function ProductEditModal({ product, onSave, onClose }: {
           <button onClick={onClose} className="flex-1 border border-border rounded-xl py-2.5 text-sm hover:bg-muted transition-colors">Cancelar</button>
           <button onClick={handleSave} disabled={saving}
             className="flex-1 bg-primary text-primary-foreground rounded-xl py-2.5 text-sm font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2">
-            {saving ? <Spinner size={14} /> : <Check size={14} />} Salvar Alterações
+            {saving ? <Spinner size={14} /> : <Check size={14} />} {isNew ? "Criar Produto" : "Salvar Alterações"}
           </button>
         </div>
       </div>
@@ -2886,6 +3073,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
   const [q, setQ] = useState("");
   const [superficie, setSuperficie] = useState("");
   const [localUso, setLocalUso] = useState("");
+  const [marcaFiltro, setMarcaFiltro] = useState("");
   const [tabela, setTabela] = useState<1 | 2 | 3 | 4>(1);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [importing, setImporting] = useState(false);
@@ -2910,9 +3098,10 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
 
   const filtered = products.filter((p) => {
     const txt = q.toLowerCase();
-    const matchQ = !q || [p.linha, p.colecao, p.cor, p.formato, p.referencia, p.superficie]
+    const matchQ = !q || [p.linha, p.colecao, p.cor, p.formato, p.referencia, p.superficie, p.marca, p.categoriaComplementar, p.tipoRejunte, p.tipoEmbalagem]
       .some((f) => f?.toLowerCase().includes(txt));
     return matchQ &&
+      (!marcaFiltro || p.marca === marcaFiltro) &&
       (!superficie || p.superficie === superficie) &&
       (!localUso || String(p.localUso) === localUso) &&
       (showDescontinuados || !p.descontinuado);
@@ -2923,7 +3112,9 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
   const pk = priceKey(tabela);
 
   function handleProductSaved(updated: Product) {
-    setProducts((ps) => ps.map((p) => p.id === updated.id ? updated : p));
+    setProducts((ps) => ps.some((p) => p.id === updated.id)
+      ? ps.map((p) => p.id === updated.id ? updated : p)
+      : [updated, ...ps]);
     setEditingProduct(null);
   }
 
@@ -2981,9 +3172,15 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
         <div className="relative flex-1 min-w-48">
           <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <input type="text" value={q} onChange={(e) => setQ(e.target.value)}
-            placeholder="Coleção, cor, formato, referência..."
+            placeholder="Marca, coleção, cor, formato, referência..."
             className="w-full border border-border rounded-xl pl-9 pr-4 py-2.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/25" />
         </div>
+        <select value={marcaFiltro} onChange={(e) => setMarcaFiltro(e.target.value)}
+          className="border border-border rounded-xl px-3 py-2.5 text-xs bg-card focus:outline-none">
+          <option value="">Todas as marcas</option>
+          <option value="Villagres">Villagres</option>
+          <option value="Villacol">Villacol</option>
+        </select>
         <select value={superficie} onChange={(e) => setSuperficie(e.target.value)}
 
           className="border border-border rounded-xl px-3 py-2.5 text-xs bg-card focus:outline-none">
@@ -3006,6 +3203,11 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
             </button>
           ))}
         </div>
+
+        <button type="button" onClick={() => setEditingProduct(createEmptyProduct("Villagres"))}
+          className="flex items-center gap-1.5 bg-primary text-primary-foreground rounded-xl px-3 py-2 text-xs hover:opacity-90 transition-opacity">
+          <Plus size={12} /> Novo Produto
+        </button>
 
         {/* Toggle descontinuados */}
         <button onClick={() => setShowDescontinuados((v) => !v)}
@@ -3126,12 +3328,15 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
                     <td className="px-5 py-2.5">
                       <div className="flex items-center gap-2">
                         <p className={`font-medium text-sm leading-tight ${p.descontinuado ? "line-through text-muted-foreground" : ""}`}>{p.linha}</p>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground border border-border font-medium shrink-0">{p.marca || "Villagres"}</span>
                         {p.descontinuado && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200 font-medium shrink-0">Descontinuado</span>
                         )}
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        {p.cor && p.cor !== "única" && p.cor !== "-" ? `${p.cor} · ` : ""}{p.colecao}
+                        {p.marca === "Villacol"
+                          ? [p.categoriaComplementar, p.tipoRejunte || p.tipoEmbalagem, p.cor].filter(Boolean).join(" · ")
+                          : `${p.cor && p.cor !== "única" && p.cor !== "-" ? `${p.cor} · ` : ""}${p.colecao}`}
                       </p>
                       <p className="text-xs text-muted-foreground font-mono">Ref: {p.referencia}</p>
                     </td>

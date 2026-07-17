@@ -1118,6 +1118,7 @@ function ProductModal({
 }) {
   const [q, setQ] = useState("");
   const [marcaFiltro, setMarcaFiltro] = useState("");
+  const [categoriaFiltro, setCategoriaFiltro] = useState("");
   const [superficie, setSuperficie] = useState("");
   const [formato, setFormato] = useState("");
   const [localUso, setLocalUso] = useState("");
@@ -1135,6 +1136,7 @@ function ProductModal({
       .some((f) => f?.toLowerCase().includes(txt));
     return matchQ &&
       (!marcaFiltro || p.marca === marcaFiltro) &&
+      (!categoriaFiltro || p.categoriaComplementar === categoriaFiltro) &&
       (!superficie || p.superficie === superficie) &&
       (!formato || p.formato === formato) &&
       (!localUso || String(p.localUso) === localUso);
@@ -1256,12 +1258,18 @@ function ProductModal({
               </button>
             ))}
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
             <select value={marcaFiltro} onChange={(e) => setMarcaFiltro(e.target.value)}
               className="border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
               <option value="">Todas as marcas</option>
               <option value="Villagres">Villagres</option>
               <option value="Villacol">Villacol</option>
+            </select>
+            <select value={categoriaFiltro} onChange={(e) => setCategoriaFiltro(e.target.value)}
+              className="border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
+              <option value="">Todos os complementares</option>
+              <option value="Argamassa">Argamassa</option>
+              <option value="Rejunte">Rejunte</option>
             </select>
             <select value={superficie} onChange={(e) => setSuperficie(e.target.value)}
               className="border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
@@ -1286,7 +1294,7 @@ function ProductModal({
           {results.length === 0 ? (
             <div className="py-16 text-center text-muted-foreground text-sm">
               <Package size={32} className="mx-auto mb-2 opacity-20" />
-              {q || marcaFiltro || superficie || formato || localUso ? "Nenhum produto encontrado" : "Digite para buscar"}
+              {q || marcaFiltro || categoriaFiltro || superficie || formato || localUso ? "Nenhum produto encontrado" : "Digite para buscar"}
             </div>
           ) : (
             <div className="divide-y divide-border">
@@ -3072,12 +3080,13 @@ function ProductEditModal({ product, onSave, onClose }: {
 
 // ── All Products List ─────────────────────────────────────────────
 
-function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingSettingsChange }: { allProducts: Product[]; pricingSettings: PricingSettings; onPricingSettingsChange: (settings: PricingSettings) => void }) {
+function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingSettingsChange, onProductsChange }: { allProducts: Product[]; pricingSettings: PricingSettings; onPricingSettingsChange: (settings: PricingSettings) => void; onProductsChange: (products: Product[]) => void }) {
   const [products, setProducts] = useState<Product[]>(initProducts);
   const [q, setQ] = useState("");
   const [superficie, setSuperficie] = useState("");
   const [localUso, setLocalUso] = useState("");
   const [marcaFiltro, setMarcaFiltro] = useState("");
+  const [categoriaFiltro, setCategoriaFiltro] = useState("");
   const [tabela, setTabela] = useState<1 | 2 | 3 | 4>(1);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [importing, setImporting] = useState(false);
@@ -3106,6 +3115,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
       .some((f) => f?.toLowerCase().includes(txt));
     return matchQ &&
       (!marcaFiltro || p.marca === marcaFiltro) &&
+      (!categoriaFiltro || p.categoriaComplementar === categoriaFiltro) &&
       (!superficie || p.superficie === superficie) &&
       (!localUso || String(p.localUso) === localUso) &&
       (showDescontinuados || !p.descontinuado);
@@ -3116,9 +3126,13 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
   const pk = priceKey(tabela);
 
   function handleProductSaved(updated: Product) {
-    setProducts((ps) => ps.some((p) => p.id === updated.id)
-      ? ps.map((p) => p.id === updated.id ? updated : p)
-      : [updated, ...ps]);
+    setProducts((ps) => {
+      const next = ps.some((p) => p.id === updated.id)
+        ? ps.map((p) => p.id === updated.id ? updated : p)
+        : [updated, ...ps];
+      onProductsChange(next);
+      return next;
+    });
     setEditingProduct(null);
   }
 
@@ -3163,6 +3177,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
       await seedProducts(parsed);
       const refreshed = await fetchAllProducts();
       setProducts(refreshed);
+      onProductsChange(refreshed);
       setImportResult({ ok: parsed.length, total: parsed.length });
       toast.success(`${parsed.length} produtos importados com sucesso!`);
     } catch (e: any) { toast.error("Erro ao importar: " + e.message); }
@@ -3184,6 +3199,12 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
           <option value="">Todas as marcas</option>
           <option value="Villagres">Villagres</option>
           <option value="Villacol">Villacol</option>
+        </select>
+        <select value={categoriaFiltro} onChange={(e) => setCategoriaFiltro(e.target.value)}
+          className="border border-border rounded-xl px-3 py-2.5 text-xs bg-card focus:outline-none">
+          <option value="">Todos os complementares</option>
+          <option value="Argamassa">Argamassa</option>
+          <option value="Rejunte">Rejunte</option>
         </select>
         <select value={superficie} onChange={(e) => setSuperficie(e.target.value)}
 
@@ -3806,7 +3827,7 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
         )}
 
         {tab === "clientes" && <AllCustomersTab onSelect={onSelect} />}
-        {tab === "produtos" && <AllProductsTab allProducts={allProducts} pricingSettings={pricingSettings} onPricingSettingsChange={onPricingSettingsChange} />}
+        {tab === "produtos" && <AllProductsTab allProducts={allProducts} pricingSettings={pricingSettings} onPricingSettingsChange={onPricingSettingsChange} onProductsChange={setAllProducts} />}
       </div>
     </div>
   );

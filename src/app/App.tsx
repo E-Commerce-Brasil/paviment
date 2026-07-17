@@ -49,6 +49,7 @@ interface PricingSettings {
   id?: string;
   impostoPercentual: number;
   taxaCartaoPercentual: number;
+  fretePor100Kg: number;
 }
 
 interface Customer {
@@ -230,6 +231,7 @@ CREATE TABLE IF NOT EXISTS pricing_settings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   imposto_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
   taxa_cartao_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
+  frete_por_100kg NUMERIC(10,2) NOT NULL DEFAULT 4,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ALTER TABLE pricing_settings DISABLE ROW LEVEL SECURITY;
@@ -468,12 +470,13 @@ async function loadPricingSettings(): Promise<PricingSettings> {
       id: data.id,
       impostoPercentual: parseDecimalInput(data.imposto_percentual),
       taxaCartaoPercentual: parseDecimalInput(data.taxa_cartao_percentual),
+      fretePor100Kg: data.frete_por_100kg == null ? 4 : parseDecimalInput(data.frete_por_100kg),
     };
   }
 
   const { data: created, error: createError } = await supabase
     .from("pricing_settings")
-    .insert({ imposto_percentual: 0, taxa_cartao_percentual: 0 })
+    .insert({ imposto_percentual: 0, taxa_cartao_percentual: 0, frete_por_100kg: 4 })
     .select()
     .single();
   if (createError) throw createError;
@@ -482,6 +485,7 @@ async function loadPricingSettings(): Promise<PricingSettings> {
     id: created.id,
     impostoPercentual: parseDecimalInput(created.imposto_percentual),
     taxaCartaoPercentual: parseDecimalInput(created.taxa_cartao_percentual),
+    fretePor100Kg: created.frete_por_100kg == null ? 4 : parseDecimalInput(created.frete_por_100kg),
   };
 }
 
@@ -489,6 +493,7 @@ async function savePricingSettings(settings: PricingSettings): Promise<PricingSe
   const payload = {
     imposto_percentual: parseDecimalInput(settings.impostoPercentual),
     taxa_cartao_percentual: parseDecimalInput(settings.taxaCartaoPercentual),
+    frete_por_100kg: parseDecimalInput(settings.fretePor100Kg) || 0,
     updated_at: new Date().toISOString(),
   };
 
@@ -504,6 +509,7 @@ async function savePricingSettings(settings: PricingSettings): Promise<PricingSe
       id: data.id,
       impostoPercentual: parseDecimalInput(data.imposto_percentual),
       taxaCartaoPercentual: parseDecimalInput(data.taxa_cartao_percentual),
+      fretePor100Kg: data.frete_por_100kg == null ? 4 : parseDecimalInput(data.frete_por_100kg),
     };
   }
 
@@ -517,6 +523,7 @@ async function savePricingSettings(settings: PricingSettings): Promise<PricingSe
     id: data.id,
     impostoPercentual: parseDecimalInput(data.imposto_percentual),
     taxaCartaoPercentual: parseDecimalInput(data.taxa_cartao_percentual),
+    fretePor100Kg: data.frete_por_100kg == null ? 4 : parseDecimalInput(data.frete_por_100kg),
   };
 }
 
@@ -782,8 +789,10 @@ async function runMigrations(): Promise<void> {
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         imposto_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
         taxa_cartao_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
+        frete_por_100kg NUMERIC(10,2) NOT NULL DEFAULT 4,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      ALTER TABLE pricing_settings ADD COLUMN IF NOT EXISTS frete_por_100kg NUMERIC(10,2) NOT NULL DEFAULT 4;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS logradouro TEXT;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS numero_end TEXT;
@@ -943,8 +952,8 @@ function calculateBudgetWeightKg(items: BudgetItem[]): number {
   return round2(items.reduce((sum, item) => sum + calculateItemWeightKg(item), 0));
 }
 
-function calculateFreightByWeight(items: BudgetItem[]): number {
-  return round2((calculateBudgetWeightKg(items) / 100) * 4);
+function calculateFreightByWeight(items: BudgetItem[], fretePor100Kg: number | string | null | undefined): number {
+  return round2((calculateBudgetWeightKg(items) / 100) * parseDecimalInput(fretePor100Kg));
 }
 
 function fmtDate(iso: string): string {
@@ -1088,7 +1097,7 @@ function ProductModal({
   const [selectedTabela, setSelectedTabela] = useState<1 | 2 | 3 | 4>(tabelaPreco);
   const pk = priceKey(selectedTabela);
   const safeProducts = Array.isArray(allProducts) ? allProducts : [];
-  const effectivePricingSettings = pricingSettings || { impostoPercentual: 0, taxaCartaoPercentual: 0 };
+  const effectivePricingSettings = pricingSettings || { impostoPercentual: 0, taxaCartaoPercentual: 0, fretePor100Kg: 4 };
 
   const results = safeProducts.filter((p) => {
     if (p.descontinuado) return false;
@@ -1327,7 +1336,7 @@ function BudgetEditor({
 
   const isLocked = budget.status === "enviado_fabrica" || budget.status === "fechado";
   const totalWeightKg = calculateBudgetWeightKg(budget.items);
-  const suggestedFreightByWeight = calculateFreightByWeight(budget.items);
+  const suggestedFreightByWeight = calculateFreightByWeight(budget.items, pricingSettings.fretePor100Kg);
 
   async function handleDuplicate() {
     const tecnico = dupTecnico === "__custom__" ? dupTecnicoCustom.trim() : dupTecnico;
@@ -1401,7 +1410,8 @@ function BudgetEditor({
       const newItem = await addBudgetItem(budget.id, {
         productId: product.id, product, areaM2, caixas, precoM2, subtotal: round2(areaM2 * precoM2),
       });
-      const b = updateLocal({ items: [...budget.items, newItem] });
+      const nextItems = [...budget.items, newItem];
+      const b = updateLocal({ items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
       await persistTotals(b);
       markDirty();
       setShowModal(false);
@@ -1414,7 +1424,8 @@ function BudgetEditor({
     setRemovingId(itemId);
     try {
       await deleteBudgetItem(itemId);
-      const b = updateLocal({ items: budget.items.filter((i) => i.id !== itemId) });
+      const nextItems = budget.items.filter((i) => i.id !== itemId);
+      const b = updateLocal({ items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
       await persistTotals(b);
       markDirty();
     } catch (e: any) { toast.error("Erro: " + e.message); }
@@ -1457,7 +1468,8 @@ function BudgetEditor({
     try {
       await updateBudgetItem(itemId, newArea, caixas, newPrecoM2);
       const updatedItem = { ...item, areaM2: newArea, caixas, precoM2: newPrecoM2, subtotal: round2(newArea * newPrecoM2) };
-      const b = updateLocal({ items: budget.items.map((i) => i.id === itemId ? updatedItem : i) });
+      const nextItems = budget.items.map((i) => i.id === itemId ? updatedItem : i);
+      const b = updateLocal({ items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
       await persistTotals(b);
       markDirty();
       setEditingItemId(null);
@@ -1700,7 +1712,7 @@ function BudgetEditor({
   <table class="totals-box">
     <tr><td>Forma de Pagamento</td><td>${budget.formaPagamento === "cartao" ? `Cartão em ${budget.parcelasCartao}x` : budget.formaPagamento === "avista_pix" ? "À vista - PIX" : "À vista"}</td></tr>
     <tr><td>Peso total da carga</td><td>${fmtKg(calculateBudgetWeightKg(budget.items))}</td></tr>
-    <tr><td>Cálculo do frete</td><td>R$ 4,00 / 100 kg</td></tr>
+    <tr><td>Cálculo do frete</td><td>${fmtBRL(pricingSettings.fretePor100Kg)} / 100 kg</td></tr>
     ${budget.frete > 0 ? `<tr><td>Frete</td><td>${fmtBRLStr(budget.frete)}</td></tr>` : ""}
     ${calculatePaymentDiscount(budget.subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual) > 0 ? `<tr><td>Desconto PIX (${budget.descontoPixPercentual}%)</td><td>- ${fmtBRLStr(calculatePaymentDiscount(budget.subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual))}</td></tr>` : ""}
     <tr><td>TOTAL</td><td>${fmtBRLStr(budget.totalFinal)}</td></tr>
@@ -1934,7 +1946,7 @@ ${budget.observacoes ? `
                     <input type="text" value={frete} onChange={(e) => setFrete(e.target.value)} placeholder="0,00"
                       className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono" />
                     <p className="mt-1 text-[11px] text-muted-foreground">
-                      Sugestão: {fmtKg(totalWeightKg)} × R$ 4,00 / 100 kg = {fmtBRL(suggestedFreightByWeight)}.
+                      Sugestão: {fmtKg(totalWeightKg)} × {fmtBRL(pricingSettings.fretePor100Kg)} / 100 kg = {fmtBRL(suggestedFreightByWeight)}.
                     </p>
                   </div>
                 </div>
@@ -2123,7 +2135,7 @@ ${budget.observacoes ? `
               </div>
               <div className="flex justify-between text-xs">
                 <span className="text-muted-foreground">Cálculo do frete</span>
-                <span className="font-mono text-muted-foreground">R$ 4,00 / 100 kg</span>
+                <span className="font-mono text-muted-foreground">{fmtBRL(pricingSettings.fretePor100Kg)} / 100 kg</span>
               </div>
               {budget.frete > 0 && (
                 <div className="flex justify-between text-sm">
@@ -2791,6 +2803,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
   const [pricingForm, setPricingForm] = useState({
     imposto: String(pricingSettings.impostoPercentual || ""),
     taxa: String(pricingSettings.taxaCartaoPercentual || ""),
+    fretePor100Kg: String(pricingSettings.fretePor100Kg ?? 4),
   });
   const [savingPricing, setSavingPricing] = useState(false);
 
@@ -2798,8 +2811,9 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
     setPricingForm({
       imposto: String(pricingSettings.impostoPercentual || ""),
       taxa: String(pricingSettings.taxaCartaoPercentual || ""),
+      fretePor100Kg: String(pricingSettings.fretePor100Kg ?? 4),
     });
-  }, [pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual]);
+  }, [pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual, pricingSettings.fretePor100Kg]);
 
   const superficies = [...new Set(products.map((p) => p.superficie).filter(Boolean))].sort();
 
@@ -2822,7 +2836,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
     setEditingProduct(null);
   }
 
-  function handlePricingInput(key: "imposto" | "taxa", value: string) {
+  function handlePricingInput(key: "imposto" | "taxa" | "fretePor100Kg", value: string) {
     if (value.trim() === "") {
       setPricingForm((f) => ({ ...f, [key]: "" }));
       return;
@@ -2839,6 +2853,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
         ...pricingSettings,
         impostoPercentual: parseDecimalInput(pricingForm.imposto),
         taxaCartaoPercentual: parseDecimalInput(pricingForm.taxa),
+        fretePor100Kg: parseDecimalInput(pricingForm.fretePor100Kg) || 0,
       });
       onPricingSettingsChange(saved);
       toast.success("Composição interna do preço salva!");
@@ -2942,9 +2957,9 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
       <div className="bg-card border border-border rounded-2xl p-5 shadow-sm space-y-4">
         <div>
           <h3 className="font-semibold text-sm">Composição interna do preço</h3>
-          <p className="text-xs text-muted-foreground mt-1">Esses percentuais serão incorporados ao preço dos produtos no orçamento e não serão exibidos ao cliente.</p>
+          <p className="text-xs text-muted-foreground mt-1">Esses percentuais e o valor de frete por peso serão usados nos orçamentos e não serão exibidos como composição interna ao cliente.</p>
         </div>
-        <div className="grid sm:grid-cols-[1fr_1fr_auto] gap-3 items-end">
+        <div className="grid lg:grid-cols-[1fr_1fr_1.2fr_auto] sm:grid-cols-2 gap-3 items-end">
           <div>
             <label className="text-xs font-medium text-muted-foreground mb-1 block">Impostos (%)</label>
             <input
@@ -2965,6 +2980,16 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
               className="w-full border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono"
             />
           </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">Valor do Frete a cada 100 Kilos</label>
+            <input
+              value={pricingForm.fretePor100Kg}
+              onChange={(e) => handlePricingInput("fretePor100Kg", e.target.value)}
+              inputMode="decimal"
+              placeholder="4,00"
+              className="w-full border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono"
+            />
+          </div>
           <button
             onClick={handleSavePricingSettings}
             disabled={savingPricing}
@@ -2973,9 +2998,15 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
             {savingPricing ? <Spinner size={14} /> : <Save size={14} />} Salvar composição
           </button>
         </div>
-        <div className="rounded-xl bg-muted/40 border border-border px-4 py-3 text-sm flex justify-between gap-3">
-          <span className="text-muted-foreground">Exemplo com preço-base de R$ 1.000,00</span>
-          <span className="font-semibold font-mono text-primary">Preço final: {fmtBRL(calculateFinalPrice(1000, pricingForm.imposto, pricingForm.taxa))}</span>
+        <div className="rounded-xl bg-muted/40 border border-border px-4 py-3 text-sm grid md:grid-cols-2 gap-2">
+          <div className="flex justify-between gap-3">
+            <span className="text-muted-foreground">Exemplo com preço-base de R$ 1.000,00</span>
+            <span className="font-semibold font-mono text-primary">Preço final: {fmtBRL(calculateFinalPrice(1000, pricingForm.imposto, pricingForm.taxa))}</span>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-muted-foreground">Exemplo de frete para 100 kg</span>
+            <span className="font-semibold font-mono text-primary">{fmtBRL(parseDecimalInput(pricingForm.fretePor100Kg))}</span>
+          </div>
         </div>
       </div>
 
@@ -3494,7 +3525,7 @@ export default function App() {
   const [initMsg, setInitMsg] = useState("Verificando banco de dados...");
   const [initError, setInitError] = useState<string | null>(null);
   const [allProducts, setAllProducts] = useState<Product[]>([]);
-  const [pricingSettings, setPricingSettings] = useState<PricingSettings>({ impostoPercentual: 0, taxaCartaoPercentual: 0 });
+  const [pricingSettings, setPricingSettings] = useState<PricingSettings>({ impostoPercentual: 0, taxaCartaoPercentual: 0, fretePor100Kg: 4 });
 
   async function init() {
     setAppState("loading");

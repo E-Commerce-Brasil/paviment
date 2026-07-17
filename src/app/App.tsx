@@ -93,6 +93,7 @@ interface Budget {
   formaPagamento: FormaPagamento;
   parcelasCartao: number;
   descontoPixPercentual: number;
+  descontoPixIncluiFrete: boolean;
   observacoes?: string;
   tecnico?: string;
   enderecoEntrega?: string;
@@ -185,6 +186,7 @@ function mapBudget(r: any, items: BudgetItem[] = []): Budget {
     formaPagamento: (r.forma_pagamento || "avista") as FormaPagamento,
     parcelasCartao: parseInt(r.parcelas_cartao) || 1,
     descontoPixPercentual: parseFloat(r.desconto_pix_percentual) || 0,
+    descontoPixIncluiFrete: r.desconto_pix_inclui_frete === true,
     observacoes: r.observacoes || "",
     tecnico: r.tecnico || "",
     enderecoEntrega: r.endereco_entrega || "",
@@ -258,6 +260,7 @@ CREATE TABLE IF NOT EXISTS budgets (
   forma_pagamento TEXT DEFAULT 'avista',
   parcelas_cartao INTEGER DEFAULT 1,
   desconto_pix_percentual NUMERIC(5,2) DEFAULT 0,
+  desconto_pix_inclui_frete BOOLEAN DEFAULT FALSE,
   observacoes TEXT, subtotal DECIMAL(12,2) DEFAULT 0,
   total_final DECIMAL(12,2) DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -762,7 +765,7 @@ async function getBudgetWithItems(budgetId: string): Promise<Budget> {
 async function createBudget(customerId: string, tecnico: string): Promise<Budget> {
   const { data, error } = await supabase
     .from("budgets")
-    .insert({ customer_id: customerId, status: "rascunho", tabela_preco: 1, frete: 0, percentual_imposto: 0, forma_pagamento: "avista", parcelas_cartao: 1, desconto_pix_percentual: 0, tecnico })
+    .insert({ customer_id: customerId, status: "rascunho", tabela_preco: 1, frete: 0, percentual_imposto: 0, forma_pagamento: "avista", parcelas_cartao: 1, desconto_pix_percentual: 0, desconto_pix_inclui_frete: false, tecnico })
     .select()
     .single();
   if (error) throw error;
@@ -784,6 +787,7 @@ async function runMigrations(): Promise<void> {
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS forma_pagamento TEXT DEFAULT 'avista';
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS parcelas_cartao INTEGER DEFAULT 1;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS desconto_pix_percentual NUMERIC(5,2) DEFAULT 0;
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS desconto_pix_inclui_frete BOOLEAN DEFAULT FALSE;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
       CREATE TABLE IF NOT EXISTS pricing_settings (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -806,7 +810,7 @@ async function runMigrations(): Promise<void> {
 
 async function saveBudgetFields(id: string, patch: {
   status?: string; tabela_preco?: number; frete?: number;
-  percentual_imposto?: number; forma_pagamento?: string; parcelas_cartao?: number; desconto_pix_percentual?: number; observacoes?: string;
+  percentual_imposto?: number; forma_pagamento?: string; parcelas_cartao?: number; desconto_pix_percentual?: number; desconto_pix_inclui_frete?: boolean; observacoes?: string;
   subtotal?: number; total_final?: number; endereco_entrega?: string | null;
   entrega_cep?: string | null; entrega_logradouro?: string | null; entrega_numero?: string | null;
   entrega_complemento?: string | null; entrega_bairro?: string | null; entrega_cidade?: string | null; entrega_estado?: string | null;
@@ -818,20 +822,27 @@ async function saveBudgetFields(id: string, patch: {
   if (error) throw error;
 }
 
-function calculatePaymentDiscount(subtotal: number, _frete: number, formaPagamento: FormaPagamento, descontoPixPercentual: number): number {
+function calculatePaymentDiscount(
+  subtotal: number,
+  frete: number,
+  formaPagamento: FormaPagamento,
+  descontoPixPercentual: number,
+  descontoPixIncluiFrete = false
+): number {
   if (formaPagamento !== "avista_pix") return 0;
   const percent = Math.min(parseDecimalInput(descontoPixPercentual), 3);
-  return round2(subtotal * (percent / 100));
+  const baseDesconto = subtotal + (descontoPixIncluiFrete ? frete : 0);
+  return round2(baseDesconto * (percent / 100));
 }
 
-function calculateBudgetTotal(subtotal: number, frete: number, formaPagamento: FormaPagamento, descontoPixPercentual: number): number {
-  const discount = calculatePaymentDiscount(subtotal, frete, formaPagamento, descontoPixPercentual);
+function calculateBudgetTotal(subtotal: number, frete: number, formaPagamento: FormaPagamento, descontoPixPercentual: number, descontoPixIncluiFrete = false): number {
+  const discount = calculatePaymentDiscount(subtotal, frete, formaPagamento, descontoPixPercentual, descontoPixIncluiFrete);
   return round2(subtotal + frete - discount);
 }
 
 async function recalcBudgetTotals(budget: Budget): Promise<void> {
   const subtotal = budget.items.reduce((s, i) => s + i.subtotal, 0);
-  const totalFinal = calculateBudgetTotal(subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual);
+  const totalFinal = calculateBudgetTotal(subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual, budget.descontoPixIncluiFrete);
   await saveBudgetFields(budget.id, { subtotal: round2(subtotal), total_final: round2(totalFinal) });
 }
 
@@ -896,6 +907,7 @@ async function duplicateBudget(original: Budget, tecnico: string): Promise<Budge
       forma_pagamento: original.formaPagamento,
       parcelas_cartao: original.parcelasCartao,
       desconto_pix_percentual: original.descontoPixPercentual,
+      desconto_pix_inclui_frete: original.descontoPixIncluiFrete,
       observacoes: original.observacoes,
       tecnico,
       endereco_entrega: original.enderecoEntrega || null,
@@ -1304,6 +1316,7 @@ function BudgetEditor({
   const [formaPagamento, setFormaPagamento] = useState<FormaPagamento>(initBudget.formaPagamento || "avista");
   const [parcelasCartao, setParcelasCartao] = useState(String(initBudget.parcelasCartao || 1));
   const [descontoPix, setDescontoPix] = useState(String(initBudget.descontoPixPercentual || 0));
+  const [descontoPixIncluiFrete, setDescontoPixIncluiFrete] = useState(Boolean(initBudget.descontoPixIncluiFrete));
   const [obs, setObs] = useState(initBudget.observacoes || "");
   const [editFinancials, setEditFinancials] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
@@ -1348,6 +1361,7 @@ function BudgetEditor({
     setFormaPagamento(budget.formaPagamento);
     setParcelasCartao(String(budget.parcelasCartao));
     setDescontoPix(String(budget.descontoPixPercentual));
+    setDescontoPixIncluiFrete(Boolean(budget.descontoPixIncluiFrete));
     setObs(budget.observacoes || "");
     setEditFinancials(true);
   }
@@ -1375,7 +1389,7 @@ function BudgetEditor({
   function updateLocal(patch: Partial<Budget>) {
     const updated = { ...budget, ...patch };
     const subtotal = updated.items.reduce((s, i) => s + i.subtotal, 0);
-    const totalFinal = calculateBudgetTotal(subtotal, updated.frete, updated.formaPagamento, updated.descontoPixPercentual);
+    const totalFinal = calculateBudgetTotal(subtotal, updated.frete, updated.formaPagamento, updated.descontoPixPercentual, updated.descontoPixIncluiFrete);
     const final = { ...updated, subtotal: round2(subtotal), totalFinal: round2(totalFinal) };
     if (Object.prototype.hasOwnProperty.call(patch, "frete")) {
       setFrete(formatFreightInput(final.frete));
@@ -1394,6 +1408,7 @@ function BudgetEditor({
       forma_pagamento: b.formaPagamento,
       parcelas_cartao: b.parcelasCartao,
       desconto_pix_percentual: b.descontoPixPercentual,
+      desconto_pix_inclui_frete: b.descontoPixIncluiFrete,
       observacoes: b.observacoes,
       status: b.status,
       tabela_preco: b.tabelaPreco,
@@ -1516,9 +1531,10 @@ function BudgetEditor({
     const forma = formaPagamento;
     const parcelas = forma === "cartao" ? Math.min(Math.max(parseInt(parcelasCartao) || 1, 1), 6) : 1;
     const desconto = forma === "avista_pix" ? Math.min(parseDecimalInput(descontoPix), 3) : 0;
+    const incluiFrete = forma === "avista_pix" ? descontoPixIncluiFrete : false;
     setSaving(true);
     try {
-      const b = updateLocal({ frete: fr, percentualImposto: 0, formaPagamento: forma, parcelasCartao: parcelas, descontoPixPercentual: desconto, observacoes: obs });
+      const b = updateLocal({ frete: fr, percentualImposto: 0, formaPagamento: forma, parcelasCartao: parcelas, descontoPixPercentual: desconto, descontoPixIncluiFrete: incluiFrete, observacoes: obs });
       await persistTotals(b);
       markDirty();
       setEditFinancials(false);
@@ -1731,7 +1747,7 @@ function BudgetEditor({
     <tr><td>Peso total da carga</td><td>${fmtKg(calculateBudgetWeightKg(budget.items))}</td></tr>
     <tr><td>Cálculo do frete</td><td>${fmtBRL(pricingSettings.fretePor100Kg)} / 100 kg</td></tr>
     ${budget.frete > 0 ? `<tr><td>Frete</td><td>${fmtBRLStr(budget.frete)}</td></tr>` : ""}
-    ${calculatePaymentDiscount(budget.subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual) > 0 ? `<tr><td>Desconto PIX (${budget.descontoPixPercentual}%)</td><td>- ${fmtBRLStr(calculatePaymentDiscount(budget.subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual))}</td></tr>` : ""}
+    ${calculatePaymentDiscount(budget.subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual, budget.descontoPixIncluiFrete) > 0 ? `<tr><td>Desconto PIX (${budget.descontoPixPercentual}%${budget.descontoPixIncluiFrete ? " com frete" : ""})</td><td>- ${fmtBRLStr(calculatePaymentDiscount(budget.subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual, budget.descontoPixIncluiFrete))}</td></tr>` : ""}
     <tr><td>TOTAL</td><td>${fmtBRLStr(budget.totalFinal)}</td></tr>
   </table>
 </div>
@@ -1986,11 +2002,20 @@ ${budget.observacoes ? `
                       <input type="text" value={descontoPix} onChange={(e) => handlePixDiscountChange(e.target.value)} placeholder="Até 3"
                         className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono" />
                       <p className="text-[11px] text-muted-foreground mt-1">Máximo permitido: 3%</p>
+                      <label className="mt-2 flex items-start gap-2 text-xs text-muted-foreground cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={descontoPixIncluiFrete}
+                          onChange={(e) => setDescontoPixIncluiFrete(e.target.checked)}
+                          className="mt-0.5 rounded border-border"
+                        />
+                        <span>Aplicar desconto também sobre o valor do frete</span>
+                      </label>
                     </div>
                   ) : null}
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={() => { setEditFinancials(false); setFrete(String(budget.frete)); setFormaPagamento(budget.formaPagamento); setParcelasCartao(String(budget.parcelasCartao)); setDescontoPix(String(budget.descontoPixPercentual)); setObs(budget.observacoes || ""); }}
+                  <button onClick={() => { setEditFinancials(false); setFrete(String(budget.frete)); setFormaPagamento(budget.formaPagamento); setParcelasCartao(String(budget.parcelasCartao)); setDescontoPix(String(budget.descontoPixPercentual)); setDescontoPixIncluiFrete(Boolean(budget.descontoPixIncluiFrete)); setObs(budget.observacoes || ""); }}
                     className="flex-1 border border-border rounded-xl py-2 text-xs hover:bg-muted transition-colors">Cancelar</button>
                   <button onClick={handleSaveFinancials} disabled={saving}
                     className="flex-1 bg-primary text-primary-foreground rounded-xl py-2 text-xs font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-1.5">
@@ -2011,7 +2036,7 @@ ${budget.observacoes ? `
                 {budget.formaPagamento === "avista_pix" && budget.descontoPixPercentual > 0 && (
                   <div className="flex justify-between">
                     <span className="text-muted-foreground text-xs">Desconto PIX</span>
-                    <span className="font-mono text-xs">{budget.descontoPixPercentual}%</span>
+                    <span className="font-mono text-xs">{budget.descontoPixPercentual}%{budget.descontoPixIncluiFrete ? " com frete" : ""}</span>
                   </div>
                 )}
                 {budget.observacoes
@@ -2155,10 +2180,10 @@ ${budget.observacoes ? `
                   <span className="font-mono">{fmtBRL(budget.frete)}</span>
                 </div>
               )}
-              {calculatePaymentDiscount(budget.subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual) > 0 && (
+              {calculatePaymentDiscount(budget.subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual, budget.descontoPixIncluiFrete) > 0 && (
                 <div className="flex justify-between text-sm text-green-700">
-                  <span>Desconto PIX ({budget.descontoPixPercentual}%)</span>
-                  <span className="font-mono">- {fmtBRL(calculatePaymentDiscount(budget.subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual))}</span>
+                  <span>Desconto PIX ({budget.descontoPixPercentual}%{budget.descontoPixIncluiFrete ? " com frete" : ""})</span>
+                  <span className="font-mono">- {fmtBRL(calculatePaymentDiscount(budget.subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual, budget.descontoPixIncluiFrete))}</span>
                 </div>
               )}
               <div className="border-t border-border pt-3 flex justify-between items-baseline">

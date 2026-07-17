@@ -1338,6 +1338,20 @@ function BudgetEditor({
   const totalWeightKg = calculateBudgetWeightKg(budget.items);
   const suggestedFreightByWeight = calculateFreightByWeight(budget.items, pricingSettings.fretePor100Kg);
 
+  function formatFreightInput(value: number): string {
+    return round2(value).toFixed(2).replace(".", ",");
+  }
+
+  function openFinancialsEditor() {
+    const freightValue = budget.frete > 0 ? budget.frete : suggestedFreightByWeight;
+    setFrete(formatFreightInput(freightValue));
+    setFormaPagamento(budget.formaPagamento);
+    setParcelasCartao(String(budget.parcelasCartao));
+    setDescontoPix(String(budget.descontoPixPercentual));
+    setObs(budget.observacoes || "");
+    setEditFinancials(true);
+  }
+
   async function handleDuplicate() {
     const tecnico = dupTecnico === "__custom__" ? dupTecnicoCustom.trim() : dupTecnico;
     if (!tecnico) { toast.error("Selecione o técnico responsável"); return; }
@@ -1363,6 +1377,9 @@ function BudgetEditor({
     const subtotal = updated.items.reduce((s, i) => s + i.subtotal, 0);
     const totalFinal = calculateBudgetTotal(subtotal, updated.frete, updated.formaPagamento, updated.descontoPixPercentual);
     const final = { ...updated, subtotal: round2(subtotal), totalFinal: round2(totalFinal) };
+    if (Object.prototype.hasOwnProperty.call(patch, "frete")) {
+      setFrete(formatFreightInput(final.frete));
+    }
     setBudget(final);
     onBudgetChange(final);
     return final;
@@ -1918,7 +1935,7 @@ ${budget.observacoes ? `
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold text-sm">Condições do Orçamento</h3>
               {!editFinancials && !isLocked && (
-                <button onClick={() => setEditFinancials(true)}
+                <button onClick={openFinancialsEditor}
                   className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors">
                   <Pencil size={12} /> Editar
                 </button>
@@ -1938,7 +1955,7 @@ ${budget.observacoes ? `
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-medium text-muted-foreground">Frete (R$)</label>
                       <button type="button"
-                        onClick={() => setFrete(suggestedFreightByWeight.toFixed(2).replace(".", ","))}
+                        onClick={() => setFrete(formatFreightInput(suggestedFreightByWeight))}
                         className="text-xs text-primary hover:underline">
                         Peso = {fmtBRL(suggestedFreightByWeight)}
                       </button>

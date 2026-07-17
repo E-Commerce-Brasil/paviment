@@ -2965,7 +2965,7 @@ function ProductEditModal({ product, onSave, onClose }: {
                 </div>
               </div>
               {isRejunte && (
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-3">
                   <div>
                     <label className="text-xs font-medium text-muted-foreground mb-1 block">Cor do rejunte</label>
                     <input {...field("cor")} placeholder="Ex.: Branco, Cinza" className={inputCls} />
@@ -2973,6 +2973,10 @@ function ProductEditModal({ product, onSave, onClose }: {
                   <div>
                     <label className="text-xs font-medium text-muted-foreground mb-1 block">Tipo de rejunte</label>
                     <input {...field("tipoRejunte")} placeholder="Ex.: Acrílico, Cimentício" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Peso da embalagem (kg)</label>
+                    <input {...field("pesoBrutoCx")} inputMode="decimal" placeholder="5" className={inputCls} />
                   </div>
                 </div>
               )}

@@ -1333,7 +1333,7 @@ function BudgetEditor({
   // Delivery address
   const customerAddr = buildFullAddress(customer);
   const hasCustomerAddress = Boolean(customerAddr);
-  const initialDelivery = {
+  const savedDelivery = {
     cep: initBudget.entregaCep || "",
     logradouro: initBudget.entregaLogradouro || "",
     numero: initBudget.entregaNumero || "",
@@ -1342,10 +1342,21 @@ function BudgetEditor({
     cidade: initBudget.entregaCidade || "",
     estado: initBudget.entregaEstado || "",
   };
-  const initialDeliveryAddress = buildFullAddress(initialDelivery);
-  const [deliveryMode, setDeliveryMode] = useState<"customer" | "different" | "">(initialDeliveryAddress ? "different" : "");
+  const savedDeliveryAddress = buildFullAddress(savedDelivery);
+  const customerDelivery = {
+    cep: formatCEP(customer.cep || ""),
+    logradouro: customer.logradouro || "",
+    numero: customer.numero || "",
+    complemento: customer.complemento || "",
+    bairro: customer.bairro || "",
+    cidade: customer.cidade || "",
+    estado: customer.estado || "",
+  };
+  const initialDelivery = savedDeliveryAddress ? savedDelivery : hasCustomerAddress ? customerDelivery : savedDelivery;
+  const [deliveryMode, setDeliveryMode] = useState<"customer" | "different" | "">(savedDeliveryAddress ? "different" : hasCustomerAddress ? "customer" : "");
   const [entrega, setEntrega] = useState(initialDelivery);
   const [consultandoEntregaCep, setConsultandoEntregaCep] = useState(false);
+  const [showDeliveryModal, setShowDeliveryModal] = useState(false);
 
   const isLocked = budget.status === "enviado_fabrica" || budget.status === "fechado";
   const totalWeightKg = calculateBudgetWeightKg(budget.items);
@@ -1580,21 +1591,21 @@ function BudgetEditor({
       setDeliveryMode("different");
       return;
     }
-    setEntrega({
-      cep: formatCEP(customer.cep || ""),
-      logradouro: customer.logradouro || "",
-      numero: customer.numero || "",
-      complemento: customer.complemento || "",
-      bairro: customer.bairro || "",
-      cidade: customer.cidade || "",
-      estado: customer.estado || "",
-    });
+    setEntrega(customerDelivery);
     setDeliveryMode("customer");
+    setShowDeliveryModal(false);
     markDirty();
   }
 
   function useDifferentDeliveryAddress() {
     setDeliveryMode("different");
+    setShowDeliveryModal(true);
+    markDirty();
+  }
+
+  function saveDifferentDeliveryAddress() {
+    setDeliveryMode("different");
+    setShowDeliveryModal(false);
     markDirty();
   }
 
@@ -1655,6 +1666,8 @@ function BudgetEditor({
       });
     } catch { /* logo omitido se falhar */ }
     const dateStr = new Date(budget.createdAt).toLocaleDateString("pt-BR");
+
+    const deliveryAddressForPrint = budget.enderecoEntrega || (deliveryMode === "customer" ? customerAddr : buildFullAddress(entrega));
 
     const rows = budget.items.map((item) => {
       const p = item.product;
@@ -1725,7 +1738,7 @@ function BudgetEditor({
   <tr><td>Cidade - CEP</td><td>${customer.cidade || ""}${customer.estado ? " / " + customer.estado : ""}</td></tr>
   <tr><td>E-mail</td><td>${customer.email || ""}</td></tr>
   ${budget.tecnico ? `<tr><td>Técnico Responsável</td><td>${budget.tecnico}</td></tr>` : ""}
-  ${budget.enderecoEntrega ? `<tr><td>Endereço de Entrega</td><td>${budget.enderecoEntrega}</td></tr>` : ""}
+  ${deliveryAddressForPrint ? `<tr><td>Endereço de Entrega</td><td>${deliveryAddressForPrint}</td></tr>` : ""}
 </table>
 
 <div class="section-header">PRODUTOS / ESPECIFICAÇÕES</div>
@@ -2049,86 +2062,127 @@ ${budget.observacoes ? `
             <div className="mt-4 pt-4 border-t border-border">
               <div className="mb-3">
                 <p className="text-xs font-medium text-muted-foreground">Endereço de Entrega</p>
-                <p className="text-xs text-muted-foreground mt-1">Onde este pedido deve ser entregue?</p>
+                <p className="text-xs text-muted-foreground mt-1">Selecione onde este pedido deve ser entregue.</p>
               </div>
 
-              <div className="grid sm:grid-cols-2 gap-2 mb-3">
-                <button
-                  type="button"
-                  onClick={useCustomerAddress}
-                  disabled={isLocked || !hasCustomerAddress}
-                  className={`text-left rounded-xl border px-3 py-2.5 text-xs transition-colors disabled:opacity-50 ${deliveryMode === "customer" ? "border-primary bg-primary/8 text-primary" : "border-border hover:bg-muted"}`}>
-                  <span className="font-medium block">Entregar no endereço do cliente</span>
-                  <span className="text-muted-foreground block mt-0.5">{hasCustomerAddress ? customerAddr : "Cliente sem endereço cadastrado"}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={useDifferentDeliveryAddress}
-                  disabled={isLocked}
-                  className={`text-left rounded-xl border px-3 py-2.5 text-xs transition-colors disabled:opacity-50 ${deliveryMode === "different" ? "border-primary bg-primary/8 text-primary" : "border-border hover:bg-muted"}`}>
-                  <span className="font-medium block">Entregar em outro endereço</span>
-                  <span className="text-muted-foreground block mt-0.5">Preencher CEP, logradouro, número, bairro, cidade e estado.</span>
-                </button>
+              <div className="space-y-2">
+                <label className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs transition-colors ${deliveryMode === "customer" ? "border-primary bg-primary/8" : "border-border"} ${isLocked ? "opacity-60" : "cursor-pointer hover:bg-muted"}`}>
+                  <input
+                    type="radio"
+                    name="deliveryMode"
+                    checked={deliveryMode === "customer"}
+                    onChange={useCustomerAddress}
+                    disabled={isLocked || !hasCustomerAddress}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="font-medium block">Entregar no endereço do cliente</span>
+                    <span className="text-muted-foreground block mt-0.5">{hasCustomerAddress ? customerAddr : "Cliente sem endereço cadastrado"}</span>
+                  </span>
+                </label>
+
+                <label className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs transition-colors ${deliveryMode === "different" ? "border-primary bg-primary/8" : "border-border"} ${isLocked ? "opacity-60" : "cursor-pointer hover:bg-muted"}`}>
+                  <input
+                    type="radio"
+                    name="deliveryMode"
+                    checked={deliveryMode === "different"}
+                    onChange={useDifferentDeliveryAddress}
+                    disabled={isLocked}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="font-medium block">Entregar em outro endereço</span>
+                    <span className="text-muted-foreground block mt-0.5">{deliveryMode === "different" ? buildFullAddress(entrega) || "Endereço ainda não preenchido" : "Selecionar para preencher em uma janela separada."}</span>
+                  </span>
+                </label>
               </div>
 
-              {!hasCustomerAddress && !deliveryMode && (
-                <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-700 mb-3">
+              {!hasCustomerAddress && deliveryMode !== "different" && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-700 mt-3">
                   O cliente não possui endereço cadastrado. Selecione “Entregar em outro endereço” para preencher os dados de entrega.
                 </div>
               )}
 
-              {deliveryMode && (
-                <div className="space-y-2">
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground">CEP</label>
-                    <input
-                      value={entrega.cep}
-                      onChange={(e) => handleDeliveryCepChange(e.target.value)}
-                      placeholder="00000-000"
-                      disabled={isLocked}
-                      className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50"
-                    />
-                    {consultandoEntregaCep && <p className="text-xs text-muted-foreground mt-1">Consultando CEP...</p>}
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    <div className="col-span-2">
-                      <label className="text-xs font-medium text-muted-foreground">Logradouro</label>
-                      <input value={entrega.logradouro} onChange={(e) => { setEntrega((f) => ({ ...f, logradouro: e.target.value })); markDirty(); }} disabled={isLocked}
-                        className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium text-muted-foreground">Número</label>
-                      <input value={entrega.numero} onChange={(e) => { setEntrega((f) => ({ ...f, numero: e.target.value })); markDirty(); }} disabled={isLocked}
-                        className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-xs font-medium text-muted-foreground">Complemento</label>
-                      <input value={entrega.complemento} onChange={(e) => { setEntrega((f) => ({ ...f, complemento: e.target.value })); markDirty(); }} disabled={isLocked}
-                        className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium text-muted-foreground">Bairro</label>
-                      <input value={entrega.bairro} onChange={(e) => { setEntrega((f) => ({ ...f, bairro: e.target.value })); markDirty(); }} disabled={isLocked}
-                        className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    <div className="col-span-2">
-                      <label className="text-xs font-medium text-muted-foreground">Cidade</label>
-                      <input value={entrega.cidade} onChange={(e) => { setEntrega((f) => ({ ...f, cidade: e.target.value })); markDirty(); }} disabled={isLocked}
-                        className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium text-muted-foreground">Estado</label>
-                      <input value={entrega.estado} onChange={(e) => { setEntrega((f) => ({ ...f, estado: e.target.value.toUpperCase().slice(0, 2) })); markDirty(); }} disabled={isLocked} maxLength={2}
-                        className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
-                    </div>
-                  </div>
-                </div>
+              {deliveryMode === "different" && !isLocked && (
+                <button type="button" onClick={() => setShowDeliveryModal(true)}
+                  className="mt-3 text-xs text-primary hover:underline">
+                  Editar endereço de entrega
+                </button>
               )}
             </div>
+
+            {showDeliveryModal && (
+              <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+                <div className="bg-card border border-border rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-5">
+                  <div className="flex items-start justify-between gap-3 mb-4">
+                    <div>
+                      <h3 className="font-semibold text-base">Endereço de entrega</h3>
+                      <p className="text-xs text-muted-foreground mt-1">Digite o CEP para consultar automaticamente e complete número/complemento.</p>
+                    </div>
+                    <button type="button" onClick={() => setShowDeliveryModal(false)} className="text-muted-foreground hover:text-foreground">
+                      <X size={18} />
+                    </button>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground">CEP</label>
+                      <input
+                        value={entrega.cep}
+                        onChange={(e) => handleDeliveryCepChange(e.target.value)}
+                        placeholder="00000-000"
+                        disabled={isLocked}
+                        className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50"
+                      />
+                      {consultandoEntregaCep && <p className="text-xs text-muted-foreground mt-1">Consultando CEP...</p>}
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="col-span-2">
+                        <label className="text-xs font-medium text-muted-foreground">Logradouro</label>
+                        <input value={entrega.logradouro} onChange={(e) => { setEntrega((f) => ({ ...f, logradouro: e.target.value })); markDirty(); }} disabled={isLocked}
+                          className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground">Número</label>
+                        <input value={entrega.numero} onChange={(e) => { setEntrega((f) => ({ ...f, numero: e.target.value })); markDirty(); }} disabled={isLocked}
+                          className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground">Complemento</label>
+                        <input value={entrega.complemento} onChange={(e) => { setEntrega((f) => ({ ...f, complemento: e.target.value })); markDirty(); }} disabled={isLocked}
+                          className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground">Bairro</label>
+                        <input value={entrega.bairro} onChange={(e) => { setEntrega((f) => ({ ...f, bairro: e.target.value })); markDirty(); }} disabled={isLocked}
+                          className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="col-span-2">
+                        <label className="text-xs font-medium text-muted-foreground">Cidade</label>
+                        <input value={entrega.cidade} onChange={(e) => { setEntrega((f) => ({ ...f, cidade: e.target.value })); markDirty(); }} disabled={isLocked}
+                          className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground">Estado</label>
+                        <input value={entrega.estado} onChange={(e) => { setEntrega((f) => ({ ...f, estado: e.target.value.toUpperCase().slice(0, 2) })); markDirty(); }} disabled={isLocked} maxLength={2}
+                          className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 mt-5">
+                    <button type="button" onClick={() => setShowDeliveryModal(false)}
+                      className="flex-1 border border-border rounded-xl py-2 text-xs hover:bg-muted transition-colors">Cancelar</button>
+                    <button type="button" onClick={saveDifferentDeliveryAddress}
+                      className="flex-1 bg-primary text-primary-foreground rounded-xl py-2 text-xs font-medium hover:opacity-90">Salvar endereço</button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="mt-5 pt-4 border-t border-border space-y-2">
               <button onClick={handleSaveDraft} disabled={saving || !canSaveDraft}

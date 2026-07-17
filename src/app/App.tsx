@@ -3401,11 +3401,12 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
 
 // ── Customer Search (Home) ────────────────────────────────────────
 
-function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSettingsChange, onOpenBudgetById }: {
+function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSettingsChange, onProductsChange, onOpenBudgetById }: {
   onSelect: (c: Customer) => void;
   allProducts: Product[];
   pricingSettings: PricingSettings;
   onPricingSettingsChange: (settings: PricingSettings) => void;
+  onProductsChange: (products: Product[]) => void;
   onOpenBudgetById: (budgetId: string, customerId: string) => void;
 }) {
   const [tab, setTab] = useState<"orcamentos" | "clientes" | "produtos">("orcamentos");
@@ -3827,7 +3828,7 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
         )}
 
         {tab === "clientes" && <AllCustomersTab onSelect={onSelect} />}
-        {tab === "produtos" && <AllProductsTab allProducts={allProducts} pricingSettings={pricingSettings} onPricingSettingsChange={onPricingSettingsChange} onProductsChange={setAllProducts} />}
+        {tab === "produtos" && <AllProductsTab allProducts={allProducts} pricingSettings={pricingSettings} onPricingSettingsChange={onPricingSettingsChange} onProductsChange={onProductsChange} />}
       </div>
     </div>
   );
@@ -3924,6 +3925,7 @@ export default function App() {
           allProducts={allProducts}
           pricingSettings={pricingSettings}
           onPricingSettingsChange={setPricingSettings}
+          onProductsChange={setAllProducts}
           onOpenBudgetById={async (budgetId, customerId) => {
             try {
               const [full, { data: cData }] = await Promise.all([

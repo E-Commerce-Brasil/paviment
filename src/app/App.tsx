@@ -1252,6 +1252,7 @@ function BudgetEditor({
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [editAreaInput, setEditAreaInput] = useState("");
+  const [editTabela, setEditTabela] = useState<1 | 2 | 3 | 4>(initBudget.tabelaPreco);
   const [showSaveDialog, setShowSaveDialog] = useState(false); // unused but kept for type safety
   const [isDirty, setIsDirty] = useState(false);
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
@@ -1367,9 +1368,20 @@ function BudgetEditor({
     finally { setRemovingId(null); }
   }
 
+  function inferItemTabela(item: BudgetItem): 1 | 2 | 3 | 4 {
+    for (const t of [1, 2, 3, 4] as const) {
+      const precoBase = item.product[priceKey(t)] as number | null;
+      if (precoBase == null) continue;
+      const precoTabela = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
+      if (Math.abs(precoTabela - item.precoM2) < 0.01) return t;
+    }
+    return budget.tabelaPreco;
+  }
+
   function startEditItem(item: BudgetItem) {
     setEditingItemId(item.id);
     setEditAreaInput(String(item.areaM2).replace(".", ","));
+    setEditTabela(inferItemTabela(item));
   }
 
   async function confirmEditItem(itemId: string) {
@@ -1377,11 +1389,21 @@ function BudgetEditor({
     if (!item) return;
     const newArea = parseFloat(editAreaInput.replace(",", "."));
     if (!newArea || newArea <= 0) { toast.error("Área inválida"); return; }
+    const precoBase = item.product[priceKey(editTabela)] as number | null;
+    if (precoBase == null || !Number.isFinite(Number(precoBase)) || Number(precoBase) <= 0) {
+      toast.error(`Preço não disponível para a tabela ${editTabela}.`);
+      return;
+    }
+    const newPrecoM2 = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
+    if (!Number.isFinite(newPrecoM2) || newPrecoM2 <= 0) {
+      toast.error("Não foi possível calcular o preço final do produto.");
+      return;
+    }
     const caixas = item.product.m2PorCaixa > 0 ? Math.ceil(newArea / item.product.m2PorCaixa) : item.caixas;
     setSaving(true);
     try {
-      await updateBudgetItem(itemId, newArea, caixas, item.precoM2);
-      const updatedItem = { ...item, areaM2: newArea, caixas, subtotal: round2(newArea * item.precoM2) };
+      await updateBudgetItem(itemId, newArea, caixas, newPrecoM2);
+      const updatedItem = { ...item, areaM2: newArea, caixas, precoM2: newPrecoM2, subtotal: round2(newArea * newPrecoM2) };
       const b = updateLocal({ items: budget.items.map((i) => i.id === itemId ? updatedItem : i) });
       await persistTotals(b);
       markDirty();
@@ -1497,17 +1519,6 @@ function BudgetEditor({
       updateLocal({ status });
       setIsDirty(false);
       toast.success(`Status: ${STATUS_LABELS[status]}`);
-    } catch (e: any) { toast.error("Erro: " + e.message); }
-    finally { setSaving(false); }
-  }
-
-  async function changeTabela(t: 1 | 2 | 3 | 4) {
-    setSaving(true);
-    try {
-      await saveBudgetFields(budget.id, { tabela_preco: t });
-      updateLocal({ tabelaPreco: t });
-      markDirty();
-      toast.info(`Tabela ${t} definida como padrão para novos produtos`);
     } catch (e: any) { toast.error("Erro: " + e.message); }
     finally { setSaving(false); }
   }
@@ -1654,15 +1665,6 @@ ${budget.observacoes ? `
           </div>
         </div>
         <div className="px-5 py-2.5 flex flex-wrap items-center gap-4 text-sm">
-          <div className="flex items-center gap-2">
-            <span className="text-xs opacity-60">Tabela padrão:</span>
-            {([1, 2, 3, 4] as const).map((t) => (
-              <button key={t} onClick={() => changeTabela(t)}
-                className={`w-7 h-7 rounded text-xs font-semibold transition-all ${budget.tabelaPreco === t ? "bg-white text-primary" : "bg-white/10 hover:bg-white/20"}`}>
-                {t}
-              </button>
-            ))}
-          </div>
           <div className="flex items-center gap-2 ml-auto">
             <span className="text-xs opacity-60">Status:</span>
             <select value={budget.status} onChange={(e) => changeStatus(e.target.value as BudgetStatus)}
@@ -1731,6 +1733,8 @@ ${budget.observacoes ? `
                     const isEditing = editingItemId === item.id;
                     const previewArea = parseFloat(editAreaInput.replace(",", ".")) || 0;
                     const previewCx = item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : 0;
+                    const editPrecoBase = item.product[priceKey(editTabela)] as number | null;
+                    const editPrecoM2 = editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
                     return (
                       <tr key={item.id} className={`transition-colors ${isEditing ? "bg-primary/4" : "hover:bg-muted/20"}`}>
                         <td className="px-5 py-3">
@@ -1763,10 +1767,24 @@ ${budget.observacoes ? `
                             ? <span className="text-primary font-semibold">{previewCx}</span>
                             : item.caixas}
                         </td>
-                        <td className="px-3 py-3 text-right font-mono text-sm hidden sm:table-cell">{fmtBRL(item.precoM2)}</td>
+                        <td className="px-3 py-3 text-right text-sm hidden sm:table-cell">
+                          {isEditing ? (
+                            <div className="space-y-1">
+                              <div className="grid grid-cols-4 gap-1">
+                                {([1, 2, 3, 4] as const).map((t) => (
+                                  <button key={t} type="button" onClick={() => setEditTabela(t)}
+                                    className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                                    T{t}
+                                  </button>
+                                ))}
+                              </div>
+                              <p className="font-mono text-primary font-semibold">{fmtBRL(editPrecoM2)}</p>
+                            </div>
+                          ) : <span className="font-mono">{fmtBRL(item.precoM2)}</span>}
+                        </td>
                         <td className="px-3 py-3 text-right font-mono font-semibold text-sm">
                           {isEditing && previewArea > 0
-                            ? <span className="text-primary">{fmtBRL(previewArea * item.precoM2)}</span>
+                            ? <span className="text-primary">{fmtBRL(previewArea * editPrecoM2)}</span>
                             : fmtBRL(item.subtotal)}
                         </td>
                         <td className="px-3 py-3">
@@ -2000,7 +2018,7 @@ ${budget.observacoes ? `
               </div>
             )}
             <p className="mt-4 text-xs text-muted-foreground text-right">
-              #{budget.numero} · {fmtDate(budget.createdAt)} · tabela padrão {budget.tabelaPreco}
+              #{budget.numero} · {fmtDate(budget.createdAt)}
             </p>
           </div>
         </div>

@@ -2911,8 +2911,12 @@ function ProductEditModal({ product, onSave, onClose }: {
         preco2: form.preco2 != null && form.preco2 !== "" ? parseFloat(String(form.preco2).replace(",", ".")) : null,
         preco3: form.preco3 != null && form.preco3 !== "" ? parseFloat(String(form.preco3).replace(",", ".")) : null,
         preco4: form.preco4 != null && form.preco4 !== "" ? parseFloat(String(form.preco4).replace(",", ".")) : null,
+        faces: parseInt(String(form.faces)) || 0,
+        localUso: parseInt(String(form.localUso)) || 3,
         m2PorCaixa: parseFloat(String(form.m2PorCaixa).replace(",", ".")) || (form.marca === "Villacol" ? 1 : 0),
         pecasPorCaixa: parseInt(String(form.pecasPorCaixa)) || (form.marca === "Villacol" ? 1 : 0),
+        m2PorPallet: parseFloat(String(form.m2PorPallet).replace(",", ".")) || 0,
+        cxPorPallet: parseInt(String(form.cxPorPallet)) || 0,
         pesoBrutoCx: parseFloat(String(form.pesoBrutoCx).replace(",", ".")) || 0,
         pesoBrutoM2: parseFloat(String(form.pesoBrutoM2).replace(",", ".")) || 0,
         espessuraMm: parseFloat(String(form.espessuraMm).replace(",", ".")) || 0,
@@ -3013,12 +3017,58 @@ function ProductEditModal({ product, onSave, onClose }: {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Faces</label>
+                  <input {...field("faces")} inputMode="numeric" className={inputCls} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Variação</label>
+                  <input {...field("variacao")} placeholder="Ex.: V1, V2, V3" className={inputCls} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Local de uso</label>
+                  <select
+                    value={String(form.localUso ?? 3)}
+                    onChange={(e) => setForm((f) => ({ ...f, localUso: Number(e.target.value) }))}
+                    className={inputCls}
+                  >
+                    {Object.entries(LOCAL_USO).map(([value, label]) => (
+                      <option key={value} value={value}>{value} - {label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Derivação</label>
+                  <input {...field("derivacao")} className={inputCls} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
                   <label className="text-xs font-medium text-muted-foreground mb-1 block">m²/caixa</label>
                   <input {...field("m2PorCaixa")} inputMode="decimal" className={inputCls} />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-muted-foreground mb-1 block">Peças/caixa</label>
                   <input {...field("pecasPorCaixa")} inputMode="numeric" className={inputCls} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">m²/pallet</label>
+                  <input {...field("m2PorPallet")} inputMode="decimal" className={inputCls} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Caixas/pallet</label>
+                  <input {...field("cxPorPallet")} inputMode="numeric" className={inputCls} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Peso bruto/m² (kg)</label>
+                  <input {...field("pesoBrutoM2")} inputMode="decimal" className={inputCls} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Peso bruto/caixa (kg)</label>
+                  <input {...field("pesoBrutoCx")} inputMode="decimal" className={inputCls} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Espessura (mm)</label>
+                  <input {...field("espessuraMm")} inputMode="decimal" className={inputCls} />
                 </div>
               </div>
             </>

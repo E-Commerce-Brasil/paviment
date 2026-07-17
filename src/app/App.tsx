@@ -929,6 +929,24 @@ function fmtBRL(v: number): string {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+function fmtKg(v: number): string {
+  return `${v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kg`;
+}
+
+function calculateItemWeightKg(item: BudgetItem): number {
+  const caixas = Number.isFinite(item.caixas) ? item.caixas : 0;
+  const pesoPorCaixa = Number.isFinite(item.product?.pesoBrutoCx) ? item.product.pesoBrutoCx : 0;
+  return round2(caixas * pesoPorCaixa);
+}
+
+function calculateBudgetWeightKg(items: BudgetItem[]): number {
+  return round2(items.reduce((sum, item) => sum + calculateItemWeightKg(item), 0));
+}
+
+function calculateFreightByWeight(items: BudgetItem[]): number {
+  return round2((calculateBudgetWeightKg(items) / 100) * 4);
+}
+
 function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
@@ -1308,6 +1326,8 @@ function BudgetEditor({
   const [consultandoEntregaCep, setConsultandoEntregaCep] = useState(false);
 
   const isLocked = budget.status === "enviado_fabrica" || budget.status === "fechado";
+  const totalWeightKg = calculateBudgetWeightKg(budget.items);
+  const suggestedFreightByWeight = calculateFreightByWeight(budget.items);
 
   async function handleDuplicate() {
     const tecnico = dupTecnico === "__custom__" ? dupTecnicoCustom.trim() : dupTecnico;
@@ -1602,6 +1622,7 @@ function BudgetEditor({
         <td style="text-align:right">${fmtBRLStr(item.precoM2)}</td>
         <td style="text-align:right">${item.areaM2.toFixed(2)}</td>
         <td style="text-align:right">${p?.m2PorCaixa ?? ""}</td>
+        <td style="text-align:right">${fmtKg(calculateItemWeightKg(item))}</td>
         <td style="text-align:right">${fmtBRLStr(item.subtotal)}</td>
       </tr>`;
     }).join("");
@@ -1627,7 +1648,7 @@ function BudgetEditor({
   .section-header { background: #222; color: #fff; font-weight: 700; font-size: 11px; padding: 4px 8px; margin-bottom: 0; }
   .prod-table th { border: 1px solid #333; padding: 5px 7px; background: #e8e8e8; font-weight: 700; text-align: left; white-space: nowrap; }
   .prod-table td { border: 1px solid #333; padding: 5px 7px; vertical-align: top; }
-  .prod-table th:nth-child(5), .prod-table th:nth-child(6), .prod-table th:nth-child(7), .prod-table th:nth-child(8) { text-align: right; }
+  .prod-table th:nth-child(5), .prod-table th:nth-child(6), .prod-table th:nth-child(7), .prod-table th:nth-child(8), .prod-table th:nth-child(9) { text-align: right; }
   .total-row td { border: 1px solid #333; padding: 4px 8px; }
   .total-row td:first-child { font-weight: 700; text-align: right; }
   .total-row td:last-child { font-weight: 700; text-align: right; }
@@ -1667,7 +1688,7 @@ function BudgetEditor({
   <thead>
     <tr>
       <th>Ref</th><th>Linha</th><th>Cor</th><th>Formato</th>
-      <th>Valor m²</th><th>Qnt m²</th><th>M²/cx</th><th>Valor R$</th>
+      <th>Valor m²</th><th>Qnt m²</th><th>M²/cx</th><th>Peso total</th><th>Valor R$</th>
     </tr>
   </thead>
   <tbody>
@@ -1678,6 +1699,8 @@ function BudgetEditor({
 <div class="clearfix">
   <table class="totals-box">
     <tr><td>Forma de Pagamento</td><td>${budget.formaPagamento === "cartao" ? `Cartão em ${budget.parcelasCartao}x` : budget.formaPagamento === "avista_pix" ? "À vista - PIX" : "À vista"}</td></tr>
+    <tr><td>Peso total da carga</td><td>${fmtKg(calculateBudgetWeightKg(budget.items))}</td></tr>
+    <tr><td>Cálculo do frete</td><td>R$ 4,00 / 100 kg</td></tr>
     ${budget.frete > 0 ? `<tr><td>Frete</td><td>${fmtBRLStr(budget.frete)}</td></tr>` : ""}
     ${calculatePaymentDiscount(budget.subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual) > 0 ? `<tr><td>Desconto PIX (${budget.descontoPixPercentual}%)</td><td>- ${fmtBRLStr(calculatePaymentDiscount(budget.subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual))}</td></tr>` : ""}
     <tr><td>TOTAL</td><td>${fmtBRLStr(budget.totalFinal)}</td></tr>
@@ -1778,6 +1801,7 @@ ${budget.observacoes ? `
                     <th className="text-right px-3 py-2.5 font-medium">m²</th>
                     <th className="text-right px-3 py-2.5 font-medium">Cx</th>
                     <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">R$/m²</th>
+                    <th className="text-right px-3 py-2.5 font-medium hidden lg:table-cell">Peso</th>
                     <th className="text-right px-3 py-2.5 font-medium">Subtotal</th>
                     <th className="px-3 py-2.5 w-16"></th>
                   </tr>
@@ -1787,6 +1811,7 @@ ${budget.observacoes ? `
                     const isEditing = editingItemId === item.id;
                     const previewArea = parseFloat(editAreaInput.replace(",", ".")) || 0;
                     const previewCx = item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : 0;
+                    const previewWeight = round2(previewCx * (item.product.pesoBrutoCx || 0));
                     const editPrecoBase = item.product[priceKey(editTabela)] as number | null;
                     const editPrecoM2 = editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
                     return (
@@ -1835,6 +1860,9 @@ ${budget.observacoes ? `
                               <p className="font-mono text-primary font-semibold">{fmtBRL(editPrecoM2)}</p>
                             </div>
                           ) : <span className="font-mono">{fmtBRL(item.precoM2)}</span>}
+                        </td>
+                        <td className="px-3 py-3 text-right font-mono text-sm hidden lg:table-cell">
+                          {isEditing && previewArea > 0 ? fmtKg(previewWeight) : fmtKg(calculateItemWeightKg(item))}
                         </td>
                         <td className="px-3 py-3 text-right font-mono font-semibold text-sm">
                           {isEditing && previewArea > 0
@@ -1898,13 +1926,16 @@ ${budget.observacoes ? `
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-medium text-muted-foreground">Frete (R$)</label>
                       <button type="button"
-                        onClick={() => setFrete(round2(budget.subtotal * 0.02).toFixed(2).replace(".", ","))}
+                        onClick={() => setFrete(suggestedFreightByWeight.toFixed(2).replace(".", ","))}
                         className="text-xs text-primary hover:underline">
-                        2% = {fmtBRL(round2(budget.subtotal * 0.02))}
+                        Peso = {fmtBRL(suggestedFreightByWeight)}
                       </button>
                     </div>
                     <input type="text" value={frete} onChange={(e) => setFrete(e.target.value)} placeholder="0,00"
                       className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono" />
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      Sugestão: {fmtKg(totalWeightKg)} × R$ 4,00 / 100 kg = {fmtBRL(suggestedFreightByWeight)}.
+                    </p>
                   </div>
                 </div>
                 <div className="grid sm:grid-cols-2 gap-3">
@@ -2086,6 +2117,14 @@ ${budget.observacoes ? `
                 <span className="text-muted-foreground">Pagamento</span>
                 <span className="font-mono">{budget.formaPagamento === "cartao" ? `Cartão ${budget.parcelasCartao}x` : budget.formaPagamento === "avista_pix" ? "À vista PIX" : "À vista"}</span>
               </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Peso total da carga</span>
+                <span className="font-mono">{fmtKg(totalWeightKg)}</span>
+              </div>
+              <div className="flex justify-between text-xs">
+                <span className="text-muted-foreground">Cálculo do frete</span>
+                <span className="font-mono text-muted-foreground">R$ 4,00 / 100 kg</span>
+              </div>
               {budget.frete > 0 && (
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Frete</span>
@@ -2114,6 +2153,10 @@ ${budget.observacoes ? `
                   <div className="flex justify-between">
                     <span>Total de m²</span>
                     <span className="font-mono">{budget.items.reduce((s, i) => s + i.areaM2, 0).toFixed(2)} m²</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Peso total</span>
+                    <span className="font-mono">{fmtKg(totalWeightKg)}</span>
                   </div>
                 </div>
               </div>

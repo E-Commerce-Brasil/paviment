@@ -1952,13 +1952,8 @@ ${budget.observacoes ? `
                 </div>
                 <div>
                   <div>
-                    <div className="flex items-center justify-between mb-1">
+                    <div className="mb-1">
                       <label className="text-xs font-medium text-muted-foreground">Frete (R$)</label>
-                      <button type="button"
-                        onClick={() => setFrete(formatFreightInput(suggestedFreightByWeight))}
-                        className="text-xs text-primary hover:underline">
-                        Peso = {fmtBRL(suggestedFreightByWeight)}
-                      </button>
                     </div>
                     <input type="text" value={frete} onChange={(e) => setFrete(e.target.value)} placeholder="0,00"
                       className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono" />

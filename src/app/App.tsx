@@ -1429,7 +1429,8 @@ function BudgetEditor({
   const taxOnlyFactor = 1 + pricingSettings.impostoPercentual / 100;
   const pixPriceFactor = cardFactor > 0 ? taxOnlyFactor / cardFactor : 1;
   const noTaxOrCardFactor = cardFactor > 0 ? 1 / cardFactor : 1;
-  const paymentPriceFactor = budget.formaPagamento === "avista_pix" ? pixPriceFactor : 1;
+  const pixDiscountFactor = budget.formaPagamento === "avista_pix" ? 1 - Math.min(budget.descontoPixPercentual, 3) / 100 : 1;
+  const paymentPriceFactor = budget.formaPagamento === "avista_pix" ? pixPriceFactor * pixDiscountFactor : 1;
   const villagresSubtotal = round2(villagresItems.reduce((sum, item) => sum + item.subtotal * paymentPriceFactor, 0));
   const argamassaSubtotal = round2(topFinancialItems
     .filter((item) => item.product?.categoriaComplementar === "Argamassa")
@@ -1440,8 +1441,8 @@ function BudgetEditor({
     : budget.formaPagamento === "avista_pix"
       ? "Subtotal PIX"
       : "Subtotal Débito";
-  const topPixDiscount = budget.formaPagamento === "avista_pix" ? round2(topSubtotalBeforeDiscount * Math.min(budget.descontoPixPercentual, 3) / 100) : 0;
-  const topTotal = round2(topSubtotalBeforeDiscount - topPixDiscount);
+  const topPixDiscount = 0;
+  const topTotal = topSubtotalBeforeDiscount;
   const rejunteSubtotal = round2(rejunteItems.reduce((sum, item) => sum + item.subtotal * noTaxOrCardFactor, 0));
   const pixOnlySubtotal = round2(rejunteSubtotal + budget.frete);
   const generalTotal = round2(topTotal + pixOnlySubtotal);

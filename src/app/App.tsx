@@ -1791,7 +1791,6 @@ function BudgetEditor({
   <table class="totals-box">
     <tr><td>Forma de Pagamento</td><td>${budget.formaPagamento === "cartao" ? `Cartão em ${budget.parcelasCartao}x` : budget.formaPagamento === "avista_pix" ? "À vista - PIX" : "À vista"}</td></tr>
     <tr><td>Peso total da carga</td><td>${fmtKg(calculateBudgetWeightKg(budget.items))}</td></tr>
-    <tr><td>Cálculo do frete</td><td>${fmtBRL(pricingSettings.fretePor100Kg)} / 100 kg</td></tr>
     ${budget.frete > 0 ? `<tr><td>Frete</td><td>${fmtBRLStr(budget.frete)}</td></tr>` : ""}
     ${calculatePaymentDiscount(budget.subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual, budget.descontoPixIncluiFrete) > 0 ? `<tr><td>Desconto PIX (${budget.descontoPixPercentual}%${budget.descontoPixIncluiFrete ? " com frete" : ""})</td><td>- ${fmtBRLStr(calculatePaymentDiscount(budget.subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual, budget.descontoPixIncluiFrete))}</td></tr>` : ""}
     <tr><td>TOTAL</td><td>${fmtBRLStr(budget.totalFinal)}</td></tr>
@@ -2020,7 +2019,7 @@ ${budget.observacoes ? `
                     <input type="text" value={frete} onChange={(e) => setFrete(e.target.value)} placeholder="0,00"
                       className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono" />
                     <p className="mt-1 text-[11px] text-muted-foreground">
-                      Sugestão: {fmtKg(totalWeightKg)} × {fmtBRL(pricingSettings.fretePor100Kg)} / 100 kg = {fmtBRL(suggestedFreightByWeight)}.
+                      Frete sugerido: {fmtBRL(suggestedFreightByWeight)}.
                     </p>
                   </div>
                 </div>
@@ -2256,10 +2255,6 @@ ${budget.observacoes ? `
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Peso total da carga</span>
                 <span className="font-mono">{fmtKg(totalWeightKg)}</span>
-              </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Cálculo do frete</span>
-                <span className="font-mono text-muted-foreground">{fmtBRL(pricingSettings.fretePor100Kg)} / 100 kg</span>
               </div>
               {budget.frete > 0 && (
                 <div className="flex justify-between text-sm">

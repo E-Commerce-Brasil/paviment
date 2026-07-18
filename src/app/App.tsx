@@ -1429,8 +1429,7 @@ function BudgetEditor({
   const taxOnlyFactor = 1 + pricingSettings.impostoPercentual / 100;
   const pixPriceFactor = cardFactor > 0 ? taxOnlyFactor / cardFactor : 1;
   const noTaxOrCardFactor = cardFactor > 0 ? 1 / cardFactor : 1;
-  const pixDiscountFactor = budget.formaPagamento === "avista_pix" ? 1 - Math.min(budget.descontoPixPercentual, 3) / 100 : 1;
-  const paymentPriceFactor = budget.formaPagamento === "avista_pix" ? pixPriceFactor * pixDiscountFactor : 1;
+  const paymentPriceFactor = budget.formaPagamento === "avista_pix" ? pixPriceFactor : 1;
   const villagresSubtotal = round2(villagresItems.reduce((sum, item) => sum + item.subtotal * paymentPriceFactor, 0));
   const argamassaSubtotal = round2(topFinancialItems
     .filter((item) => item.product?.categoriaComplementar === "Argamassa")
@@ -1441,8 +1440,8 @@ function BudgetEditor({
     : budget.formaPagamento === "avista_pix"
       ? "Subtotal PIX"
       : "Subtotal Débito";
-  const topPixDiscount = 0;
-  const topTotal = topSubtotalBeforeDiscount;
+  const topPixDiscount = budget.formaPagamento === "avista_pix" ? round2(topSubtotalBeforeDiscount * Math.min(budget.descontoPixPercentual, 3) / 100) : 0;
+  const topTotal = round2(topSubtotalBeforeDiscount - topPixDiscount);
   const rejunteSubtotal = round2(rejunteItems.reduce((sum, item) => sum + item.subtotal * noTaxOrCardFactor, 0));
   const pixOnlySubtotal = round2(rejunteSubtotal + budget.frete);
   const generalTotal = round2(topTotal + pixOnlySubtotal);
@@ -1874,8 +1873,8 @@ ${complementaryRows ? `<div class="section-header">PRODUTOS COMPLEMENTARES</div>
   <table class="totals-box">
     <tr><td>Produtos Villagres</td><td>${fmtBRLStr(villagresSubtotal)}</td></tr>
     <tr><td>Argamassas</td><td>${fmtBRLStr(argamassaSubtotal)}</td></tr>
-    <tr><td>${topSubtotalLabel}</td><td>${fmtBRLStr(topSubtotalBeforeDiscount)}</td></tr>
     ${topPixDiscount > 0 ? `<tr><td>Desconto PIX (${budget.descontoPixPercentual}%)</td><td>- ${fmtBRLStr(topPixDiscount)}</td></tr>` : ""}
+    <tr><td>${topSubtotalLabel}</td><td>${fmtBRLStr(topTotal)}</td></tr>
     <tr><td>Rejuntes Villacol (PIX)</td><td>${fmtBRLStr(rejunteSubtotal)}</td></tr>
     ${budget.frete > 0 ? `<tr><td>Frete (PIX)</td><td>${fmtBRLStr(budget.frete)}</td></tr>` : ""}
     <tr><td>Subtotal PIX</td><td>${fmtBRLStr(pixOnlySubtotal)}</td></tr>
@@ -2438,16 +2437,16 @@ ${budget.observacoes ? `
                   <span className="text-muted-foreground">Argamassas</span>
                   <span className="font-mono">{fmtBRL(argamassaSubtotal)}</span>
                 </div>
-                <div className="flex justify-between text-sm font-semibold pt-2 border-t border-border">
-                  <span>{topSubtotalLabel}</span>
-                  <span className="font-mono">{fmtBRL(topSubtotalBeforeDiscount)}</span>
-                </div>
                 {topPixDiscount > 0 && (
                   <div className="flex justify-between text-sm text-green-700">
                     <span>Desconto PIX ({budget.descontoPixPercentual}%)</span>
                     <span className="font-mono">- {fmtBRL(topPixDiscount)}</span>
                   </div>
                 )}
+                <div className="flex justify-between text-sm font-semibold pt-2 border-t border-border">
+                  <span>{topSubtotalLabel}</span>
+                  <span className="font-mono">{fmtBRL(topTotal)}</span>
+                </div>
               </div>
 
               <div className="rounded-xl border border-border p-3 space-y-2 bg-muted/10">

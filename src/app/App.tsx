@@ -3055,7 +3055,7 @@ function ProductEditModal({ product, onSave, onClose }: {
       linha: categoria,
       cor: categoria === "Argamassa" ? "" : f.cor,
       tipoRejunte: categoria === "Rejunte" ? f.tipoRejunte : "",
-      tipoEmbalagem: categoria === "Argamassa" ? f.tipoEmbalagem : "",
+      tipoEmbalagem: f.tipoEmbalagem,
     }));
   }
 
@@ -3069,7 +3069,7 @@ function ProductEditModal({ product, onSave, onClose }: {
         marca: form.marca || "Villagres",
         categoriaComplementar: form.marca === "Villacol" ? form.categoriaComplementar || "Argamassa" : "",
         tipoRejunte: form.marca === "Villacol" && form.categoriaComplementar === "Rejunte" ? form.tipoRejunte : "",
-        tipoEmbalagem: form.marca === "Villacol" && form.categoriaComplementar === "Argamassa" ? form.tipoEmbalagem : "",
+        tipoEmbalagem: form.marca === "Villacol" ? form.tipoEmbalagem : "",
         preco1: form.preco1 != null && form.preco1 !== "" ? parseFloat(String(form.preco1).replace(",", ".")) : null,
         preco2: form.preco2 != null && form.preco2 !== "" ? parseFloat(String(form.preco2).replace(",", ".")) : null,
         preco3: form.preco3 != null && form.preco3 !== "" ? parseFloat(String(form.preco3).replace(",", ".")) : null,
@@ -3140,7 +3140,7 @@ function ProductEditModal({ product, onSave, onClose }: {
                 </div>
               </div>
               {isRejunte && (
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="text-xs font-medium text-muted-foreground mb-1 block">Cor do rejunte</label>
                     <input {...field("cor")} placeholder="Ex.: Branco, Cinza" className={inputCls} />
@@ -3148,6 +3148,10 @@ function ProductEditModal({ product, onSave, onClose }: {
                   <div>
                     <label className="text-xs font-medium text-muted-foreground mb-1 block">Tipo de rejunte</label>
                     <input {...field("tipoRejunte")} placeholder="Ex.: Acrílico, Cimentício" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Tipo de embalagem</label>
+                    <input {...field("tipoEmbalagem")} placeholder="Ex.: Pote 1 kg, Pote 5 kg" className={inputCls} />
                   </div>
                   <div>
                     <label className="text-xs font-medium text-muted-foreground mb-1 block">Peso da embalagem (kg)</label>

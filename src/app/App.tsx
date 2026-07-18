@@ -1435,6 +1435,11 @@ function BudgetEditor({
     .filter((item) => item.product?.categoriaComplementar === "Argamassa")
     .reduce((sum, item) => sum + item.subtotal * paymentPriceFactor, 0));
   const topSubtotalBeforeDiscount = round2(villagresSubtotal + argamassaSubtotal);
+  const topSubtotalLabel = budget.formaPagamento === "cartao"
+    ? `Subtotal Cartão ${budget.parcelasCartao}x`
+    : budget.formaPagamento === "avista_pix"
+      ? "Subtotal PIX"
+      : "Subtotal Débito";
   const topPixDiscount = budget.formaPagamento === "avista_pix" ? round2(topSubtotalBeforeDiscount * Math.min(budget.descontoPixPercentual, 3) / 100) : 0;
   const topTotal = round2(topSubtotalBeforeDiscount - topPixDiscount);
   const rejunteSubtotal = round2(rejunteItems.reduce((sum, item) => sum + item.subtotal * noTaxOrCardFactor, 0));
@@ -1866,10 +1871,9 @@ ${complementaryRows ? `<div class="section-header">PRODUTOS COMPLEMENTARES</div>
 
 <div class="clearfix">
   <table class="totals-box">
-    <tr><td>Pagamento Villagres/Argamassas</td><td>${budget.formaPagamento === "cartao" ? `Cartão em ${budget.parcelasCartao}x sem juros` : budget.formaPagamento === "avista_pix" ? "PIX" : "Débito"}</td></tr>
     <tr><td>Produtos Villagres</td><td>${fmtBRLStr(villagresSubtotal)}</td></tr>
     <tr><td>Argamassas</td><td>${fmtBRLStr(argamassaSubtotal)}</td></tr>
-    <tr><td>Subtotal Villagres/Argamassas</td><td>${fmtBRLStr(topSubtotalBeforeDiscount)}</td></tr>
+    <tr><td>${topSubtotalLabel}</td><td>${fmtBRLStr(topSubtotalBeforeDiscount)}</td></tr>
     ${topPixDiscount > 0 ? `<tr><td>Desconto PIX (${budget.descontoPixPercentual}%)</td><td>- ${fmtBRLStr(topPixDiscount)}</td></tr>` : ""}
     <tr><td>Rejuntes Villacol (PIX)</td><td>${fmtBRLStr(rejunteSubtotal)}</td></tr>
     ${budget.frete > 0 ? `<tr><td>Frete (PIX)</td><td>${fmtBRLStr(budget.frete)}</td></tr>` : ""}
@@ -2426,10 +2430,6 @@ ${budget.observacoes ? `
               <div className="rounded-xl border border-border p-3 space-y-2 bg-muted/10">
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Villagres + Argamassas</p>
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Pagamento</span>
-                  <span className="font-mono">{budget.formaPagamento === "cartao" ? `Cartão ${budget.parcelasCartao}x sem juros` : budget.formaPagamento === "avista_pix" ? "PIX" : "Débito"}</span>
-                </div>
-                <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Produtos Villagres</span>
                   <span className="font-mono">{fmtBRL(villagresSubtotal)}</span>
                 </div>
@@ -2438,7 +2438,7 @@ ${budget.observacoes ? `
                   <span className="font-mono">{fmtBRL(argamassaSubtotal)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Subtotal</span>
+                  <span className="text-muted-foreground">{topSubtotalLabel}</span>
                   <span className="font-mono">{fmtBRL(topSubtotalBeforeDiscount)}</span>
                 </div>
                 {topPixDiscount > 0 && (

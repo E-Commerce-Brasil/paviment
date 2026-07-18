@@ -970,6 +970,12 @@ function fmtKg(v: number): string {
   return `${v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kg`;
 }
 
+function calculateItemRealAreaM2(item: BudgetItem): number {
+  const caixas = Number.isFinite(item.caixas) ? item.caixas : 0;
+  const m2PorCaixa = Number.isFinite(item.product?.m2PorCaixa) ? item.product.m2PorCaixa : 0;
+  return round2(caixas * m2PorCaixa);
+}
+
 function calculateItemWeightKg(item: BudgetItem): number {
   const caixas = Number.isFinite(item.caixas) ? item.caixas : 0;
   const pesoPorCaixa = Number.isFinite(item.product?.pesoBrutoCx) ? item.product.pesoBrutoCx : 0;
@@ -1712,6 +1718,7 @@ function BudgetEditor({
         <td>${p?.formato ?? ""}</td>
         <td style="text-align:right">${fmtBRLStr(item.precoM2)}</td>
         <td style="text-align:right">${item.areaM2.toFixed(2)}</td>
+        <td style="text-align:right">${calculateItemRealAreaM2(item).toFixed(2)}</td>
         <td style="text-align:right">${p?.m2PorCaixa ?? ""}</td>
         <td style="text-align:right">${fmtKg(calculateItemWeightKg(item))}</td>
         <td style="text-align:right">${fmtBRLStr(item.subtotal)}</td>
@@ -1739,7 +1746,7 @@ function BudgetEditor({
   .section-header { background: #222; color: #fff; font-weight: 700; font-size: 11px; padding: 4px 8px; margin-bottom: 0; }
   .prod-table th { border: 1px solid #333; padding: 5px 7px; background: #e8e8e8; font-weight: 700; text-align: left; white-space: nowrap; }
   .prod-table td { border: 1px solid #333; padding: 5px 7px; vertical-align: top; }
-  .prod-table th:nth-child(5), .prod-table th:nth-child(6), .prod-table th:nth-child(7), .prod-table th:nth-child(8), .prod-table th:nth-child(9) { text-align: right; }
+  .prod-table th:nth-child(5), .prod-table th:nth-child(6), .prod-table th:nth-child(7), .prod-table th:nth-child(8), .prod-table th:nth-child(9), .prod-table th:nth-child(10) { text-align: right; }
   .total-row td { border: 1px solid #333; padding: 4px 8px; }
   .total-row td:first-child { font-weight: 700; text-align: right; }
   .total-row td:last-child { font-weight: 700; text-align: right; }
@@ -1779,7 +1786,7 @@ function BudgetEditor({
   <thead>
     <tr>
       <th>Ref</th><th>Linha</th><th>Cor</th><th>Formato</th>
-      <th>Valor m²</th><th>Qnt m²</th><th>M²/cx</th><th>Peso total</th><th>Valor R$</th>
+      <th>Valor m²</th><th>Qnt m²</th><th>M² real</th><th>M²/cx</th><th>Peso total</th><th>Valor R$</th>
     </tr>
   </thead>
   <tbody>
@@ -1890,6 +1897,7 @@ ${budget.observacoes ? `
                     <th className="text-left px-3 py-2.5 font-medium hidden md:table-cell">Formato</th>
                     <th className="text-right px-3 py-2.5 font-medium">m²</th>
                     <th className="text-right px-3 py-2.5 font-medium">Cx</th>
+                    <th className="text-right px-3 py-2.5 font-medium hidden md:table-cell">m² real</th>
                     <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">R$/m²</th>
                     <th className="text-right px-3 py-2.5 font-medium hidden lg:table-cell">Peso</th>
                     <th className="text-right px-3 py-2.5 font-medium">Subtotal</th>
@@ -1901,6 +1909,7 @@ ${budget.observacoes ? `
                     const isEditing = editingItemId === item.id;
                     const previewArea = parseFloat(editAreaInput.replace(",", ".")) || 0;
                     const previewCx = item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : 0;
+                    const previewRealArea = round2(previewCx * (item.product.m2PorCaixa || 0));
                     const previewWeight = round2(previewCx * (item.product.pesoBrutoCx || 0));
                     const editPrecoBase = item.product[priceKey(editTabela)] as number | null;
                     const editPrecoM2 = editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
@@ -1935,6 +1944,11 @@ ${budget.observacoes ? `
                           {isEditing && previewArea > 0
                             ? <span className="text-primary font-semibold">{previewCx}</span>
                             : item.caixas}
+                        </td>
+                        <td className="px-3 py-3 text-right font-mono text-sm hidden md:table-cell">
+                          {isEditing && previewArea > 0
+                            ? <span className="text-primary font-semibold">{previewRealArea.toFixed(2)}</span>
+                            : calculateItemRealAreaM2(item).toFixed(2)}
                         </td>
                         <td className="px-3 py-3 text-right text-sm hidden sm:table-cell">
                           {isEditing ? (

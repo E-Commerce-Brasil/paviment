@@ -2437,8 +2437,8 @@ ${budget.observacoes ? `
                   <span className="text-muted-foreground">Argamassas</span>
                   <span className="font-mono">{fmtBRL(argamassaSubtotal)}</span>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">{topSubtotalLabel}</span>
+                <div className="flex justify-between text-sm font-semibold pt-2 border-t border-border">
+                  <span>{topSubtotalLabel}</span>
                   <span className="font-mono">{fmtBRL(topSubtotalBeforeDiscount)}</span>
                 </div>
                 {topPixDiscount > 0 && (

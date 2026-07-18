@@ -1423,6 +1423,18 @@ function BudgetEditor({
   const isLocked = budget.status === "enviado_fabrica" || budget.status === "fechado";
   const villagresItems = budget.items.filter((item) => !isVillacolProduct(item.product));
   const villacolItems = budget.items.filter((item) => isVillacolProduct(item.product));
+  const topFinancialItems = budget.items.filter((item) => item.product?.categoriaComplementar !== "Rejunte");
+  const rejunteItems = budget.items.filter((item) => item.product?.categoriaComplementar === "Rejunte");
+  const cardFactor = 1 + (pricingSettings.impostoPercentual + pricingSettings.taxaCartaoPercentual) / 100;
+  const taxOnlyFactor = 1 + pricingSettings.impostoPercentual / 100;
+  const pixPriceFactor = cardFactor > 0 ? taxOnlyFactor / cardFactor : 1;
+  const noTaxOrCardFactor = cardFactor > 0 ? 1 / cardFactor : 1;
+  const topSubtotalBeforeDiscount = round2(topFinancialItems.reduce((sum, item) => sum + item.subtotal * (budget.formaPagamento === "avista_pix" ? pixPriceFactor : 1), 0));
+  const topPixDiscount = budget.formaPagamento === "avista_pix" ? round2(topSubtotalBeforeDiscount * Math.min(budget.descontoPixPercentual, 3) / 100) : 0;
+  const topTotal = round2(topSubtotalBeforeDiscount - topPixDiscount);
+  const rejunteSubtotal = round2(rejunteItems.reduce((sum, item) => sum + item.subtotal * noTaxOrCardFactor, 0));
+  const pixOnlySubtotal = round2(rejunteSubtotal + budget.frete);
+  const generalTotal = round2(topTotal + pixOnlySubtotal);
   const totalWeightKg = calculateBudgetWeightKg(budget.items);
   const suggestedFreightByWeight = calculateFreightByWeight(budget.items, pricingSettings.fretePor100Kg);
 
@@ -1606,7 +1618,7 @@ function BudgetEditor({
     const forma = formaPagamento;
     const parcelas = forma === "cartao" ? Math.min(Math.max(parseInt(parcelasCartao) || 1, 1), 6) : 1;
     const desconto = forma === "avista_pix" ? Math.min(parseDecimalInput(descontoPix), 3) : 0;
-    const incluiFrete = forma === "avista_pix" ? descontoPixIncluiFrete : false;
+    const incluiFrete = false;
     setSaving(true);
     try {
       const b = updateLocal({ frete: fr, percentualImposto: 0, formaPagamento: forma, parcelasCartao: parcelas, descontoPixPercentual: desconto, descontoPixIncluiFrete: incluiFrete, observacoes: obs });
@@ -1849,11 +1861,15 @@ ${complementaryRows ? `<div class="section-header">PRODUTOS COMPLEMENTARES</div>
 
 <div class="clearfix">
   <table class="totals-box">
-    <tr><td>Forma de Pagamento</td><td>${budget.formaPagamento === "cartao" ? `Cartão em ${budget.parcelasCartao}x` : budget.formaPagamento === "avista_pix" ? "À vista - PIX" : "À vista"}</td></tr>
+    <tr><td>Pagamento Villagres/Argamassas</td><td>${budget.formaPagamento === "cartao" ? `Cartão em ${budget.parcelasCartao}x sem juros` : budget.formaPagamento === "avista_pix" ? "PIX" : "Débito"}</td></tr>
+    <tr><td>Subtotal Villagres/Argamassas</td><td>${fmtBRLStr(topSubtotalBeforeDiscount)}</td></tr>
+    ${topPixDiscount > 0 ? `<tr><td>Desconto PIX (${budget.descontoPixPercentual}%)</td><td>- ${fmtBRLStr(topPixDiscount)}</td></tr>` : ""}
+    <tr><td>Total Villagres/Argamassas</td><td>${fmtBRLStr(topTotal)}</td></tr>
+    <tr><td>Rejuntes Villacol (PIX)</td><td>${fmtBRLStr(rejunteSubtotal)}</td></tr>
+    ${budget.frete > 0 ? `<tr><td>Frete (PIX)</td><td>${fmtBRLStr(budget.frete)}</td></tr>` : ""}
+    <tr><td>Subtotal PIX</td><td>${fmtBRLStr(pixOnlySubtotal)}</td></tr>
     <tr><td>Peso total da carga</td><td>${fmtKg(calculateBudgetWeightKg(budget.items))}</td></tr>
-    ${budget.frete > 0 ? `<tr><td>Frete</td><td>${fmtBRLStr(budget.frete)}</td></tr>` : ""}
-    ${calculatePaymentDiscount(budget.subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual, budget.descontoPixIncluiFrete) > 0 ? `<tr><td>Desconto PIX (${budget.descontoPixPercentual}%${budget.descontoPixIncluiFrete ? " com frete" : ""})</td><td>- ${fmtBRLStr(calculatePaymentDiscount(budget.subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual, budget.descontoPixIncluiFrete))}</td></tr>` : ""}
-    <tr><td>TOTAL</td><td>${fmtBRLStr(budget.totalFinal)}</td></tr>
+    <tr><td>TOTAL GERAL</td><td>${fmtBRLStr(generalTotal)}</td></tr>
   </table>
 </div>
 
@@ -2196,8 +2212,8 @@ ${budget.observacoes ? `
                     <label className="text-xs font-medium text-muted-foreground block mb-1">Forma de pagamento</label>
                     <select value={formaPagamento} onChange={(e) => setFormaPagamento(e.target.value as FormaPagamento)}
                       className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25">
-                      <option value="avista">À vista</option>
-                      <option value="avista_pix">À vista - PIX</option>
+                      <option value="avista">Débito</option>
+                      <option value="avista_pix">PIX</option>
                       <option value="cartao">Cartão de crédito</option>
                     </select>
                   </div>
@@ -2215,15 +2231,6 @@ ${budget.observacoes ? `
                       <input type="text" value={descontoPix} onChange={(e) => handlePixDiscountChange(e.target.value)} placeholder="Até 3"
                         className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono" />
                       <p className="text-[11px] text-muted-foreground mt-1">Máximo permitido: 3%</p>
-                      <label className="mt-2 flex items-start gap-2 text-xs text-muted-foreground cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={descontoPixIncluiFrete}
-                          onChange={(e) => setDescontoPixIncluiFrete(e.target.checked)}
-                          className="mt-0.5 rounded border-border"
-                        />
-                        <span>Aplicar desconto também sobre o valor do frete</span>
-                      </label>
                     </div>
                   ) : null}
                 </div>
@@ -2244,12 +2251,12 @@ ${budget.observacoes ? `
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground text-xs">Pagamento</span>
-                  <span className="font-mono text-xs">{budget.formaPagamento === "cartao" ? `Cartão ${budget.parcelasCartao}x` : budget.formaPagamento === "avista_pix" ? "À vista PIX" : "À vista"}</span>
+                  <span className="font-mono text-xs">{budget.formaPagamento === "cartao" ? `Cartão ${budget.parcelasCartao}x` : budget.formaPagamento === "avista_pix" ? "PIX" : "Débito"}</span>
                 </div>
                 {budget.formaPagamento === "avista_pix" && budget.descontoPixPercentual > 0 && (
                   <div className="flex justify-between">
                     <span className="text-muted-foreground text-xs">Desconto PIX</span>
-                    <span className="font-mono text-xs">{budget.descontoPixPercentual}%{budget.descontoPixIncluiFrete ? " com frete" : ""}</span>
+                    <span className="font-mono text-xs">{budget.descontoPixPercentual}%</span>
                   </div>
                 )}
                 {budget.observacoes
@@ -2409,36 +2416,54 @@ ${budget.observacoes ? `
 
           <div className="bg-card border border-border rounded-2xl p-5">
             <h3 className="font-semibold text-sm mb-4">Resumo Financeiro</h3>
-            <div className="space-y-2.5">
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">
-                  Subtotal ({budget.items.length} {budget.items.length === 1 ? "produto" : "produtos"})
-                </span>
-                <span className="font-mono">{fmtBRL(budget.subtotal)}</span>
+            <div className="space-y-3">
+              <div className="rounded-xl border border-border p-3 space-y-2 bg-muted/10">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Villagres + Argamassas</p>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Pagamento</span>
+                  <span className="font-mono">{budget.formaPagamento === "cartao" ? `Cartão ${budget.parcelasCartao}x sem juros` : budget.formaPagamento === "avista_pix" ? "PIX" : "Débito"}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Subtotal</span>
+                  <span className="font-mono">{fmtBRL(topSubtotalBeforeDiscount)}</span>
+                </div>
+                {topPixDiscount > 0 && (
+                  <div className="flex justify-between text-sm text-green-700">
+                    <span>Desconto PIX ({budget.descontoPixPercentual}%)</span>
+                    <span className="font-mono">- {fmtBRL(topPixDiscount)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-sm font-semibold pt-2 border-t border-border">
+                  <span>Total</span>
+                  <span className="font-mono">{fmtBRL(topTotal)}</span>
+                </div>
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Pagamento</span>
-                <span className="font-mono">{budget.formaPagamento === "cartao" ? `Cartão ${budget.parcelasCartao}x` : budget.formaPagamento === "avista_pix" ? "À vista PIX" : "À vista"}</span>
+
+              <div className="rounded-xl border border-border p-3 space-y-2 bg-muted/10">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Frete + Rejuntes Villacol (PIX)</p>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Rejuntes</span>
+                  <span className="font-mono">{fmtBRL(rejunteSubtotal)}</span>
+                </div>
+                {budget.frete > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Frete</span>
+                    <span className="font-mono">{fmtBRL(budget.frete)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-sm font-semibold pt-2 border-t border-border">
+                  <span>Subtotal PIX</span>
+                  <span className="font-mono">{fmtBRL(pixOnlySubtotal)}</span>
+                </div>
               </div>
+
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Peso total da carga</span>
                 <span className="font-mono">{fmtKg(totalWeightKg)}</span>
               </div>
-              {budget.frete > 0 && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Frete</span>
-                  <span className="font-mono">{fmtBRL(budget.frete)}</span>
-                </div>
-              )}
-              {calculatePaymentDiscount(budget.subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual, budget.descontoPixIncluiFrete) > 0 && (
-                <div className="flex justify-between text-sm text-green-700">
-                  <span>Desconto PIX ({budget.descontoPixPercentual}%{budget.descontoPixIncluiFrete ? " com frete" : ""})</span>
-                  <span className="font-mono">- {fmtBRL(calculatePaymentDiscount(budget.subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual, budget.descontoPixIncluiFrete))}</span>
-                </div>
-              )}
               <div className="border-t border-border pt-3 flex justify-between items-baseline">
-                <span className="font-semibold">Total Final</span>
-                <span className="font-mono text-2xl font-semibold text-primary">{fmtBRL(budget.totalFinal)}</span>
+                <span className="font-semibold">Total Geral</span>
+                <span className="font-mono text-2xl font-semibold text-primary">{fmtBRL(generalTotal)}</span>
               </div>
             </div>
             {budget.items.length > 0 && (

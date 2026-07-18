@@ -1429,7 +1429,12 @@ function BudgetEditor({
   const taxOnlyFactor = 1 + pricingSettings.impostoPercentual / 100;
   const pixPriceFactor = cardFactor > 0 ? taxOnlyFactor / cardFactor : 1;
   const noTaxOrCardFactor = cardFactor > 0 ? 1 / cardFactor : 1;
-  const topSubtotalBeforeDiscount = round2(topFinancialItems.reduce((sum, item) => sum + item.subtotal * (budget.formaPagamento === "avista_pix" ? pixPriceFactor : 1), 0));
+  const paymentPriceFactor = budget.formaPagamento === "avista_pix" ? pixPriceFactor : 1;
+  const villagresSubtotal = round2(villagresItems.reduce((sum, item) => sum + item.subtotal * paymentPriceFactor, 0));
+  const argamassaSubtotal = round2(topFinancialItems
+    .filter((item) => item.product?.categoriaComplementar === "Argamassa")
+    .reduce((sum, item) => sum + item.subtotal * paymentPriceFactor, 0));
+  const topSubtotalBeforeDiscount = round2(villagresSubtotal + argamassaSubtotal);
   const topPixDiscount = budget.formaPagamento === "avista_pix" ? round2(topSubtotalBeforeDiscount * Math.min(budget.descontoPixPercentual, 3) / 100) : 0;
   const topTotal = round2(topSubtotalBeforeDiscount - topPixDiscount);
   const rejunteSubtotal = round2(rejunteItems.reduce((sum, item) => sum + item.subtotal * noTaxOrCardFactor, 0));
@@ -1862,6 +1867,8 @@ ${complementaryRows ? `<div class="section-header">PRODUTOS COMPLEMENTARES</div>
 <div class="clearfix">
   <table class="totals-box">
     <tr><td>Pagamento Villagres/Argamassas</td><td>${budget.formaPagamento === "cartao" ? `Cartão em ${budget.parcelasCartao}x sem juros` : budget.formaPagamento === "avista_pix" ? "PIX" : "Débito"}</td></tr>
+    <tr><td>Produtos Villagres</td><td>${fmtBRLStr(villagresSubtotal)}</td></tr>
+    <tr><td>Argamassas</td><td>${fmtBRLStr(argamassaSubtotal)}</td></tr>
     <tr><td>Subtotal Villagres/Argamassas</td><td>${fmtBRLStr(topSubtotalBeforeDiscount)}</td></tr>
     ${topPixDiscount > 0 ? `<tr><td>Desconto PIX (${budget.descontoPixPercentual}%)</td><td>- ${fmtBRLStr(topPixDiscount)}</td></tr>` : ""}
     <tr><td>Total Villagres/Argamassas</td><td>${fmtBRLStr(topTotal)}</td></tr>
@@ -2422,6 +2429,14 @@ ${budget.observacoes ? `
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Pagamento</span>
                   <span className="font-mono">{budget.formaPagamento === "cartao" ? `Cartão ${budget.parcelasCartao}x sem juros` : budget.formaPagamento === "avista_pix" ? "PIX" : "Débito"}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Produtos Villagres</span>
+                  <span className="font-mono">{fmtBRL(villagresSubtotal)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Argamassas</span>
+                  <span className="font-mono">{fmtBRL(argamassaSubtotal)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Subtotal</span>

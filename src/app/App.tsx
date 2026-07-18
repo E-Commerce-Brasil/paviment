@@ -1871,7 +1871,6 @@ ${complementaryRows ? `<div class="section-header">PRODUTOS COMPLEMENTARES</div>
     <tr><td>Argamassas</td><td>${fmtBRLStr(argamassaSubtotal)}</td></tr>
     <tr><td>Subtotal Villagres/Argamassas</td><td>${fmtBRLStr(topSubtotalBeforeDiscount)}</td></tr>
     ${topPixDiscount > 0 ? `<tr><td>Desconto PIX (${budget.descontoPixPercentual}%)</td><td>- ${fmtBRLStr(topPixDiscount)}</td></tr>` : ""}
-    <tr><td>Total Villagres/Argamassas</td><td>${fmtBRLStr(topTotal)}</td></tr>
     <tr><td>Rejuntes Villacol (PIX)</td><td>${fmtBRLStr(rejunteSubtotal)}</td></tr>
     ${budget.frete > 0 ? `<tr><td>Frete (PIX)</td><td>${fmtBRLStr(budget.frete)}</td></tr>` : ""}
     <tr><td>Subtotal PIX</td><td>${fmtBRLStr(pixOnlySubtotal)}</td></tr>
@@ -2448,10 +2447,6 @@ ${budget.observacoes ? `
                     <span className="font-mono">- {fmtBRL(topPixDiscount)}</span>
                   </div>
                 )}
-                <div className="flex justify-between text-sm font-semibold pt-2 border-t border-border">
-                  <span>Total</span>
-                  <span className="font-mono">{fmtBRL(topTotal)}</span>
-                </div>
               </div>
 
               <div className="rounded-xl border border-border p-3 space-y-2 bg-muted/10">

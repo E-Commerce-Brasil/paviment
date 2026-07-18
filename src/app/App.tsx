@@ -970,6 +970,16 @@ function fmtKg(v: number): string {
   return `${v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kg`;
 }
 
+function isVillacolProduct(product?: Product | null): boolean {
+  return product?.marca === "Villacol";
+}
+
+function getComplementaryUnitLabel(product?: Product | null, plural = false): string {
+  if (product?.categoriaComplementar === "Rejunte") return plural ? "potes" : "pote";
+  if (product?.categoriaComplementar === "Argamassa") return plural ? "sacos" : "saco";
+  return plural ? "unidades" : "unidade";
+}
+
 function calculateItemRealAreaM2(item: BudgetItem): number {
   const caixas = Number.isFinite(item.caixas) ? item.caixas : 0;
   const m2PorCaixa = Number.isFinite(item.product?.m2PorCaixa) ? item.product.m2PorCaixa : 0;
@@ -1151,7 +1161,7 @@ function ProductModal({
   function confirmAdd() {
     if (!selected) return;
     const area = parseFloat(areaInput.replace(",", "."));
-    if (!area || area <= 0) { toast.error("Informe a área em m²"); return; }
+    if (!area || area <= 0) { toast.error(isVillacolProduct(selected) ? "Informe a quantidade" : "Informe a área em m²"); return; }
     onSelect(selected, area, selectedTabela);
   }
 
@@ -1163,6 +1173,8 @@ function ProductModal({
     const price = priceBase != null ? calculateFinalPrice(priceBase, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
     const area = parseFloat(areaInput.replace(",", ".")) || 0;
     const caixas = selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : 0;
+    const selectedIsVillacol = isVillacolProduct(selected);
+    const selectedUnitLabel = getComplementaryUnitLabel(selected, caixas !== 1);
 
     return (
       <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
@@ -1176,9 +1188,18 @@ function ProductModal({
               {selected.linha}
               {selected.cor && selected.cor !== "única" && selected.cor !== "-" ? ` · ${selected.cor}` : ""}
             </h3>
-            <p className="text-sm text-muted-foreground mt-0.5">{selected.colecao} · {selected.superficie}</p>
-            <p className="text-xs text-muted-foreground mt-0.5 font-mono">{selected.formato} · Ref: {selected.referencia}</p>
-            <p className="text-xs text-muted-foreground">{LOCAL_USO[selected.localUso]} · {selected.m2PorCaixa} m²/cx · {selected.espessuraMm}mm</p>
+            {selectedIsVillacol ? (
+              <>
+                <p className="text-sm text-muted-foreground mt-0.5">{selected.categoriaComplementar} · {selected.tipoEmbalagem || selected.tipoRejunte || "Embalagem"}</p>
+                <p className="text-xs text-muted-foreground mt-0.5 font-mono">Ref: {selected.referencia}</p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground mt-0.5">{selected.colecao} · {selected.superficie}</p>
+                <p className="text-xs text-muted-foreground mt-0.5 font-mono">{selected.formato} · Ref: {selected.referencia}</p>
+                <p className="text-xs text-muted-foreground">{LOCAL_USO[selected.localUso]} · {selected.m2PorCaixa} m²/cx · {selected.espessuraMm}mm</p>
+              </>
+            )}
           </div>
           <div className="mb-4">
             <p className="text-xs font-medium text-muted-foreground mb-1.5">Tabela de preço deste produto</p>
@@ -1195,7 +1216,7 @@ function ProductModal({
             <div className="bg-primary/8 rounded-xl p-3 mb-4 flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Tabela {selectedTabela}</span>
               <span className="text-xl font-semibold text-primary font-mono">
-                {fmtBRL(price)}<span className="text-sm font-normal text-muted-foreground">/m²</span>
+                {fmtBRL(price)}<span className="text-sm font-normal text-muted-foreground">{selectedIsVillacol ? "/un." : "/m²"}</span>
               </span>
             </div>
           ) : (
@@ -1203,21 +1224,23 @@ function ProductModal({
               <AlertTriangle size={14} /> Preço não disponível para tabela {selectedTabela}
             </div>
           )}
-          <label className="block text-xs font-medium text-muted-foreground mb-1">Área necessária (m²)</label>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">{selectedIsVillacol ? `Quantidade de ${getComplementaryUnitLabel(selected, true)}` : "Área necessária (m²)"}</label>
           <input type="text" value={areaInput} onChange={(e) => setAreaInput(e.target.value)}
-            placeholder="Ex: 45,50" autoFocus
+            placeholder={selectedIsVillacol ? "Ex: 10" : "Ex: 45,50"} autoFocus
             onKeyDown={(e) => e.key === "Enter" && confirmAdd()}
             className="w-full border border-border rounded-xl px-4 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 mb-3 font-mono" />
           {area > 0 && selected.m2PorCaixa > 0 && (
             <div className="bg-muted rounded-xl p-3 mb-4 text-sm space-y-1.5">
               <div className="flex justify-between text-muted-foreground">
-                <span>Caixas necessárias</span>
-                <span className="font-mono font-medium text-foreground">{caixas} cx</span>
+                <span>{selectedIsVillacol ? "Quantidade calculada" : "Caixas necessárias"}</span>
+                <span className="font-mono font-medium text-foreground">{caixas} {selectedIsVillacol ? selectedUnitLabel : "cx"}</span>
               </div>
-              <div className="flex justify-between text-muted-foreground">
-                <span>m² real (arredondado)</span>
-                <span className="font-mono text-foreground">{(caixas * selected.m2PorCaixa).toFixed(2)} m²</span>
-              </div>
+              {!selectedIsVillacol && (
+                <div className="flex justify-between text-muted-foreground">
+                  <span>m² real (arredondado)</span>
+                  <span className="font-mono text-foreground">{(caixas * selected.m2PorCaixa).toFixed(2)} m²</span>
+                </div>
+              )}
               {price && (
                 <div className="flex justify-between pt-1.5 border-t border-border font-medium">
                   <span>Subtotal estimado</span>
@@ -1398,6 +1421,8 @@ function BudgetEditor({
   const [showDeliveryModal, setShowDeliveryModal] = useState(false);
 
   const isLocked = budget.status === "enviado_fabrica" || budget.status === "fechado";
+  const villagresItems = budget.items.filter((item) => !isVillacolProduct(item.product));
+  const villacolItems = budget.items.filter((item) => isVillacolProduct(item.product));
   const totalWeightKg = calculateBudgetWeightKg(budget.items);
   const suggestedFreightByWeight = calculateFreightByWeight(budget.items, pricingSettings.fretePor100Kg);
 
@@ -1708,7 +1733,7 @@ function BudgetEditor({
 
     const deliveryAddressForPrint = budget.enderecoEntrega || (deliveryMode === "customer" ? customerAddr : buildFullAddress(entrega));
 
-    const rows = budget.items.map((item) => {
+    const rows = villagresItems.map((item) => {
       const p = item.product;
       const cor = p?.cor && p.cor !== "única" && p.cor !== "-" ? p.cor : "";
       return `<tr>
@@ -1721,6 +1746,21 @@ function BudgetEditor({
         <td style="text-align:right">${calculateItemRealAreaM2(item).toFixed(2)}</td>
         <td style="text-align:right">${p?.m2PorCaixa ?? ""}</td>
         <td style="text-align:right">${fmtKg(calculateItemWeightKg(item))}</td>
+        <td style="text-align:right">${fmtBRLStr(item.subtotal)}</td>
+      </tr>`;
+    }).join("");
+
+    const complementaryRows = villacolItems.map((item) => {
+      const p = item.product;
+      const embalagem = p?.tipoEmbalagem || p?.tipoRejunte || p?.categoriaComplementar || "";
+      return `<tr>
+        <td>${p?.referencia ?? ""}</td>
+        <td>${p?.linha ?? ""}</td>
+        <td>${p?.categoriaComplementar ?? ""}</td>
+        <td>${embalagem}</td>
+        <td style="text-align:right">${item.caixas} ${getComplementaryUnitLabel(p, item.caixas !== 1)}</td>
+        <td style="text-align:right">${fmtKg(calculateItemWeightKg(item))}</td>
+        <td style="text-align:right">${fmtBRLStr(item.precoM2)}</td>
         <td style="text-align:right">${fmtBRLStr(item.subtotal)}</td>
       </tr>`;
     }).join("");
@@ -1781,7 +1821,7 @@ function BudgetEditor({
   ${deliveryAddressForPrint ? `<tr><td>Endereço de Entrega</td><td>${deliveryAddressForPrint}</td></tr>` : ""}
 </table>
 
-<div class="section-header">PRODUTOS / ESPECIFICAÇÕES</div>
+${rows ? `<div class="section-header">PRODUTOS / ESPECIFICAÇÕES</div>
 <table class="prod-table">
   <thead>
     <tr>
@@ -1792,7 +1832,20 @@ function BudgetEditor({
   <tbody>
     ${rows}
   </tbody>
-</table>
+</table>` : ""}
+
+${complementaryRows ? `<div class="section-header">PRODUTOS COMPLEMENTARES</div>
+<table class="prod-table">
+  <thead>
+    <tr>
+      <th>Ref</th><th>Produto</th><th>Tipo</th><th>Embalagem</th>
+      <th>Quantidade</th><th>Peso total</th><th>Valor un.</th><th>Valor R$</th>
+    </tr>
+  </thead>
+  <tbody>
+    ${complementaryRows}
+  </tbody>
+</table>` : ""}
 
 <div class="clearfix">
   <table class="totals-box">
@@ -1890,7 +1943,8 @@ ${budget.observacoes ? `
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              {villagresItems.length > 0 && (
+                <table className="w-full text-sm">
                 <thead>
                   <tr className="text-xs text-muted-foreground bg-muted/30 border-b border-border">
                     <th className="text-left px-5 py-2.5 font-medium">Produto</th>
@@ -1905,7 +1959,7 @@ ${budget.observacoes ? `
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {budget.items.map((item) => {
+                  {villagresItems.map((item) => {
                     const isEditing = editingItemId === item.id;
                     const previewArea = parseFloat(editAreaInput.replace(",", ".")) || 0;
                     const previewCx = item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : 0;
@@ -1999,7 +2053,107 @@ ${budget.observacoes ? `
                     );
                   })}
                 </tbody>
-              </table>
+                </table>
+              )}
+
+              {villacolItems.length > 0 && (
+                <div className="border-t border-border mt-2">
+                  <div className="px-5 py-3 bg-muted/20 border-b border-border">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Produtos complementares Villacol</h3>
+                  </div>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-xs text-muted-foreground bg-muted/30 border-b border-border">
+                        <th className="text-left px-5 py-2.5 font-medium">Produto</th>
+                        <th className="text-left px-3 py-2.5 font-medium hidden md:table-cell">Embalagem</th>
+                        <th className="text-right px-3 py-2.5 font-medium">Quantidade</th>
+                        <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">Peso total</th>
+                        <th className="text-right px-3 py-2.5 font-medium hidden md:table-cell">Valor un.</th>
+                        <th className="text-right px-3 py-2.5 font-medium">Subtotal</th>
+                        <th className="px-3 py-2.5 w-16"></th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {villacolItems.map((item) => {
+                        const isEditing = editingItemId === item.id;
+                        const previewQty = parseFloat(editAreaInput.replace(",", ".")) || 0;
+                        const previewCx = item.product.m2PorCaixa > 0 ? Math.ceil(previewQty / item.product.m2PorCaixa) : Math.ceil(previewQty);
+                        const previewWeight = round2(previewCx * (item.product.pesoBrutoCx || 0));
+                        const editPrecoBase = item.product[priceKey(editTabela)] as number | null;
+                        const editPrecoM2 = editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
+                        const embalagem = item.product.tipoEmbalagem || item.product.tipoRejunte || item.product.categoriaComplementar || "—";
+                        const unitLabel = getComplementaryUnitLabel(item.product, item.caixas !== 1);
+                        const previewUnitLabel = getComplementaryUnitLabel(item.product, previewCx !== 1);
+                        return (
+                          <tr key={item.id} className={`transition-colors ${isEditing ? "bg-primary/4" : "hover:bg-muted/20"}`}>
+                            <td className="px-5 py-3">
+                              <p className="font-medium text-sm leading-tight">{item.product.linha}</p>
+                              <p className="text-xs text-muted-foreground">{item.product.categoriaComplementar}{item.product.cor ? ` · ${item.product.cor}` : ""}</p>
+                              <p className="text-xs text-muted-foreground font-mono">Ref: {item.product.referencia}</p>
+                            </td>
+                            <td className="px-3 py-3 text-xs text-muted-foreground hidden md:table-cell">{embalagem}</td>
+                            <td className="px-3 py-3 text-right">
+                              {isEditing ? (
+                                <input type="text" value={editAreaInput} onChange={(e) => setEditAreaInput(e.target.value)}
+                                  onKeyDown={(e) => { if (e.key === "Enter") confirmEditItem(item.id); if (e.key === "Escape") setEditingItemId(null); }}
+                                  autoFocus
+                                  className="w-20 border border-primary rounded-lg px-2 py-1 text-sm text-right font-mono bg-card focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                              ) : (
+                                <button onClick={() => !isLocked && startEditItem(item)}
+                                  className={`font-mono text-sm group flex items-center gap-1 ml-auto transition-colors ${isLocked ? "cursor-default" : "hover:text-primary"}`}
+                                  title={isLocked ? "Orçamento bloqueado" : "Clique para editar quantidade"}>
+                                  {item.caixas} {unitLabel}
+                                  {!isLocked && <Pencil size={10} className="opacity-0 group-hover:opacity-40 transition-opacity" />}
+                                </button>
+                              )}
+                              {isEditing && previewQty > 0 && <p className="text-[10px] text-primary mt-1">{previewCx} {previewUnitLabel}</p>}
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono text-sm hidden sm:table-cell">
+                              {isEditing && previewQty > 0 ? fmtKg(previewWeight) : fmtKg(calculateItemWeightKg(item))}
+                            </td>
+                            <td className="px-3 py-3 text-right text-sm hidden md:table-cell">
+                              {isEditing ? (
+                                <div className="space-y-1">
+                                  <div className="grid grid-cols-4 gap-1">
+                                    {([1, 2, 3, 4] as const).map((t) => (
+                                      <button key={t} type="button" onClick={() => setEditTabela(t)}
+                                        className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                                        T{t}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  <p className="font-mono text-primary font-semibold">{fmtBRL(editPrecoM2)}</p>
+                                </div>
+                              ) : <span className="font-mono">{fmtBRL(item.precoM2)}</span>}
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono font-semibold text-sm">
+                              {isEditing && previewQty > 0
+                                ? <span className="text-primary">{fmtBRL(previewQty * editPrecoM2)}</span>
+                                : fmtBRL(item.subtotal)}
+                            </td>
+                            <td className="px-3 py-3">
+                              {isEditing ? (
+                                <div className="flex items-center gap-1.5">
+                                  <button onClick={() => confirmEditItem(item.id)} className="text-primary hover:opacity-70" title="Confirmar"><Check size={14} /></button>
+                                  <button onClick={() => setEditingItemId(null)} className="text-muted-foreground hover:text-foreground" title="Cancelar"><X size={14} /></button>
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-1.5">
+                                  {!isLocked && <button onClick={() => startEditItem(item)} className="text-muted-foreground hover:text-primary transition-colors" title="Editar quantidade"><Pencil size={13} /></button>}
+                                  <button onClick={() => handleRemoveItem(item.id)} disabled={removingId === item.id || isLocked}
+                                    className="text-muted-foreground hover:text-destructive transition-colors disabled:opacity-40" title="Remover">
+                                    {removingId === item.id ? <Spinner size={13} /> : <Trash2 size={13} />}
+                                  </button>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
         </div>

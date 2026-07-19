@@ -5,7 +5,7 @@ import pavimentLogoPrint from "../imports/WhatsApp_Image_2026-07-11_at_10.17.07-
 import {
   Search, Plus, ArrowLeft, Package, FileText,
   Trash2, Send, Save, X, ChevronRight,
-  RotateCcw, AlertTriangle, Pencil, Check, Copy, Printer,
+  RotateCcw, AlertTriangle, Pencil, Check, Copy, Printer, LogOut,
 } from "lucide-react";
 import { Toaster, toast } from "sonner";
 import { projectId, publicAnonKey } from "../../utils/supabase/info";
@@ -73,6 +73,18 @@ interface BudgetItem {
 }
 
 type BudgetStatus = "rascunho" | "enviado_fabrica" | "enviado_cliente" | "fechado" | "cancelado";
+type AppUserRole = "admin" | "vendas";
+
+interface AppUser {
+  username: AppUserRole;
+  password: string;
+  label: string;
+}
+
+const APP_USERS: AppUser[] = [
+  { username: "admin", password: "Neiemara2026", label: "Administrador" },
+  { username: "vendas", password: "Vendas2026", label: "Vendas" },
+];
 
 interface Budget {
   id: string;
@@ -84,6 +96,7 @@ interface Budget {
   percentualImposto: number;
   observacoes?: string;
   tecnico?: string;
+  createdByUser?: AppUserRole;
   enderecoEntrega?: string;
   items: BudgetItem[];
   subtotal: number;
@@ -166,6 +179,7 @@ function mapBudget(r: any, items: BudgetItem[] = []): Budget {
     percentualImposto: parseFloat(r.percentual_imposto) || 0,
     observacoes: r.observacoes || "",
     tecnico: r.tecnico || "",
+    createdByUser: (r.created_by_user || "admin") as AppUserRole,
     enderecoEntrega: r.endereco_entrega || "",
     items,
     subtotal: parseFloat(r.subtotal) || 0,
@@ -220,6 +234,7 @@ CREATE TABLE IF NOT EXISTS budgets (
   percentual_imposto DECIMAL(5,2) DEFAULT 0,
   observacoes TEXT, subtotal DECIMAL(12,2) DEFAULT 0,
   total_final DECIMAL(12,2) DEFAULT 0,
+  created_by_user TEXT DEFAULT 'admin',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -240,6 +255,8 @@ ALTER TABLE budget_items DISABLE ROW LEVEL SECURITY;
 
 -- Migrações (execute se já tiver as tabelas criadas)
 ALTER TABLE budgets ADD COLUMN IF NOT EXISTS tecnico TEXT;
+ALTER TABLE budgets ADD COLUMN IF NOT EXISTS created_by_user TEXT DEFAULT 'admin';
+UPDATE budgets SET created_by_user = 'admin' WHERE created_by_user IS NULL;
 ALTER TABLE budgets ADD COLUMN IF NOT EXISTS endereco_entrega TEXT;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
@@ -373,10 +390,12 @@ function mapBudgetSummary(r: any): BudgetSummary {
   return { ...mapBudget(r, []), customerNome: r.customers?.nome || "", customerCidade: r.customers?.cidade || "" };
 }
 
-async function fetchRecentBudgets(limit = 5): Promise<BudgetSummary[]> {
-  const { data, error } = await supabase
+async function fetchRecentBudgets(currentUser: AppUser, limit = 5): Promise<BudgetSummary[]> {
+  let q = supabase
     .from("budgets")
-    .select("*, customers(nome, cidade)")
+    .select("*, customers(nome, cidade)");
+  if (currentUser.username !== "admin") q = q.eq("created_by_user", currentUser.username);
+  const { data, error } = await q
     .order("created_at", { ascending: false })
     .limit(limit);
   if (error) throw error;
@@ -386,8 +405,9 @@ async function fetchRecentBudgets(limit = 5): Promise<BudgetSummary[]> {
 async function fetchBudgetsFiltered(filters: {
   tecnico?: string; status?: string; customerQ?: string;
   dataInicio?: string; dataFim?: string;
-}): Promise<BudgetSummary[]> {
+}, currentUser: AppUser): Promise<BudgetSummary[]> {
   let q = supabase.from("budgets").select("*, customers(nome, cidade)");
+  if (currentUser.username !== "admin") q = q.eq("created_by_user", currentUser.username);
   if (filters.tecnico) q = q.eq("tecnico", filters.tecnico);
   if (filters.status) q = q.eq("status", filters.status);
   if (filters.dataInicio) q = q.gte("created_at", filters.dataInicio);
@@ -582,11 +602,13 @@ async function deleteCustomer(id: string): Promise<void> {
   if (error) throw error;
 }
 
-async function getBudgetsForCustomer(customerId: string): Promise<Budget[]> {
-  const { data, error } = await supabase
+async function getBudgetsForCustomer(customerId: string, currentUser: AppUser): Promise<Budget[]> {
+  let q = supabase
     .from("budgets")
     .select("*")
-    .eq("customer_id", customerId)
+    .eq("customer_id", customerId);
+  if (currentUser.username !== "admin") q = q.eq("created_by_user", currentUser.username);
+  const { data, error } = await q
     .order("numero", { ascending: false });
   if (error) throw error;
   return (data || []).map((r) => mapBudget(r, []));
@@ -602,10 +624,10 @@ async function getBudgetWithItems(budgetId: string): Promise<Budget> {
   return mapBudget(b, (items || []).map(mapItem));
 }
 
-async function createBudget(customerId: string, tecnico: string): Promise<Budget> {
+async function createBudget(customerId: string, tecnico: string, currentUser: AppUser): Promise<Budget> {
   const { data, error } = await supabase
     .from("budgets")
-    .insert({ customer_id: customerId, status: "rascunho", tabela_preco: 1, frete: 0, percentual_imposto: 0.65, tecnico })
+    .insert({ customer_id: customerId, status: "rascunho", tabela_preco: 1, frete: 0, percentual_imposto: 0.65, tecnico, created_by_user: currentUser.username })
     .select()
     .single();
   if (error) throw error;
@@ -616,6 +638,8 @@ async function runMigrations(): Promise<void> {
   try {
     await supabase.rpc("exec_sql", { sql: `
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS tecnico TEXT;
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS created_by_user TEXT DEFAULT 'admin';
+      UPDATE budgets SET created_by_user = 'admin' WHERE created_by_user IS NULL;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS endereco_entrega TEXT;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
@@ -685,7 +709,7 @@ async function deleteBudget(id: string): Promise<void> {
   if (error) throw error;
 }
 
-async function duplicateBudget(original: Budget, tecnico: string): Promise<Budget> {
+async function duplicateBudget(original: Budget, tecnico: string, currentUser: AppUser): Promise<Budget> {
   const { data, error } = await supabase
     .from("budgets")
     .insert({
@@ -696,6 +720,7 @@ async function duplicateBudget(original: Budget, tecnico: string): Promise<Budge
       percentual_imposto: original.percentualImposto,
       observacoes: original.observacoes,
       tecnico,
+      created_by_user: currentUser.username,
       subtotal: original.subtotal,
       total_final: original.totalFinal,
     })
@@ -754,6 +779,10 @@ const LOCAL_USO: Record<number, string> = {
 
 function priceKey(t: 1 | 2 | 3 | 4): keyof Product {
   return `preco${t}` as keyof Product;
+}
+
+function canAccessBudget(currentUser: AppUser, budget: Budget): boolean {
+  return currentUser.username === "admin" || budget.createdByUser === currentUser.username;
 }
 
 function Spinner({ size = 20 }: { size?: number }) {
@@ -1011,10 +1040,10 @@ function ProductModal({
 // ── Budget Editor ─────────────────────────────────────────────────
 
 function BudgetEditor({
-  budget: initBudget, allProducts, customer, onBack, onGoHome, onBudgetChange, onOpenBudget,
+  budget: initBudget, allProducts, customer, currentUser, onBack, onGoHome, onLogout, onBudgetChange, onOpenBudget,
 }: {
-  budget: Budget; allProducts: Product[]; customer: Customer;
-  onBack: () => void; onGoHome: () => void; onBudgetChange: (b: Budget) => void;
+  budget: Budget; allProducts: Product[]; customer: Customer; currentUser: AppUser;
+  onBack: () => void; onGoHome: () => void; onLogout: () => void; onBudgetChange: (b: Budget) => void;
   onOpenBudget?: (b: Budget) => void;
 }) {
   const [budget, setBudget] = useState<Budget>(initBudget);
@@ -1049,7 +1078,7 @@ function BudgetEditor({
     if (!tecnico) { toast.error("Selecione o técnico responsável"); return; }
     setDuplicating(true);
     try {
-      const newBudget = await duplicateBudget(budget, tecnico);
+      const newBudget = await duplicateBudget(budget, tecnico, currentUser);
       const full = await getBudgetWithItems(newBudget.id);
       setShowDuplicateModal(false);
       toast.success(`Orçamento #${full.numero} criado como cópia!`);
@@ -1718,9 +1747,9 @@ ${budget.observacoes ? `
 // ── Customer View ─────────────────────────────────────────────────
 
 function CustomerView({
-  customer: initCustomer, allProducts, onBack, onOpenBudget,
+  customer: initCustomer, allProducts, currentUser, onBack, onOpenBudget,
 }: {
-  customer: Customer; allProducts: Product[];
+  customer: Customer; allProducts: Product[]; currentUser: AppUser;
   onBack: () => void;
   onOpenBudget: (b: Budget, c: Customer) => void;
 }) {
@@ -1742,12 +1771,12 @@ function CustomerView({
   async function loadBudgets() {
     setLoading(true);
     try {
-      setBudgets(await getBudgetsForCustomer(customer.id));
+      setBudgets(await getBudgetsForCustomer(customer.id, currentUser));
     } catch { toast.error("Erro ao carregar orçamentos"); }
     finally { setLoading(false); }
   }
 
-  useEffect(() => { loadBudgets(); }, [customer.id]);
+  useEffect(() => { loadBudgets(); }, [customer.id, currentUser]);
 
   function openTecnicoModal() {
     setTecnicoSelecionado("");
@@ -1761,7 +1790,7 @@ function CustomerView({
     setShowTecnicoModal(false);
     setCreating(true);
     try {
-      const b = await createBudget(customer.id, tecnico);
+      const b = await createBudget(customer.id, tecnico, currentUser);
       onOpenBudget(b, customer);
     } catch (e: any) { toast.error("Erro: " + e.message); setCreating(false); }
   }
@@ -2428,9 +2457,11 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
 
 // ── Customer Search (Home) ────────────────────────────────────────
 
-function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
+function CustomerSearch({ onSelect, allProducts, currentUser, onLogout, onOpenBudgetById }: {
   onSelect: (c: Customer) => void;
   allProducts: Product[];
+  currentUser: AppUser;
+  onLogout: () => void;
   onOpenBudgetById: (budgetId: string, customerId: string) => void;
 }) {
   const [tab, setTab] = useState<"orcamentos" | "clientes" | "produtos">("orcamentos");
@@ -2456,11 +2487,11 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
   const hasFilter = !!(filterTecnico || filterStatus || filterCliente || filterDataInicio || filterDataFim);
 
   useEffect(() => {
-    fetchRecentBudgets(5)
+    fetchRecentBudgets(currentUser, 5)
       .then(setRecentBudgets)
       .catch(() => {})
       .finally(() => setBudgetsLoading(false));
-  }, []);
+  }, [currentUser]);
 
   useEffect(() => {
     if (!hasFilter) { setFilteredBudgets([]); return; }
@@ -2470,12 +2501,12 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
         setFilteredBudgets(await fetchBudgetsFiltered({
           tecnico: filterTecnico, status: filterStatus, customerQ: filterCliente,
           dataInicio: filterDataInicio, dataFim: filterDataFim,
-        }));
+        }, currentUser));
       } catch {}
       finally { setIsFiltering(false); }
     }, 300);
     return () => clearTimeout(t);
-  }, [filterTecnico, filterStatus, filterCliente, filterDataInicio, filterDataFim]);
+  }, [filterTecnico, filterStatus, filterCliente, filterDataInicio, filterDataFim, currentUser]);
 
   useEffect(() => {
     if (!q.trim()) { setResults([]); return; }
@@ -2534,6 +2565,12 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
             <p className="mt-1.5 text-xs tracking-[0.18em] uppercase opacity-35 font-light">
               Sala Técnica · Representante Comercial
             </p>
+            <div className="mt-3 flex items-center gap-2 text-xs opacity-80">
+              <span>{currentUser.label}</span>
+              <button onClick={onLogout} className="border border-white/25 rounded-lg px-2 py-1 hover:bg-white/10 flex items-center gap-1">
+                <LogOut size={12} /> Sair
+              </button>
+            </div>
             <div className="w-6 h-px bg-white/25 mt-3" />
           </div>
 
@@ -2827,6 +2864,45 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
   );
 }
 
+
+// ── Login Screen ──────────────────────────────────────────────────
+
+function LoginScreen({ onLogin }: { onLogin: (user: AppUser) => void }) {
+  const [username, setUsername] = useState<AppUserRole>("vendas");
+  const [password, setPassword] = useState("");
+
+  function submit(e?: React.FormEvent) {
+    e?.preventDefault();
+    const user = APP_USERS.find((u) => u.username === username && u.password === password);
+    if (!user) { toast.error("Usuário ou senha inválidos"); return; }
+    setPassword("");
+    onLogin(user);
+  }
+
+  return (
+    <div className="min-h-screen bg-background flex items-center justify-center p-4">
+      <form onSubmit={submit} className="w-full max-w-sm bg-card border border-border rounded-2xl p-6 shadow-sm">
+        <div className="text-center mb-6">
+          <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-serif)" }}>Paviment</h1>
+          <p className="text-sm text-muted-foreground mt-1">Acesse o sistema de orçamentos</p>
+        </div>
+        <label className="block text-xs font-medium text-muted-foreground mb-1">Usuário</label>
+        <select value={username} onChange={(e) => setUsername(e.target.value as AppUserRole)}
+          className="w-full border border-border rounded-xl px-4 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 mb-3">
+          {APP_USERS.map((u) => <option key={u.username} value={u.username}>{u.username}</option>)}
+        </select>
+        <label className="block text-xs font-medium text-muted-foreground mb-1">Senha</label>
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus
+          className="w-full border border-border rounded-xl px-4 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 mb-4" />
+        <button type="submit" className="w-full bg-primary text-primary-foreground py-3 rounded-xl text-sm font-medium hover:opacity-90">
+          Entrar
+        </button>
+      </form>
+      <Toaster position="bottom-right" richColors />
+    </div>
+  );
+}
+
 // ── App Root ──────────────────────────────────────────────────────
 
 type View =
@@ -2840,6 +2916,7 @@ export default function App() {
   const [initMsg, setInitMsg] = useState("Verificando banco de dados...");
   const [initError, setInitError] = useState<string | null>(null);
   const [allProducts, setAllProducts] = useState<Product[]>([]);
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
 
   async function init() {
     setAppState("loading");
@@ -2875,6 +2952,11 @@ export default function App() {
 
   useEffect(() => { init(); }, []);
 
+  function handleLogout() {
+    setCurrentUser(null);
+    setView({ type: "home" });
+  }
+
   if (appState === "setup") {
     return <SetupScreen onVerify={init} />;
   }
@@ -2906,18 +2988,25 @@ export default function App() {
     );
   }
 
+  if (!currentUser) {
+    return <LoginScreen onLogin={setCurrentUser} />;
+  }
+
   return (
     <>
       {view.type === "home" && (
         <CustomerSearch
           onSelect={(c) => setView({ type: "customer", customer: c })}
           allProducts={allProducts}
+          currentUser={currentUser}
+          onLogout={handleLogout}
           onOpenBudgetById={async (budgetId, customerId) => {
             try {
               const [full, { data: cData }] = await Promise.all([
                 getBudgetWithItems(budgetId),
                 supabase.from("customers").select("*").eq("id", customerId).single(),
               ]);
+              if (!canAccessBudget(currentUser, full)) { toast.error("Você não tem acesso a este orçamento."); return; }
               if (cData) setView({ type: "budget", budget: full, customer: mapCustomer(cData) });
             } catch (e: any) { toast.error("Erro ao abrir orçamento: " + e.message); }
           }}
@@ -2927,6 +3016,7 @@ export default function App() {
         <CustomerView
           customer={view.customer}
           allProducts={allProducts}
+          currentUser={currentUser}
           onBack={() => setView({ type: "home" })}
           onOpenBudget={(b, c) => setView({ type: "budget", budget: b, customer: c })}
         />
@@ -2936,8 +3026,10 @@ export default function App() {
           budget={view.budget}
           allProducts={allProducts}
           customer={view.customer}
+          currentUser={currentUser}
           onBack={() => setView({ type: "customer", customer: view.customer })}
           onGoHome={() => setView({ type: "home" })}
+          onLogout={handleLogout}
           onBudgetChange={(b) => setView({ type: "budget", budget: b, customer: view.customer })}
           onOpenBudget={(b) => setView({ type: "budget", budget: b, customer: view.customer })}
         />

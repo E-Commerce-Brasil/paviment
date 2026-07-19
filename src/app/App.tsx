@@ -187,7 +187,7 @@ function mapBudget(r: any, items: BudgetItem[] = []): Budget {
     id: r.id,
     numero: r.numero,
     customerId: r.customer_id,
-    status: r.status as BudgetStatus,
+    status: (r.status === "enviado_fabrica" ? "rascunho" : r.status) as BudgetStatus,
     tabelaPreco: r.tabela_preco as 1 | 2 | 3 | 4,
     frete: parseFloat(r.frete) || 0,
     percentualImposto: parseFloat(r.percentual_imposto) || 0,
@@ -1006,11 +1006,13 @@ function fmtDate(iso: string): string {
 
 const STATUS_LABELS: Record<BudgetStatus, string> = {
   rascunho: "Rascunho",
-  enviado_fabrica: "Enviado à Fábrica",
-  enviado_cliente: "Enviado ao Cliente",
-  fechado: "Fechado",
+  enviado_fabrica: "Rascunho",
+  enviado_cliente: "PDF Gerado e Enviado ao Cliente",
+  fechado: "Fechado e Pago",
   cancelado: "Cancelado",
 };
+
+const BUDGET_STATUS_OPTIONS: BudgetStatus[] = ["rascunho", "enviado_cliente", "fechado", "cancelado"];
 
 const STATUS_PILL: Record<BudgetStatus, string> = {
   rascunho: "bg-amber-100 text-amber-800 border-amber-200",
@@ -1420,7 +1422,7 @@ function BudgetEditor({
   const [consultandoEntregaCep, setConsultandoEntregaCep] = useState(false);
   const [showDeliveryModal, setShowDeliveryModal] = useState(false);
 
-  const isLocked = budget.status === "enviado_fabrica" || budget.status === "fechado";
+  const isLocked = budget.status === "fechado";
   const villagresItems = budget.items.filter((item) => !isVillacolProduct(item.product));
   const villacolItems = budget.items.filter((item) => isVillacolProduct(item.product));
   const topFinancialItems = budget.items.filter((item) => item.product?.categoriaComplementar !== "Rejunte");
@@ -1727,6 +1729,11 @@ function BudgetEditor({
   }
 
   async function changeStatus(status: BudgetStatus) {
+    if (budget.status === "fechado") {
+      toast.error("Orçamento fechado e pago não pode ter o status alterado.");
+      return;
+    }
+    if (status === "enviado_fabrica") return;
     setSaving(true);
     try {
       await saveBudgetFields(budget.id, { status });
@@ -1895,6 +1902,15 @@ ${budget.observacoes ? `
 
     const w = window.open("", "_blank");
     if (w) { w.document.write(html); w.document.close(); }
+    if (budget.status !== "fechado" && budget.status !== "enviado_cliente") {
+      try {
+        await saveBudgetFields(budget.id, { status: "enviado_cliente" });
+        updateLocal({ status: "enviado_cliente" });
+        setIsDirty(false);
+      } catch (e: any) {
+        toast.error("PDF gerado, mas não foi possível atualizar o status: " + e.message);
+      }
+    }
   }
 
   return (
@@ -1921,9 +1937,10 @@ ${budget.observacoes ? `
           <div className="flex items-center gap-2 ml-auto">
             <span className="text-xs opacity-60">Status:</span>
             <select value={budget.status} onChange={(e) => changeStatus(e.target.value as BudgetStatus)}
-              className="bg-white/10 border border-white/20 rounded-lg px-2 py-1 text-xs focus:outline-none">
-              {Object.entries(STATUS_LABELS).map(([k, v]) => (
-                <option key={k} value={k} className="text-foreground bg-card">{v}</option>
+              disabled={budget.status === "fechado"}
+              className="bg-white/10 border border-white/20 rounded-lg px-2 py-1 text-xs focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed">
+              {BUDGET_STATUS_OPTIONS.map((status) => (
+                <option key={status} value={status} className="text-foreground bg-card">{STATUS_LABELS[status]}</option>
               ))}
             </select>
           </div>
@@ -3974,7 +3991,7 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
                 <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}
                   className="border border-border rounded-xl px-3 py-2 text-xs bg-card focus:outline-none focus:ring-2 focus:ring-primary/20">
                   <option value="">Status</option>
-                  {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  {BUDGET_STATUS_OPTIONS.map((status) => <option key={status} value={status}>{STATUS_LABELS[status]}</option>)}
                 </select>
                 <div className="relative">
                   <input value={filterCliente} onChange={(e) => setFilterCliente(e.target.value)}

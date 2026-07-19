@@ -2407,16 +2407,6 @@ ${budget.observacoes ? `
                 title={!canSaveDraft ? "Faça uma alteração para salvar novamente como rascunho" : undefined}>
                 {saving ? <Spinner size={14} /> : <Save size={14} />} Salvar Rascunho
               </button>
-              <div className="grid grid-cols-2 gap-2">
-                <button onClick={() => changeStatus("enviado_fabrica")}
-                  className="flex items-center justify-center gap-1.5 border border-primary text-primary py-2 rounded-xl text-xs font-medium hover:bg-primary/5 transition-colors">
-                  <Send size={12} /> Fábrica
-                </button>
-                <button onClick={() => changeStatus("enviado_cliente")}
-                  className="flex items-center justify-center gap-1.5 border border-border py-2 rounded-xl text-xs hover:bg-muted transition-colors">
-                  <Send size={12} /> Cliente
-                </button>
-              </div>
               <button onClick={printBudget}
                 className="w-full flex items-center justify-center gap-2 border border-border py-2.5 rounded-xl text-xs hover:bg-muted transition-colors text-muted-foreground hover:text-foreground">
                 <Printer size={13} /> Imprimir / Gerar PDF

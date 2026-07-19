@@ -5,7 +5,7 @@ import pavimentLogoPrint from "../imports/WhatsApp_Image_2026-07-11_at_10.17.07-
 import {
   Search, Plus, ArrowLeft, Package, FileText,
   Trash2, Send, Save, X, ChevronRight,
-  RotateCcw, AlertTriangle, Pencil, Check, Copy, Printer,
+  RotateCcw, AlertTriangle, Pencil, Check, Copy, Printer, LogOut,
 } from "lucide-react";
 import { Toaster, toast } from "sonner";
 import { projectId, publicAnonKey } from "../../utils/supabase/info";
@@ -1028,10 +1028,10 @@ function ProductModal({
 // ── Budget Editor ─────────────────────────────────────────────────
 
 function BudgetEditor({
-  budget: initBudget, allProducts, customer, currentUser, onBack, onGoHome, onBudgetChange, onOpenBudget,
+  budget: initBudget, allProducts, customer, currentUser, onBack, onGoHome, onLogout, onBudgetChange, onOpenBudget,
 }: {
   budget: Budget; allProducts: Product[]; customer: Customer; currentUser: AppUser;
-  onBack: () => void; onGoHome: () => void; onBudgetChange: (b: Budget) => void;
+  onBack: () => void; onGoHome: () => void; onLogout: () => void; onBudgetChange: (b: Budget) => void;
   onOpenBudget?: (b: Budget) => void;
 }) {
   const [budget, setBudget] = useState<Budget>(initBudget);
@@ -1347,6 +1347,9 @@ ${budget.observacoes ? `
           </button>
           <button onClick={onGoHome} className="hover:opacity-70 transition-opacity text-xs opacity-60 hover:opacity-90 border border-white/20 px-2.5 py-1 rounded-lg" title="Tela inicial">
             Início
+          </button>
+          <button onClick={onLogout} className="hover:opacity-90 transition-opacity text-xs opacity-70 hover:opacity-100 border border-white/20 px-2.5 py-1 rounded-lg flex items-center gap-1" title="Sair do sistema">
+            <LogOut size={12} /> Sair
           </button>
           <div className="flex-1 min-w-0">
             <p className="text-xs opacity-60 truncate">{customer.nome}</p>
@@ -1702,10 +1705,10 @@ ${budget.observacoes ? `
 // ── Customer View ─────────────────────────────────────────────────
 
 function CustomerView({
-  customer: initCustomer, allProducts, currentUser, onBack, onOpenBudget,
+  customer: initCustomer, allProducts, currentUser, onBack, onLogout, onOpenBudget,
 }: {
   customer: Customer; allProducts: Product[]; currentUser: AppUser;
-  onBack: () => void;
+  onBack: () => void; onLogout: () => void;
   onOpenBudget: (b: Budget, c: Customer) => void;
 }) {
   const [customer, setCustomer] = useState(initCustomer);
@@ -1776,9 +1779,14 @@ function CustomerView({
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <header className="bg-primary text-primary-foreground px-5 pt-4 pb-5">
-        <button onClick={onBack} className="flex items-center gap-1.5 text-xs opacity-60 hover:opacity-90 mb-3 transition-opacity">
-          <ArrowLeft size={14} /> Voltar
-        </button>
+        <div className="flex items-center justify-between mb-3">
+          <button onClick={onBack} className="flex items-center gap-1.5 text-xs opacity-60 hover:opacity-90 transition-opacity">
+            <ArrowLeft size={14} /> Voltar
+          </button>
+          <button onClick={onLogout} className="flex items-center gap-1.5 text-xs opacity-60 hover:opacity-90 transition-opacity border border-white/20 px-2.5 py-1 rounded-lg">
+            <LogOut size={12} /> Sair
+          </button>
+        </div>
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-xl font-semibold">{customer.nome}</h1>
@@ -2354,8 +2362,8 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
 
 // ── Customer Search (Home) ────────────────────────────────────────
 
-function CustomerSearch({ onSelect, allProducts, currentUser, onOpenBudgetById }: {
-  onSelect: (c: Customer) => void; currentUser: AppUser;
+function CustomerSearch({ onSelect, allProducts, currentUser, onLogout, onOpenBudgetById }: {
+  onSelect: (c: Customer) => void; currentUser: AppUser; onLogout: () => void;
   allProducts: Product[];
   onOpenBudgetById: (budgetId: string, customerId: string) => void;
 }) {
@@ -2462,8 +2470,15 @@ function CustomerSearch({ onSelect, allProducts, currentUser, onOpenBudgetById }
             <div className="w-6 h-px bg-white/25 mt-3" />
           </div>
 
-          {/* RIGHT — VILLAGRES */}
-          <div className="flex justify-end">
+          {/* RIGHT — VILLAGRES / SAIR */}
+          <div className="flex justify-end items-center gap-4">
+            <div className="text-right hidden sm:block">
+              <p className="text-[10px] uppercase tracking-wide opacity-40">Logado como</p>
+              <p className="text-xs font-medium opacity-80">{currentUser.username}</p>
+              <button onClick={onLogout} className="mt-1 inline-flex items-center gap-1 text-xs opacity-60 hover:opacity-95 transition-opacity border border-white/20 px-2.5 py-1 rounded-lg">
+                <LogOut size={12} /> Sair
+              </button>
+            </div>
             <img
               src="/src/imports/logo_villagre.png"
               alt="Villagres"
@@ -2836,6 +2851,11 @@ export default function App() {
 
   useEffect(() => { init(); }, []);
 
+  function handleLogout() {
+    setCurrentUser(null);
+    setView({ type: "home" });
+  }
+
   if (!currentUser) {
     return <LoginScreen onLogin={setCurrentUser} />;
   }
@@ -2878,6 +2898,7 @@ export default function App() {
           onSelect={(c) => setView({ type: "customer", customer: c })}
           allProducts={allProducts}
           currentUser={currentUser}
+          onLogout={handleLogout}
           onOpenBudgetById={async (budgetId, customerId) => {
             try {
               const [full, { data: cData }] = await Promise.all([
@@ -2896,6 +2917,7 @@ export default function App() {
           allProducts={allProducts}
           currentUser={currentUser}
           onBack={() => setView({ type: "home" })}
+          onLogout={handleLogout}
           onOpenBudget={(b, c) => setView({ type: "budget", budget: b, customer: c })}
         />
       )}
@@ -2906,6 +2928,7 @@ export default function App() {
           customer={view.customer}
           currentUser={currentUser}
           onBack={() => setView({ type: "customer", customer: view.customer })}
+          onLogout={handleLogout}
           onGoHome={() => setView({ type: "home" })}
           onBudgetChange={(b) => setView({ type: "budget", budget: b, customer: view.customer })}
           onOpenBudget={(b) => setView({ type: "budget", budget: b, customer: view.customer })}

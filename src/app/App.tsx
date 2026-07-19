@@ -68,15 +68,11 @@ interface BudgetItem {
   areaM2: number;
   caixas: number;
   precoM2: number;
-  tabelaPreco: BudgetPriceTable;
   subtotal: number;
   observacao?: string;
 }
 
 type BudgetStatus = "rascunho" | "enviado_fabrica" | "enviado_cliente" | "fechado" | "cancelado";
-type ProductPriceTable = 1 | 2 | 3 | 4;
-type BudgetPriceTable = ProductPriceTable | "TE";
-
 type AppUserRole = "admin" | "vendas";
 
 interface AppUser {
@@ -85,12 +81,17 @@ interface AppUser {
   label: string;
 }
 
+const APP_USERS: AppUser[] = [
+  { username: "admin", password: "Neiemara2026", label: "Administrador" },
+  { username: "vendas", password: "Vendas2026", label: "Vendas" },
+];
+
 interface Budget {
   id: string;
   numero: number;
   customerId: string;
   status: BudgetStatus;
-  tabelaPreco: ProductPriceTable;
+  tabelaPreco: 1 | 2 | 3 | 4;
   frete: number;
   percentualImposto: number;
   observacoes?: string;
@@ -104,16 +105,7 @@ interface Budget {
   updatedAt: string;
 }
 
-const APP_USERS: AppUser[] = [
-  { username: "admin", password: "Neiemara2026", label: "Administrador" },
-  { username: "vendas", password: "Vendas2026", label: "Vendas" },
-];
-
 const TECNICOS = ["Fernanda Costa", "Ricardo Almeida", "Juliana Mendes"];
-
-function canAccessBudget(user: AppUser, budget: Pick<Budget, "createdByUser">): boolean {
-  return user.username === "admin" || budget.createdByUser === user.username;
-}
 
 // ── Mappers (DB snake_case → JS camelCase) ────────────────────────
 
@@ -171,7 +163,6 @@ function mapItem(r: any): BudgetItem {
     areaM2: parseFloat(r.area_m2),
     caixas: r.caixas,
     precoM2: parseFloat(r.preco_m2),
-    tabelaPreco: mapTabelaPreco(r.tabela_preco),
     subtotal: parseFloat(r.subtotal),
     observacao: r.observacao || "",
   };
@@ -183,7 +174,7 @@ function mapBudget(r: any, items: BudgetItem[] = []): Budget {
     numero: r.numero,
     customerId: r.customer_id,
     status: r.status as BudgetStatus,
-    tabelaPreco: mapProductTabelaPreco(r.tabela_preco),
+    tabelaPreco: r.tabela_preco as 1 | 2 | 3 | 4,
     frete: parseFloat(r.frete) || 0,
     percentualImposto: parseFloat(r.percentual_imposto) || 0,
     observacoes: r.observacoes || "",
@@ -256,7 +247,6 @@ CREATE TABLE IF NOT EXISTS budget_items (
   area_m2 DECIMAL(10,2) NOT NULL,
   caixas INTEGER NOT NULL,
   preco_m2 DECIMAL(12,4) NOT NULL,
-  tabela_preco INTEGER DEFAULT 1,
   subtotal DECIMAL(12,2) NOT NULL,
   observacao TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
@@ -268,8 +258,6 @@ ALTER TABLE budgets ADD COLUMN IF NOT EXISTS tecnico TEXT;
 ALTER TABLE budgets ADD COLUMN IF NOT EXISTS created_by_user TEXT DEFAULT 'admin';
 UPDATE budgets SET created_by_user = 'admin' WHERE created_by_user IS NULL;
 ALTER TABLE budgets ADD COLUMN IF NOT EXISTS endereco_entrega TEXT;
-ALTER TABLE budget_items ADD COLUMN IF NOT EXISTS tabela_preco INTEGER DEFAULT 1;
-UPDATE budget_items SET tabela_preco = 1 WHERE tabela_preco IS NULL;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS logradouro TEXT;
@@ -407,17 +395,20 @@ async function fetchRecentBudgets(currentUser: AppUser, limit = 5): Promise<Budg
     .from("budgets")
     .select("*, customers(nome, cidade)");
   if (currentUser.username !== "admin") q = q.eq("created_by_user", currentUser.username);
-  const { data, error } = await q.order("created_at", { ascending: false }).limit(limit);
+  const { data, error } = await q
+    .order("created_at", { ascending: false })
+    .limit(limit);
   if (error) throw error;
   return (data || []).map(mapBudgetSummary);
 }
 
-async function fetchBudgetsFiltered(currentUser: AppUser, filters: {
-  status?: string; customerQ?: string;
+async function fetchBudgetsFiltered(filters: {
+  tecnico?: string; status?: string; customerQ?: string;
   dataInicio?: string; dataFim?: string;
-}): Promise<BudgetSummary[]> {
+}, currentUser: AppUser): Promise<BudgetSummary[]> {
   let q = supabase.from("budgets").select("*, customers(nome, cidade)");
   if (currentUser.username !== "admin") q = q.eq("created_by_user", currentUser.username);
+  if (filters.tecnico) q = q.eq("tecnico", filters.tecnico);
   if (filters.status) q = q.eq("status", filters.status);
   if (filters.dataInicio) q = q.gte("created_at", filters.dataInicio);
   if (filters.dataFim) q = q.lte("created_at", filters.dataFim + "T23:59:59");
@@ -617,7 +608,8 @@ async function getBudgetsForCustomer(customerId: string, currentUser: AppUser): 
     .select("*")
     .eq("customer_id", customerId);
   if (currentUser.username !== "admin") q = q.eq("created_by_user", currentUser.username);
-  const { data, error } = await q.order("numero", { ascending: false });
+  const { data, error } = await q
+    .order("numero", { ascending: false });
   if (error) throw error;
   return (data || []).map((r) => mapBudget(r, []));
 }
@@ -632,10 +624,10 @@ async function getBudgetWithItems(budgetId: string): Promise<Budget> {
   return mapBudget(b, (items || []).map(mapItem));
 }
 
-async function createBudget(customerId: string, currentUser: AppUser): Promise<Budget> {
+async function createBudget(customerId: string, tecnico: string, currentUser: AppUser): Promise<Budget> {
   const { data, error } = await supabase
     .from("budgets")
-    .insert({ customer_id: customerId, status: "rascunho", tabela_preco: 1, frete: 0, percentual_imposto: 0.65, created_by_user: currentUser.username })
+    .insert({ customer_id: customerId, status: "rascunho", tabela_preco: 1, frete: 0, percentual_imposto: 0.65, tecnico, created_by_user: currentUser.username })
     .select()
     .single();
   if (error) throw error;
@@ -649,8 +641,6 @@ async function runMigrations(): Promise<void> {
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS created_by_user TEXT DEFAULT 'admin';
       UPDATE budgets SET created_by_user = 'admin' WHERE created_by_user IS NULL;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS endereco_entrega TEXT;
-      ALTER TABLE budget_items ADD COLUMN IF NOT EXISTS tabela_preco INTEGER DEFAULT 1;
-      UPDATE budget_items SET tabela_preco = 1 WHERE tabela_preco IS NULL;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS logradouro TEXT;
@@ -683,7 +673,7 @@ async function recalcBudgetTotals(budget: Budget): Promise<void> {
 
 async function addBudgetItem(budgetId: string, item: {
   productId: string; product: Product;
-  areaM2: number; caixas: number; precoM2: number; tabelaPreco: BudgetPriceTable; subtotal: number;
+  areaM2: number; caixas: number; precoM2: number; subtotal: number;
 }): Promise<BudgetItem> {
   const { data, error } = await supabase
     .from("budget_items")
@@ -693,7 +683,6 @@ async function addBudgetItem(budgetId: string, item: {
       area_m2: item.areaM2,
       caixas: item.caixas,
       preco_m2: item.precoM2,
-      tabela_preco: tabelaPrecoDbValue(item.tabelaPreco),
       subtotal: round2(item.subtotal),
     })
     .select("*, products(*)")
@@ -702,12 +691,10 @@ async function addBudgetItem(budgetId: string, item: {
   return mapItem(data);
 }
 
-async function updateBudgetItem(id: string, areaM2: number, caixas: number, precoM2: number, tabelaPreco?: BudgetPriceTable): Promise<void> {
-  const patch: any = { area_m2: areaM2, caixas, preco_m2: precoM2, subtotal: round2(areaM2 * precoM2) };
-  if (tabelaPreco) patch.tabela_preco = tabelaPrecoDbValue(tabelaPreco);
+async function updateBudgetItem(id: string, areaM2: number, caixas: number, precoM2: number): Promise<void> {
   const { error } = await supabase
     .from("budget_items")
-    .update(patch)
+    .update({ area_m2: areaM2, caixas, subtotal: round2(areaM2 * precoM2) })
     .eq("id", id);
   if (error) throw error;
 }
@@ -722,17 +709,17 @@ async function deleteBudget(id: string): Promise<void> {
   if (error) throw error;
 }
 
-async function duplicateBudget(original: Budget, currentUser: AppUser): Promise<Budget> {
+async function duplicateBudget(original: Budget, tecnico: string, currentUser: AppUser): Promise<Budget> {
   const { data, error } = await supabase
     .from("budgets")
     .insert({
       customer_id: original.customerId,
       status: "rascunho",
-      tabela_preco: tabelaPrecoDbValue(original.tabelaPreco),
+      tabela_preco: original.tabelaPreco,
       frete: original.frete,
       percentual_imposto: original.percentualImposto,
       observacoes: original.observacoes,
-      tecnico: original.tecnico,
+      tecnico,
       created_by_user: currentUser.username,
       subtotal: original.subtotal,
       total_final: original.totalFinal,
@@ -749,7 +736,6 @@ async function duplicateBudget(original: Budget, currentUser: AppUser): Promise<
       area_m2: i.areaM2,
       caixas: i.caixas,
       preco_m2: i.precoM2,
-      tabela_preco: tabelaPrecoDbValue(i.tabelaPreco),
       subtotal: i.subtotal,
       observacao: i.observacao,
     }));
@@ -791,26 +777,12 @@ const LOCAL_USO: Record<number, string> = {
   1: "Parede/Piso", 2: "Parede", 3: "Piso Interno", 4: "Piso Externo",
 };
 
-function mapProductTabelaPreco(value: unknown): ProductPriceTable {
-  const n = Number(value);
-  return n >= 1 && n <= 4 ? (n as ProductPriceTable) : 1;
-}
-
-function mapTabelaPreco(value: unknown): BudgetPriceTable {
-  if (Number(value) === 5 || value === "TE") return "TE";
-  return mapProductTabelaPreco(value);
-}
-
-function tabelaPrecoDbValue(t: BudgetPriceTable): number {
-  return t === "TE" ? 5 : t;
-}
-
-function tabelaPrecoLabel(t: BudgetPriceTable): string {
-  return t === "TE" ? "TE" : String(t);
-}
-
-function priceKey(t: ProductPriceTable): keyof Product {
+function priceKey(t: 1 | 2 | 3 | 4): keyof Product {
   return `preco${t}` as keyof Product;
+}
+
+function canAccessBudget(currentUser: AppUser, budget: Budget): boolean {
+  return currentUser.username === "admin" || budget.createdByUser === currentUser.username;
 }
 
 function Spinner({ size = 20 }: { size?: number }) {
@@ -894,8 +866,8 @@ function ProductModal({
   allProducts, tabelaPreco, onSelect, onClose,
 }: {
   allProducts: Product[];
-  tabelaPreco: ProductPriceTable;
-  onSelect: (product: Product, areaM2: number, itemTabela: BudgetPriceTable, precoM2: number) => void;
+  tabelaPreco: 1 | 2 | 3 | 4;
+  onSelect: (product: Product, areaM2: number) => void;
   onClose: () => void;
 }) {
   const [q, setQ] = useState("");
@@ -903,9 +875,7 @@ function ProductModal({
   const [localUso, setLocalUso] = useState("");
   const [selected, setSelected] = useState<Product | null>(null);
   const [areaInput, setAreaInput] = useState("");
-  const [itemTabela, setItemTabela] = useState<BudgetPriceTable>(tabelaPreco);
-  const [precoEspecialInput, setPrecoEspecialInput] = useState("");
-  const isTabelaEspecial = itemTabela === "TE";
+  const pk = priceKey(tabelaPreco);
 
   const results = allProducts.filter((p) => {
     if (p.descontinuado) return false;
@@ -917,27 +887,17 @@ function ProductModal({
       (!localUso || String(p.localUso) === localUso);
   }).slice(0, 100);
 
-  function resolvePrice(product: Product, tabela: BudgetPriceTable): number | null {
-    if (tabela === "TE") return parseFloat(precoEspecialInput.replace(",", ".")) || null;
-    return product[priceKey(tabela)] as number | null;
-  }
-
   function confirmAdd() {
     if (!selected) return;
     const area = parseFloat(areaInput.replace(",", "."));
     if (!area || area <= 0) { toast.error("Informe a área em m²"); return; }
-    const precoM2 = resolvePrice(selected, itemTabela);
-    if (!precoM2 || precoM2 <= 0) {
-      toast.error(isTabelaEspecial ? "Informe o preço especial por m²" : "Preço não disponível para a tabela escolhida");
-      return;
-    }
-    onSelect(selected, area, itemTabela, precoM2);
+    onSelect(selected, area);
   }
 
   const superficies = [...new Set(allProducts.map((p) => p.superficie).filter(Boolean))].sort();
 
   if (selected) {
-    const price = resolvePrice(selected, itemTabela);
+    const price = selected[pk] as number | null;
     const area = parseFloat(areaInput.replace(",", ".")) || 0;
     const caixas = selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : 0;
 
@@ -957,34 +917,16 @@ function ProductModal({
             <p className="text-xs text-muted-foreground mt-0.5 font-mono">{selected.formato} · Ref: {selected.referencia}</p>
             <p className="text-xs text-muted-foreground">{LOCAL_USO[selected.localUso]} · {selected.m2PorCaixa} m²/cx · {selected.espessuraMm}mm</p>
           </div>
-          <div className="mb-4">
-            <label className="block text-xs font-medium text-muted-foreground mb-2">Tabela de preço deste item</label>
-            <div className="grid grid-cols-5 gap-2">
-              {([1, 2, 3, 4, "TE"] as const).map((t) => (
-                <button key={t} onClick={() => setItemTabela(t)}
-                  className={`rounded-xl border py-2 text-sm font-semibold transition-all ${itemTabela === t ? "border-primary bg-primary/8 text-primary" : "border-border hover:border-primary/40"}`}>
-                  {tabelaPrecoLabel(t)}
-                </button>
-              ))}
-            </div>
-          </div>
-          {isTabelaEspecial ? (
-            <div className="mb-4">
-              <label className="block text-xs font-medium text-muted-foreground mb-1">Preço especial (R$/m²)</label>
-              <input type="text" value={precoEspecialInput} onChange={(e) => setPrecoEspecialInput(e.target.value)}
-                placeholder="Ex: 89,90"
-                className="w-full border border-border rounded-xl px-4 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono" />
-            </div>
-          ) : price ? (
+          {price ? (
             <div className="bg-primary/8 rounded-xl p-3 mb-4 flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Tabela {tabelaPrecoLabel(itemTabela)}</span>
+              <span className="text-sm text-muted-foreground">Tabela {tabelaPreco}</span>
               <span className="text-xl font-semibold text-primary font-mono">
                 {fmtBRL(price)}<span className="text-sm font-normal text-muted-foreground">/m²</span>
               </span>
             </div>
           ) : (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 flex items-center gap-2 text-sm text-amber-700">
-              <AlertTriangle size={14} /> Preço não disponível para tabela {tabelaPrecoLabel(itemTabela)}
+              <AlertTriangle size={14} /> Preço não disponível para tabela {tabelaPreco}
             </div>
           )}
           <label className="block text-xs font-medium text-muted-foreground mb-1">Área necessária (m²)</label>
@@ -1028,7 +970,7 @@ function ProductModal({
         <div className="px-5 py-4 border-b border-border flex items-center justify-between">
           <div>
             <h3 className="font-semibold">Buscar Produto</h3>
-            <p className="text-xs text-muted-foreground">Tabela padrão {tabelaPrecoLabel(tabelaPreco)} · selecione a tabela do item após escolher o produto</p>
+            <p className="text-xs text-muted-foreground">Tabela {tabelaPreco} ativa</p>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X size={18} /></button>
         </div>
@@ -1062,26 +1004,31 @@ function ProductModal({
             </div>
           ) : (
             <div className="divide-y divide-border">
-              {results.map((p) => (
-                <button key={p.id} onClick={() => setSelected(p)}
-                  className="w-full text-left px-5 py-3 hover:bg-muted/50 transition-colors group">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="font-medium text-sm">
-                        {p.linha}
-                        {p.cor && p.cor !== "única" && p.cor !== "-"
-                          ? <span className="text-muted-foreground font-normal"> · {p.cor}</span> : null}
-                      </p>
-                      <p className="text-xs text-muted-foreground mt-0.5">{p.formato} · {p.superficie} · {LOCAL_USO[p.localUso]}</p>
-                      <p className="text-xs text-muted-foreground font-mono">{p.referencia} · {p.colecao}</p>
+              {results.map((p) => {
+                const price = p[pk] as number | null;
+                return (
+                  <button key={p.id} onClick={() => setSelected(p)}
+                    className="w-full text-left px-5 py-3 hover:bg-muted/50 transition-colors group">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-medium text-sm">
+                          {p.linha}
+                          {p.cor && p.cor !== "única" && p.cor !== "-"
+                            ? <span className="text-muted-foreground font-normal"> · {p.cor}</span> : null}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-0.5">{p.formato} · {p.superficie} · {LOCAL_USO[p.localUso]}</p>
+                        <p className="text-xs text-muted-foreground font-mono">{p.referencia} · {p.colecao}</p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        {price
+                          ? <p className="text-sm font-semibold text-primary font-mono">{fmtBRL(price)}/m²</p>
+                          : <p className="text-xs text-amber-600">Consultar</p>}
+                        <p className="text-xs text-muted-foreground">{p.m2PorCaixa} m²/cx</p>
+                      </div>
                     </div>
-                    <div className="text-right shrink-0">
-                      <p className="text-xs text-muted-foreground">Escolher tabela</p>
-                      <p className="text-xs text-muted-foreground">{p.m2PorCaixa} m²/cx</p>
-                    </div>
-                  </div>
-                </button>
-              ))}
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
@@ -1112,6 +1059,8 @@ function BudgetEditor({
   const [showSaveDialog, setShowSaveDialog] = useState(false); // unused but kept for type safety
   const [isDirty, setIsDirty] = useState(false);
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
+  const [dupTecnico, setDupTecnico] = useState("");
+  const [dupTecnicoCustom, setDupTecnicoCustom] = useState("");
   const [duplicating, setDuplicating] = useState(false);
 
   // Delivery address
@@ -1125,9 +1074,11 @@ function BudgetEditor({
   const isLocked = budget.status === "enviado_fabrica" || budget.status === "fechado";
 
   async function handleDuplicate() {
+    const tecnico = dupTecnico === "__custom__" ? dupTecnicoCustom.trim() : dupTecnico;
+    if (!tecnico) { toast.error("Selecione o técnico responsável"); return; }
     setDuplicating(true);
     try {
-      const newBudget = await duplicateBudget(budget, currentUser);
+      const newBudget = await duplicateBudget(budget, tecnico, currentUser);
       const full = await getBudgetWithItems(newBudget.id);
       setShowDuplicateModal(false);
       toast.success(`Orçamento #${full.numero} criado como cópia!`);
@@ -1160,22 +1111,23 @@ function BudgetEditor({
       percentual_imposto: b.percentualImposto,
       observacoes: b.observacoes,
       status: b.status,
-      tabela_preco: tabelaPrecoDbValue(b.tabelaPreco),
+      tabela_preco: b.tabelaPreco,
     });
   }
 
-  async function handleAddProduct(product: Product, areaM2: number, itemTabela: BudgetPriceTable, precoM2: number) {
+  async function handleAddProduct(product: Product, areaM2: number) {
     const already = budget.items.find((i) => i.productId === product.id);
     if (already) {
       setShowModal(false);
       toast.warning(`"${product.linha}" já está no orçamento — edite a metragem diretamente na tabela.`);
       return;
     }
+    const precoM2 = product[priceKey(budget.tabelaPreco)] as number;
     const caixas = Math.ceil(areaM2 / product.m2PorCaixa);
     setSaving(true);
     try {
       const newItem = await addBudgetItem(budget.id, {
-        productId: product.id, product, areaM2, caixas, precoM2, tabelaPreco: itemTabela, subtotal: areaM2 * precoM2,
+        productId: product.id, product, areaM2, caixas, precoM2, subtotal: areaM2 * precoM2,
       });
       const b = updateLocal({ items: [...budget.items, newItem] });
       await persistTotals(b);
@@ -1210,39 +1162,13 @@ function BudgetEditor({
     const caixas = item.product.m2PorCaixa > 0 ? Math.ceil(newArea / item.product.m2PorCaixa) : item.caixas;
     setSaving(true);
     try {
-      await updateBudgetItem(itemId, newArea, caixas, item.precoM2, item.tabelaPreco);
+      await updateBudgetItem(itemId, newArea, caixas, item.precoM2);
       const updatedItem = { ...item, areaM2: newArea, caixas, subtotal: round2(newArea * item.precoM2) };
       const b = updateLocal({ items: budget.items.map((i) => i.id === itemId ? updatedItem : i) });
       await persistTotals(b);
       markDirty();
       setEditingItemId(null);
       toast.success("Metragem atualizada!");
-    } catch (e: any) { toast.error("Erro: " + e.message); }
-    finally { setSaving(false); }
-  }
-
-
-  async function handleChangeItemTabela(item: BudgetItem, tabelaPreco: BudgetPriceTable) {
-    if (isLocked) return;
-    let precoM2: number | null;
-    if (tabelaPreco === "TE") {
-      const input = prompt("Informe o preço especial (R$/m²) para este produto:", String(item.precoM2).replace(".", ","));
-      if (input === null) return;
-      precoM2 = parseFloat(input.replace(",", "."));
-      if (!precoM2 || precoM2 <= 0) { toast.error("Preço especial inválido"); return; }
-    } else {
-      precoM2 = item.product[priceKey(tabelaPreco)] as number | null;
-      if (!precoM2 || precoM2 <= 0) { toast.error(`Preço não disponível para tabela ${tabelaPreco}`); return; }
-    }
-
-    setSaving(true);
-    try {
-      await updateBudgetItem(item.id, item.areaM2, item.caixas, precoM2, tabelaPreco);
-      const updatedItem = { ...item, tabelaPreco, precoM2, subtotal: round2(item.areaM2 * precoM2) };
-      const b = updateLocal({ items: budget.items.map((i) => i.id === item.id ? updatedItem : i) });
-      await persistTotals(b);
-      markDirty();
-      toast.success(`Tabela ${tabelaPrecoLabel(tabelaPreco)} aplicada ao produto.`);
     } catch (e: any) { toast.error("Erro: " + e.message); }
     finally { setSaving(false); }
   }
@@ -1285,22 +1211,23 @@ function BudgetEditor({
     finally { setSaving(false); }
   }
 
-  async function changeTabela(t: ProductPriceTable) {
+  async function changeTabela(t: 1 | 2 | 3 | 4) {
     const pk = priceKey(t);
     const updatedItems = budget.items.map((item) => {
       const newPreco = item.product[pk] as number | null;
-      if (!newPreco || item.tabelaPreco === "TE") return item;
-      return { ...item, tabelaPreco: t, precoM2: newPreco, subtotal: round2(item.areaM2 * newPreco) };
+      if (!newPreco) return item;
+      return { ...item, precoM2: newPreco, subtotal: round2(item.areaM2 * newPreco) };
     });
     setSaving(true);
     try {
+      // Update each item price in DB
       await Promise.all(updatedItems.map((item) =>
-        updateBudgetItem(item.id, item.areaM2, item.caixas, item.precoM2, item.tabelaPreco)
+        updateBudgetItem(item.id, item.areaM2, item.caixas, item.precoM2)
       ));
       const b = updateLocal({ tabelaPreco: t, items: updatedItems });
       await persistTotals(b);
       markDirty();
-      toast.info(`Tabela ${t} — preços recalculados para itens não especiais`);
+      toast.info(`Tabela ${t} — preços recalculados`);
     } catch (e: any) { toast.error("Erro: " + e.message); }
     finally { setSaving(false); }
   }
@@ -1438,9 +1365,6 @@ ${budget.observacoes ? `
           <button onClick={onGoHome} className="hover:opacity-70 transition-opacity text-xs opacity-60 hover:opacity-90 border border-white/20 px-2.5 py-1 rounded-lg" title="Tela inicial">
             Início
           </button>
-          <button onClick={onLogout} className="hover:opacity-90 transition-opacity text-xs opacity-70 hover:opacity-100 border border-white/20 px-2.5 py-1 rounded-lg flex items-center gap-1" title="Sair do sistema">
-            <LogOut size={12} /> Sair
-          </button>
           <div className="flex-1 min-w-0">
             <p className="text-xs opacity-60 truncate">{customer.nome}</p>
             <p className="font-semibold text-sm">Orçamento #{budget.numero}</p>
@@ -1484,7 +1408,7 @@ ${budget.observacoes ? `
               </span>
             </div>
             <button
-              onClick={() => setShowDuplicateModal(true)}
+              onClick={() => { setDupTecnico(""); setDupTecnicoCustom(""); setShowDuplicateModal(true); }}
               className="flex items-center gap-1.5 bg-amber-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-amber-700 transition-colors shrink-0">
               <Copy size={13} /> Copiar Orçamento
             </button>
@@ -1517,7 +1441,6 @@ ${budget.observacoes ? `
                   <tr className="text-xs text-muted-foreground bg-muted/30 border-b border-border">
                     <th className="text-left px-5 py-2.5 font-medium">Produto</th>
                     <th className="text-left px-3 py-2.5 font-medium hidden md:table-cell">Formato</th>
-                    <th className="text-center px-3 py-2.5 font-medium">Tabela</th>
                     <th className="text-right px-3 py-2.5 font-medium">m²</th>
                     <th className="text-right px-3 py-2.5 font-medium">Cx</th>
                     <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">R$/m²</th>
@@ -1542,20 +1465,6 @@ ${budget.observacoes ? `
                           <p className="text-xs text-muted-foreground font-mono">Ref: {item.product?.referencia}</p>
                         </td>
                         <td className="px-3 py-3 text-xs text-muted-foreground hidden md:table-cell">{item.product?.formato}</td>
-                        <td className="px-3 py-3 text-center">
-                          {isLocked ? (
-                            <span className="inline-flex items-center justify-center rounded-full border border-border px-2 py-0.5 text-xs font-semibold text-primary bg-primary/5">
-                              {tabelaPrecoLabel(item.tabelaPreco)}
-                            </span>
-                          ) : (
-                            <select value={String(item.tabelaPreco)} onChange={(e) => handleChangeItemTabela(item, mapTabelaPreco(e.target.value))}
-                              className="border border-border rounded-lg px-2 py-1 text-xs bg-card focus:outline-none focus:ring-2 focus:ring-primary/20">
-                              {([1, 2, 3, 4, "TE"] as const).map((t) => (
-                                <option key={t} value={t}>{tabelaPrecoLabel(t)}</option>
-                              ))}
-                            </select>
-                          )}
-                        </td>
                         <td className="px-3 py-3 text-right">
                           {isEditing ? (
                             <input type="text" value={editAreaInput} onChange={(e) => setEditAreaInput(e.target.value)}
@@ -1772,7 +1681,7 @@ ${budget.observacoes ? `
               </div>
             )}
             <p className="mt-4 text-xs text-muted-foreground text-right">
-              #{budget.numero} · {fmtDate(budget.createdAt)} · Tabela {tabelaPrecoLabel(budget.tabelaPreco)}
+              #{budget.numero} · {fmtDate(budget.createdAt)} · Tabela {budget.tabelaPreco}
             </p>
           </div>
         </div>
@@ -1794,9 +1703,37 @@ ${budget.observacoes ? `
               </button>
             </div>
             <p className="text-sm text-muted-foreground mb-4">
-              A cópia do orçamento #{budget.numero} será criada para o usuário {currentUser.username}.
+              Selecione o técnico responsável pelo novo orçamento (cópia do #{budget.numero}):
             </p>
-            <button onClick={handleDuplicate} disabled={duplicating}
+            <div className="space-y-2 mb-4">
+              {TECNICOS.map((nome) => (
+                <button key={nome} onClick={() => setDupTecnico(nome)}
+                  className={`w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-all ${
+                    dupTecnico === nome
+                      ? "border-primary bg-primary/8 text-primary"
+                      : "border-border hover:border-primary/40 hover:bg-muted/40"
+                  }`}>
+                  {nome}
+                </button>
+              ))}
+              <button onClick={() => setDupTecnico("__custom__")}
+                className={`w-full text-left px-4 py-3 rounded-xl border text-sm transition-all ${
+                  dupTecnico === "__custom__"
+                    ? "border-primary bg-primary/8 text-primary"
+                    : "border-dashed border-border hover:border-primary/40 text-muted-foreground"
+                }`}>
+                + Outro nome...
+              </button>
+            </div>
+            {dupTecnico === "__custom__" && (
+              <input
+                type="text" value={dupTecnicoCustom} onChange={(e) => setDupTecnicoCustom(e.target.value)}
+                placeholder="Nome do técnico"
+                autoFocus
+                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 mb-4"
+              />
+            )}
+            <button onClick={handleDuplicate} disabled={duplicating || !dupTecnico || (dupTecnico === "__custom__" && !dupTecnicoCustom.trim())}
               className="w-full bg-amber-600 text-white py-3 rounded-xl text-sm font-medium hover:bg-amber-700 disabled:opacity-40 flex items-center justify-center gap-2 transition-colors mt-2">
               {duplicating ? <><Spinner size={14} /> Copiando...</> : <><Copy size={14} /> Criar Cópia</>}
             </button>
@@ -1810,10 +1747,10 @@ ${budget.observacoes ? `
 // ── Customer View ─────────────────────────────────────────────────
 
 function CustomerView({
-  customer: initCustomer, allProducts, currentUser, onBack, onLogout, onOpenBudget,
+  customer: initCustomer, allProducts, currentUser, onBack, onOpenBudget,
 }: {
   customer: Customer; allProducts: Product[]; currentUser: AppUser;
-  onBack: () => void; onLogout: () => void;
+  onBack: () => void;
   onOpenBudget: (b: Budget, c: Customer) => void;
 }) {
   const [customer, setCustomer] = useState(initCustomer);
@@ -1826,6 +1763,9 @@ function CustomerView({
     cpf: formatCPF(initCustomer.cpf || ""),
     telefone: formatPhone(initCustomer.telefone || ""),
   });
+  const [showTecnicoModal, setShowTecnicoModal] = useState(false);
+  const [tecnicoSelecionado, setTecnicoSelecionado] = useState("");
+  const [tecnicoCustom, setTecnicoCustom] = useState("");
   const [deleting, setDeleting] = useState(false);
 
   async function loadBudgets() {
@@ -1836,12 +1776,21 @@ function CustomerView({
     finally { setLoading(false); }
   }
 
-  useEffect(() => { loadBudgets(); }, [customer.id]);
+  useEffect(() => { loadBudgets(); }, [customer.id, currentUser]);
+
+  function openTecnicoModal() {
+    setTecnicoSelecionado("");
+    setTecnicoCustom("");
+    setShowTecnicoModal(true);
+  }
 
   async function handleCreateBudget() {
+    const tecnico = tecnicoSelecionado === "__custom__" ? tecnicoCustom.trim() : tecnicoSelecionado;
+    if (!tecnico) { toast.error("Selecione ou informe o técnico responsável"); return; }
+    setShowTecnicoModal(false);
     setCreating(true);
     try {
-      const b = await createBudget(customer.id, currentUser);
+      const b = await createBudget(customer.id, tecnico, currentUser);
       onOpenBudget(b, customer);
     } catch (e: any) { toast.error("Erro: " + e.message); setCreating(false); }
   }
@@ -1884,14 +1833,9 @@ function CustomerView({
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <header className="bg-primary text-primary-foreground px-5 pt-4 pb-5">
-        <div className="flex items-center justify-between mb-3">
-          <button onClick={onBack} className="flex items-center gap-1.5 text-xs opacity-60 hover:opacity-90 transition-opacity">
-            <ArrowLeft size={14} /> Voltar
-          </button>
-          <button onClick={onLogout} className="flex items-center gap-1.5 text-xs opacity-60 hover:opacity-90 transition-opacity border border-white/20 px-2.5 py-1 rounded-lg">
-            <LogOut size={12} /> Sair
-          </button>
-        </div>
+        <button onClick={onBack} className="flex items-center gap-1.5 text-xs opacity-60 hover:opacity-90 mb-3 transition-opacity">
+          <ArrowLeft size={14} /> Voltar
+        </button>
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-xl font-semibold">{customer.nome}</h1>
@@ -1915,7 +1859,7 @@ function CustomerView({
               className="border border-red-400/40 bg-red-500/10 text-red-200 hover:bg-red-500/20 px-3 py-1.5 rounded-lg text-xs transition-colors flex items-center gap-1 disabled:opacity-50">
               {deleting ? <Spinner size={11} /> : <Trash2 size={11} />} Excluir
             </button>
-            <button onClick={handleCreateBudget} disabled={creating}
+            <button onClick={openTecnicoModal} disabled={creating}
               className="bg-white/15 hover:bg-white/25 border border-white/20 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 disabled:opacity-50">
               {creating ? <Spinner size={12} /> : <Plus size={12} />} Novo Orçamento
             </button>
@@ -1949,7 +1893,7 @@ function CustomerView({
           <div className="text-center py-16">
             <FileText size={40} className="mx-auto mb-3 text-muted-foreground opacity-20" />
             <p className="text-sm text-muted-foreground">Nenhum orçamento ainda</p>
-            <button onClick={handleCreateBudget} className="mt-3 text-primary text-sm hover:underline">Criar primeiro orçamento</button>
+            <button onClick={openTecnicoModal} className="mt-3 text-primary text-sm hover:underline">Criar primeiro orçamento</button>
           </div>
         ) : (
           <div className="space-y-3">
@@ -1963,7 +1907,7 @@ function CustomerView({
                       <StatusPill status={b.status} />
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      {fmtDate(b.createdAt)} · Tabela {tabelaPrecoLabel(b.tabelaPreco)}
+                      {fmtDate(b.createdAt)} · Tabela {b.tabelaPreco}
                     </p>
                   </div>
                   <div className="text-right flex items-center gap-2">
@@ -1978,6 +1922,52 @@ function CustomerView({
           </div>
         )}
       </div>
+
+      {/* Modal seleção de técnico */}
+      {showTecnicoModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-card rounded-2xl shadow-2xl w-full max-w-sm p-6 border border-border">
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="font-semibold">Técnico Responsável</h3>
+              <button onClick={() => setShowTecnicoModal(false)} className="text-muted-foreground hover:text-foreground"><X size={16} /></button>
+            </div>
+            <p className="text-sm text-muted-foreground mb-4">Selecione quem está elaborando este orçamento:</p>
+            <div className="space-y-2 mb-4">
+              {TECNICOS.map((nome) => (
+                <button key={nome} onClick={() => setTecnicoSelecionado(nome)}
+                  className={`w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-all ${
+                    tecnicoSelecionado === nome
+                      ? "border-primary bg-primary/8 text-primary"
+                      : "border-border hover:border-primary/40 hover:bg-muted/40"
+                  }`}>
+                  {nome}
+                </button>
+              ))}
+              <button onClick={() => setTecnicoSelecionado("__custom__")}
+                className={`w-full text-left px-4 py-3 rounded-xl border text-sm transition-all ${
+                  tecnicoSelecionado === "__custom__"
+                    ? "border-primary bg-primary/8 text-primary"
+                    : "border-dashed border-border hover:border-primary/40 text-muted-foreground"
+                }`}>
+                + Outro nome...
+              </button>
+            </div>
+            {tecnicoSelecionado === "__custom__" && (
+              <input
+                type="text" value={tecnicoCustom} onChange={(e) => setTecnicoCustom(e.target.value)}
+                placeholder="Nome do técnico"
+                autoFocus
+                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 mb-4"
+              />
+            )}
+            <button onClick={handleCreateBudget}
+              disabled={!tecnicoSelecionado || (tecnicoSelecionado === "__custom__" && !tecnicoCustom.trim())}
+              className="w-full bg-primary text-primary-foreground py-3 rounded-xl text-sm font-medium hover:opacity-90 disabled:opacity-40 flex items-center justify-center gap-2">
+              <Plus size={14} /> Criar Orçamento
+            </button>
+          </div>
+        </div>
+      )}
 
       {showEdit && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 overflow-y-auto">
@@ -2468,8 +2458,10 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
 // ── Customer Search (Home) ────────────────────────────────────────
 
 function CustomerSearch({ onSelect, allProducts, currentUser, onLogout, onOpenBudgetById }: {
-  onSelect: (c: Customer) => void; currentUser: AppUser; onLogout: () => void;
+  onSelect: (c: Customer) => void;
   allProducts: Product[];
+  currentUser: AppUser;
+  onLogout: () => void;
   onOpenBudgetById: (budgetId: string, customerId: string) => void;
 }) {
   const [tab, setTab] = useState<"orcamentos" | "clientes" | "produtos">("orcamentos");
@@ -2484,6 +2476,7 @@ function CustomerSearch({ onSelect, allProducts, currentUser, onLogout, onOpenBu
   const [recentBudgets, setRecentBudgets] = useState<BudgetSummary[]>([]);
   const [filteredBudgets, setFilteredBudgets] = useState<BudgetSummary[]>([]);
   const [budgetsLoading, setBudgetsLoading] = useState(true);
+  const [filterTecnico, setFilterTecnico] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [filterCliente, setFilterCliente] = useState("");
   const [filterDataInicio, setFilterDataInicio] = useState("");
@@ -2491,29 +2484,29 @@ function CustomerSearch({ onSelect, allProducts, currentUser, onLogout, onOpenBu
   const [isFiltering, setIsFiltering] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  const hasFilter = !!(filterStatus || filterCliente || filterDataInicio || filterDataFim);
+  const hasFilter = !!(filterTecnico || filterStatus || filterCliente || filterDataInicio || filterDataFim);
 
   useEffect(() => {
     fetchRecentBudgets(currentUser, 5)
       .then(setRecentBudgets)
       .catch(() => {})
       .finally(() => setBudgetsLoading(false));
-  }, []);
+  }, [currentUser]);
 
   useEffect(() => {
     if (!hasFilter) { setFilteredBudgets([]); return; }
     const t = setTimeout(async () => {
       setIsFiltering(true);
       try {
-        setFilteredBudgets(await fetchBudgetsFiltered(currentUser, {
-          status: filterStatus, customerQ: filterCliente,
+        setFilteredBudgets(await fetchBudgetsFiltered({
+          tecnico: filterTecnico, status: filterStatus, customerQ: filterCliente,
           dataInicio: filterDataInicio, dataFim: filterDataFim,
-        }));
+        }, currentUser));
       } catch {}
       finally { setIsFiltering(false); }
     }, 300);
     return () => clearTimeout(t);
-  }, [currentUser, filterStatus, filterCliente, filterDataInicio, filterDataFim]);
+  }, [filterTecnico, filterStatus, filterCliente, filterDataInicio, filterDataFim, currentUser]);
 
   useEffect(() => {
     if (!q.trim()) { setResults([]); return; }
@@ -2572,18 +2565,17 @@ function CustomerSearch({ onSelect, allProducts, currentUser, onLogout, onOpenBu
             <p className="mt-1.5 text-xs tracking-[0.18em] uppercase opacity-35 font-light">
               Sala Técnica · Representante Comercial
             </p>
-            <div className="w-6 h-px bg-white/25 mt-3" />
-          </div>
-
-          {/* RIGHT — VILLAGRES / SAIR */}
-          <div className="flex justify-end items-center gap-4">
-            <div className="text-right hidden sm:block">
-              <p className="text-[10px] uppercase tracking-wide opacity-40">Logado como</p>
-              <p className="text-xs font-medium opacity-80">{currentUser.username}</p>
-              <button onClick={onLogout} className="mt-1 inline-flex items-center gap-1 text-xs opacity-60 hover:opacity-95 transition-opacity border border-white/20 px-2.5 py-1 rounded-lg">
+            <div className="mt-3 flex items-center gap-2 text-xs opacity-80">
+              <span>{currentUser.label}</span>
+              <button onClick={onLogout} className="border border-white/25 rounded-lg px-2 py-1 hover:bg-white/10 flex items-center gap-1">
                 <LogOut size={12} /> Sair
               </button>
             </div>
+            <div className="w-6 h-px bg-white/25 mt-3" />
+          </div>
+
+          {/* RIGHT — VILLAGRES */}
+          <div className="flex justify-end">
             <img
               src="/src/imports/logo_villagre.png"
               alt="Villagres"
@@ -2755,13 +2747,18 @@ function CustomerSearch({ onSelect, allProducts, currentUser, onLogout, onOpenBu
               <div className="flex items-center justify-between mb-3">
                 <h2 className="font-semibold">Orçamentos</h2>
                 {hasFilter && (
-                  <button onClick={() => { setFilterStatus(""); setFilterCliente(""); setFilterDataInicio(""); setFilterDataFim(""); }}
+                  <button onClick={() => { setFilterTecnico(""); setFilterStatus(""); setFilterCliente(""); setFilterDataInicio(""); setFilterDataFim(""); }}
                     className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1">
                     <X size={11} /> Limpar filtros
                   </button>
                 )}
               </div>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-2">
+                <select value={filterTecnico} onChange={(e) => setFilterTecnico(e.target.value)}
+                  className="border border-border rounded-xl px-3 py-2 text-xs bg-card focus:outline-none focus:ring-2 focus:ring-primary/20">
+                  <option value="">Técnico</option>
+                  {TECNICOS.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
                 <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}
                   className="border border-border rounded-xl px-3 py-2 text-xs bg-card focus:outline-none focus:ring-2 focus:ring-primary/20">
                   <option value="">Status</option>
@@ -2817,7 +2814,7 @@ function CustomerSearch({ onSelect, allProducts, currentUser, onLogout, onOpenBu
                                       </div>
                                       <p className="text-sm font-medium mt-0.5 truncate">{b.customerNome}</p>
                                       <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
-                                        <span>Usuário: {b.createdByUser || "admin"}</span>
+                                        {b.tecnico && <span>Téc: {b.tecnico}</span>}
                                         <span>{fmtDate(b.createdAt)}</span>
                                         {b.customerCidade && <span>{b.customerCidade}</span>}
                                       </div>
@@ -2868,37 +2865,35 @@ function CustomerSearch({ onSelect, allProducts, currentUser, onLogout, onOpenBu
 }
 
 
+// ── Login Screen ──────────────────────────────────────────────────
+
 function LoginScreen({ onLogin }: { onLogin: (user: AppUser) => void }) {
   const [username, setUsername] = useState<AppUserRole>("vendas");
   const [password, setPassword] = useState("");
 
-  function submit(e: React.FormEvent) {
-    e.preventDefault();
+  function submit(e?: React.FormEvent) {
+    e?.preventDefault();
     const user = APP_USERS.find((u) => u.username === username && u.password === password);
-    if (!user) { toast.error("Usuário ou senha inválidos."); return; }
+    if (!user) { toast.error("Usuário ou senha inválidos"); return; }
     setPassword("");
     onLogin(user);
   }
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center px-4">
-      <form onSubmit={submit} className="max-w-sm w-full bg-card border border-border rounded-2xl p-6 shadow-sm space-y-4">
-        <div className="text-center mb-2">
-          <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-serif)" }}>Entrar</h1>
-          <p className="text-sm text-muted-foreground mt-1">Acesse o Sistema de Orçamentos</p>
+    <div className="min-h-screen bg-background flex items-center justify-center p-4">
+      <form onSubmit={submit} className="w-full max-w-sm bg-card border border-border rounded-2xl p-6 shadow-sm">
+        <div className="text-center mb-6">
+          <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-serif)" }}>Paviment</h1>
+          <p className="text-sm text-muted-foreground mt-1">Acesse o sistema de orçamentos</p>
         </div>
-        <div>
-          <label className="text-xs font-medium text-muted-foreground">Usuário</label>
-          <select value={username} onChange={(e) => setUsername(e.target.value as AppUserRole)}
-            className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25">
-            {APP_USERS.map((u) => <option key={u.username} value={u.username}>{u.username}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="text-xs font-medium text-muted-foreground">Senha</label>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus
-            className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
-        </div>
+        <label className="block text-xs font-medium text-muted-foreground mb-1">Usuário</label>
+        <select value={username} onChange={(e) => setUsername(e.target.value as AppUserRole)}
+          className="w-full border border-border rounded-xl px-4 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 mb-3">
+          {APP_USERS.map((u) => <option key={u.username} value={u.username}>{u.username}</option>)}
+        </select>
+        <label className="block text-xs font-medium text-muted-foreground mb-1">Senha</label>
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus
+          className="w-full border border-border rounded-xl px-4 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 mb-4" />
         <button type="submit" className="w-full bg-primary text-primary-foreground py-3 rounded-xl text-sm font-medium hover:opacity-90">
           Entrar
         </button>
@@ -2962,10 +2957,6 @@ export default function App() {
     setView({ type: "home" });
   }
 
-  if (!currentUser) {
-    return <LoginScreen onLogin={setCurrentUser} />;
-  }
-
   if (appState === "setup") {
     return <SetupScreen onVerify={init} />;
   }
@@ -2997,6 +2988,10 @@ export default function App() {
     );
   }
 
+  if (!currentUser) {
+    return <LoginScreen onLogin={setCurrentUser} />;
+  }
+
   return (
     <>
       {view.type === "home" && (
@@ -3023,7 +3018,6 @@ export default function App() {
           allProducts={allProducts}
           currentUser={currentUser}
           onBack={() => setView({ type: "home" })}
-          onLogout={handleLogout}
           onOpenBudget={(b, c) => setView({ type: "budget", budget: b, customer: c })}
         />
       )}
@@ -3034,8 +3028,8 @@ export default function App() {
           customer={view.customer}
           currentUser={currentUser}
           onBack={() => setView({ type: "customer", customer: view.customer })}
-          onLogout={handleLogout}
           onGoHome={() => setView({ type: "home" })}
+          onLogout={handleLogout}
           onBudgetChange={(b) => setView({ type: "budget", budget: b, customer: view.customer })}
           onOpenBudget={(b) => setView({ type: "budget", budget: b, customer: view.customer })}
         />

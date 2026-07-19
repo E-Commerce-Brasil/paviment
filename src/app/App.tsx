@@ -1485,6 +1485,12 @@ function BudgetEditor({
 
   function markDirty() { setIsDirty(true); }
 
+  function getSentBudgetDraftPatch(): Partial<Budget> {
+    if (budget.status !== "enviado_cliente") return {};
+    toast.warning("Este orçamento já foi enviado ao cliente e voltará para Rascunho. Reenvie o PDF após concluir as alterações.");
+    return { status: "rascunho" };
+  }
+
   function updateLocal(patch: Partial<Budget>) {
     const updated = { ...budget, ...patch };
     const subtotal = updated.items.reduce((s, i) => s + i.subtotal, 0);
@@ -1542,7 +1548,7 @@ function BudgetEditor({
         productId: product.id, product, areaM2, caixas, precoM2, subtotal: round2(areaM2 * precoM2),
       });
       const nextItems = [...budget.items, newItem];
-      const b = updateLocal({ items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
+      const b = updateLocal({ ...getSentBudgetDraftPatch(), items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
       await persistTotals(b);
       markDirty();
       setShowModal(false);
@@ -1556,7 +1562,7 @@ function BudgetEditor({
     try {
       await deleteBudgetItem(itemId);
       const nextItems = budget.items.filter((i) => i.id !== itemId);
-      const b = updateLocal({ items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
+      const b = updateLocal({ ...getSentBudgetDraftPatch(), items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
       await persistTotals(b);
       markDirty();
     } catch (e: any) { toast.error("Erro: " + e.message); }
@@ -1600,7 +1606,7 @@ function BudgetEditor({
       await updateBudgetItem(itemId, newArea, caixas, newPrecoM2);
       const updatedItem = { ...item, areaM2: newArea, caixas, precoM2: newPrecoM2, subtotal: round2(newArea * newPrecoM2) };
       const nextItems = budget.items.map((i) => i.id === itemId ? updatedItem : i);
-      const b = updateLocal({ items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
+      const b = updateLocal({ ...getSentBudgetDraftPatch(), items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
       await persistTotals(b);
       markDirty();
       setEditingItemId(null);

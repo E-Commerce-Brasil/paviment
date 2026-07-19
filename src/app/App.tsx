@@ -115,7 +115,6 @@ interface Budget {
   updatedAt: string;
 }
 
-const TECNICOS = ["Fernanda Costa", "Ricardo Almeida", "Juliana Mendes"];
 
 // ── Mappers (DB snake_case → JS camelCase) ────────────────────────
 
@@ -439,11 +438,10 @@ async function fetchRecentBudgets(limit = 5): Promise<BudgetSummary[]> {
 }
 
 async function fetchBudgetsFiltered(filters: {
-  tecnico?: string; status?: string; customerQ?: string;
+  status?: string; customerQ?: string;
   dataInicio?: string; dataFim?: string;
 }): Promise<BudgetSummary[]> {
   let q = supabase.from("budgets").select("*, customers(nome, cidade)");
-  if (filters.tecnico) q = q.eq("tecnico", filters.tecnico);
   if (filters.status) q = q.eq("status", filters.status);
   if (filters.dataInicio) q = q.gte("created_at", filters.dataInicio);
   if (filters.dataFim) q = q.lte("created_at", filters.dataFim + "T23:59:59");
@@ -457,13 +455,6 @@ async function fetchBudgetsFiltered(filters: {
   return rows;
 }
 
-async function seedTecnicosOnExistingBudgets(): Promise<void> {
-  const { data } = await supabase.from("budgets").select("id, tecnico").is("tecnico", null);
-  if (!data?.length) return;
-  await Promise.all(data.map((b, i) =>
-    supabase.from("budgets").update({ tecnico: TECNICOS[i % TECNICOS.length] }).eq("id", b.id)
-  ));
-}
 
 async function fetchAllProducts(): Promise<Product[]> {
   const { data, error } = await supabase.from("products").select("*").order("linha");
@@ -774,10 +765,10 @@ async function getBudgetWithItems(budgetId: string): Promise<Budget> {
   return mapBudget(b, (items || []).map(mapItem));
 }
 
-async function createBudget(customerId: string, tecnico: string): Promise<Budget> {
+async function createBudget(customerId: string): Promise<Budget> {
   const { data, error } = await supabase
     .from("budgets")
-    .insert({ customer_id: customerId, status: "rascunho", tabela_preco: 1, frete: 0, percentual_imposto: 0, forma_pagamento: "avista", parcelas_cartao: 1, desconto_pix_percentual: 0, desconto_pix_inclui_frete: false, tecnico })
+    .insert({ customer_id: customerId, status: "rascunho", tabela_preco: 1, frete: 0, percentual_imposto: 0, forma_pagamento: "avista", parcelas_cartao: 1, desconto_pix_percentual: 0, desconto_pix_inclui_frete: false })
     .select()
     .single();
   if (error) throw error;
@@ -911,7 +902,7 @@ async function deleteBudget(id: string): Promise<void> {
   if (error) throw error;
 }
 
-async function duplicateBudget(original: Budget, tecnico: string): Promise<Budget> {
+async function duplicateBudget(original: Budget): Promise<Budget> {
   const { data, error } = await supabase
     .from("budgets")
     .insert({
@@ -925,7 +916,6 @@ async function duplicateBudget(original: Budget, tecnico: string): Promise<Budge
       desconto_pix_percentual: original.descontoPixPercentual,
       desconto_pix_inclui_frete: original.descontoPixIncluiFrete,
       observacoes: original.observacoes,
-      tecnico,
       endereco_entrega: original.enderecoEntrega || null,
       entrega_cep: original.entregaCep || null,
       entrega_logradouro: original.entregaLogradouro || null,
@@ -1392,8 +1382,6 @@ function BudgetEditor({
   const [showSaveDialog, setShowSaveDialog] = useState(false); // unused but kept for type safety
   const [isDirty, setIsDirty] = useState(false);
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
-  const [dupTecnico, setDupTecnico] = useState("");
-  const [dupTecnicoCustom, setDupTecnicoCustom] = useState("");
   const [duplicating, setDuplicating] = useState(false);
 
   // Delivery address
@@ -1469,11 +1457,9 @@ function BudgetEditor({
   }
 
   async function handleDuplicate() {
-    const tecnico = dupTecnico === "__custom__" ? dupTecnicoCustom.trim() : dupTecnico;
-    if (!tecnico) { toast.error("Selecione o técnico responsável"); return; }
     setDuplicating(true);
     try {
-      const newBudget = await duplicateBudget(budget, tecnico);
+      const newBudget = await duplicateBudget(budget);
       const full = await getBudgetWithItems(newBudget.id);
       setShowDuplicateModal(false);
       toast.success(`Orçamento #${full.numero} criado como cópia!`);
@@ -1855,7 +1841,6 @@ function BudgetEditor({
   <tr><td>Telefone</td><td>${customer.telefone || ""}</td></tr>
   <tr><td>Cidade - CEP</td><td>${customer.cidade || ""}${customer.estado ? " / " + customer.estado : ""}</td></tr>
   <tr><td>E-mail</td><td>${customer.email || ""}</td></tr>
-  ${budget.tecnico ? `<tr><td>Técnico Responsável</td><td>${budget.tecnico}</td></tr>` : ""}
   ${deliveryAddressForPrint ? `<tr><td>Endereço de Entrega</td><td>${deliveryAddressForPrint}</td></tr>` : ""}
 </table>
 
@@ -1935,7 +1920,6 @@ ${budget.observacoes ? `
           <div className="flex-1 min-w-0">
             <p className="text-xs opacity-60 truncate">{customer.nome}</p>
             <p className="font-semibold text-sm">Orçamento #{budget.numero}</p>
-            {budget.tecnico && <p className="text-xs opacity-50 truncate">Técnico: {budget.tecnico}</p>}
           </div>
           <div className="flex items-center gap-2">
             <StatusPill status={budget.status} />
@@ -2534,37 +2518,9 @@ ${budget.observacoes ? `
               </button>
             </div>
             <p className="text-sm text-muted-foreground mb-4">
-              Selecione o técnico responsável pelo novo orçamento (cópia do #{budget.numero}):
+              Confirme para criar uma cópia em rascunho do orçamento #{budget.numero}.
             </p>
-            <div className="space-y-2 mb-4">
-              {TECNICOS.map((nome) => (
-                <button key={nome} onClick={() => setDupTecnico(nome)}
-                  className={`w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-all ${
-                    dupTecnico === nome
-                      ? "border-primary bg-primary/8 text-primary"
-                      : "border-border hover:border-primary/40 hover:bg-muted/40"
-                  }`}>
-                  {nome}
-                </button>
-              ))}
-              <button onClick={() => setDupTecnico("__custom__")}
-                className={`w-full text-left px-4 py-3 rounded-xl border text-sm transition-all ${
-                  dupTecnico === "__custom__"
-                    ? "border-primary bg-primary/8 text-primary"
-                    : "border-dashed border-border hover:border-primary/40 text-muted-foreground"
-                }`}>
-                + Outro nome...
-              </button>
-            </div>
-            {dupTecnico === "__custom__" && (
-              <input
-                type="text" value={dupTecnicoCustom} onChange={(e) => setDupTecnicoCustom(e.target.value)}
-                placeholder="Nome do técnico"
-                autoFocus
-                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 mb-4"
-              />
-            )}
-            <button onClick={handleDuplicate} disabled={duplicating || !dupTecnico || (dupTecnico === "__custom__" && !dupTecnicoCustom.trim())}
+            <button onClick={handleDuplicate} disabled={duplicating}
               className="w-full bg-amber-600 text-white py-3 rounded-xl text-sm font-medium hover:bg-amber-700 disabled:opacity-40 flex items-center justify-center gap-2 transition-colors mt-2">
               {duplicating ? <><Spinner size={14} /> Copiando...</> : <><Copy size={14} /> Criar Cópia</>}
             </button>
@@ -2595,9 +2551,6 @@ function CustomerView({
     telefone: formatPhone(initCustomer.telefone || ""),
     cep: formatCEP(initCustomer.cep || ""),
   });
-  const [showTecnicoModal, setShowTecnicoModal] = useState(false);
-  const [tecnicoSelecionado, setTecnicoSelecionado] = useState("");
-  const [tecnicoCustom, setTecnicoCustom] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [consultandoEditCep, setConsultandoEditCep] = useState(false);
 
@@ -2640,19 +2593,10 @@ function CustomerView({
 
   useEffect(() => { loadBudgets(); }, [customer.id]);
 
-  function openTecnicoModal() {
-    setTecnicoSelecionado("");
-    setTecnicoCustom("");
-    setShowTecnicoModal(true);
-  }
-
   async function handleCreateBudget() {
-    const tecnico = tecnicoSelecionado === "__custom__" ? tecnicoCustom.trim() : tecnicoSelecionado;
-    if (!tecnico) { toast.error("Selecione ou informe o técnico responsável"); return; }
-    setShowTecnicoModal(false);
     setCreating(true);
     try {
-      const b = await createBudget(customer.id, tecnico);
+      const b = await createBudget(customer.id);
       onOpenBudget(b, customer);
     } catch (e: any) { toast.error("Erro: " + e.message); setCreating(false); }
   }
@@ -2721,7 +2665,7 @@ function CustomerView({
               className="border border-red-400/40 bg-red-500/10 text-red-200 hover:bg-red-500/20 px-3 py-1.5 rounded-lg text-xs transition-colors flex items-center gap-1 disabled:opacity-50">
               {deleting ? <Spinner size={11} /> : <Trash2 size={11} />} Excluir
             </button>
-            <button onClick={openTecnicoModal} disabled={creating}
+            <button onClick={handleCreateBudget} disabled={creating}
               className="bg-white/15 hover:bg-white/25 border border-white/20 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 disabled:opacity-50">
               {creating ? <Spinner size={12} /> : <Plus size={12} />} Novo Orçamento
             </button>
@@ -2755,7 +2699,7 @@ function CustomerView({
           <div className="text-center py-16">
             <FileText size={40} className="mx-auto mb-3 text-muted-foreground opacity-20" />
             <p className="text-sm text-muted-foreground">Nenhum orçamento ainda</p>
-            <button onClick={openTecnicoModal} className="mt-3 text-primary text-sm hover:underline">Criar primeiro orçamento</button>
+            <button onClick={handleCreateBudget} disabled={creating} className="mt-3 text-primary text-sm hover:underline disabled:opacity-50">Criar primeiro orçamento</button>
           </div>
         ) : (
           <div className="space-y-3">
@@ -2785,51 +2729,7 @@ function CustomerView({
         )}
       </div>
 
-      {/* Modal seleção de técnico */}
-      {showTecnicoModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-card rounded-2xl shadow-2xl w-full max-w-sm p-6 border border-border">
-            <div className="flex items-center justify-between mb-5">
-              <h3 className="font-semibold">Técnico Responsável</h3>
-              <button onClick={() => setShowTecnicoModal(false)} className="text-muted-foreground hover:text-foreground"><X size={16} /></button>
-            </div>
-            <p className="text-sm text-muted-foreground mb-4">Selecione quem está elaborando este orçamento:</p>
-            <div className="space-y-2 mb-4">
-              {TECNICOS.map((nome) => (
-                <button key={nome} onClick={() => setTecnicoSelecionado(nome)}
-                  className={`w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-all ${
-                    tecnicoSelecionado === nome
-                      ? "border-primary bg-primary/8 text-primary"
-                      : "border-border hover:border-primary/40 hover:bg-muted/40"
-                  }`}>
-                  {nome}
-                </button>
-              ))}
-              <button onClick={() => setTecnicoSelecionado("__custom__")}
-                className={`w-full text-left px-4 py-3 rounded-xl border text-sm transition-all ${
-                  tecnicoSelecionado === "__custom__"
-                    ? "border-primary bg-primary/8 text-primary"
-                    : "border-dashed border-border hover:border-primary/40 text-muted-foreground"
-                }`}>
-                + Outro nome...
-              </button>
-            </div>
-            {tecnicoSelecionado === "__custom__" && (
-              <input
-                type="text" value={tecnicoCustom} onChange={(e) => setTecnicoCustom(e.target.value)}
-                placeholder="Nome do técnico"
-                autoFocus
-                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 mb-4"
-              />
-            )}
-            <button onClick={handleCreateBudget}
-              disabled={!tecnicoSelecionado || (tecnicoSelecionado === "__custom__" && !tecnicoCustom.trim())}
-              className="w-full bg-primary text-primary-foreground py-3 rounded-xl text-sm font-medium hover:opacity-90 disabled:opacity-40 flex items-center justify-center gap-2">
-              <Plus size={14} /> Criar Orçamento
-            </button>
-          </div>
-        </div>
-      )}
+
 
       {showEdit && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 overflow-y-auto">
@@ -3709,7 +3609,6 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
   const [recentBudgets, setRecentBudgets] = useState<BudgetSummary[]>([]);
   const [filteredBudgets, setFilteredBudgets] = useState<BudgetSummary[]>([]);
   const [budgetsLoading, setBudgetsLoading] = useState(true);
-  const [filterTecnico, setFilterTecnico] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [filterCliente, setFilterCliente] = useState("");
   const [filterDataInicio, setFilterDataInicio] = useState("");
@@ -3717,7 +3616,7 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
   const [isFiltering, setIsFiltering] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  const hasFilter = !!(filterTecnico || filterStatus || filterCliente || filterDataInicio || filterDataFim);
+  const hasFilter = !!(filterStatus || filterCliente || filterDataInicio || filterDataFim);
 
   useEffect(() => {
     fetchRecentBudgets(5)
@@ -3732,14 +3631,14 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
       setIsFiltering(true);
       try {
         setFilteredBudgets(await fetchBudgetsFiltered({
-          tecnico: filterTecnico, status: filterStatus, customerQ: filterCliente,
+          status: filterStatus, customerQ: filterCliente,
           dataInicio: filterDataInicio, dataFim: filterDataFim,
         }));
       } catch {}
       finally { setIsFiltering(false); }
     }, 300);
     return () => clearTimeout(t);
-  }, [filterTecnico, filterStatus, filterCliente, filterDataInicio, filterDataFim]);
+  }, [filterStatus, filterCliente, filterDataInicio, filterDataFim]);
 
   useEffect(() => {
     if (!q.trim()) { setResults([]); return; }
@@ -4004,18 +3903,13 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
               <div className="flex items-center justify-between mb-3">
                 <h2 className="font-semibold">Orçamentos</h2>
                 {hasFilter && (
-                  <button onClick={() => { setFilterTecnico(""); setFilterStatus(""); setFilterCliente(""); setFilterDataInicio(""); setFilterDataFim(""); }}
+                  <button onClick={() => { setFilterStatus(""); setFilterCliente(""); setFilterDataInicio(""); setFilterDataFim(""); }}
                     className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1">
                     <X size={11} /> Limpar filtros
                   </button>
                 )}
               </div>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-2">
-                <select value={filterTecnico} onChange={(e) => setFilterTecnico(e.target.value)}
-                  className="border border-border rounded-xl px-3 py-2 text-xs bg-card focus:outline-none focus:ring-2 focus:ring-primary/20">
-                  <option value="">Técnico</option>
-                  {TECNICOS.map((t) => <option key={t} value={t}>{t}</option>)}
-                </select>
                 <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}
                   className="border border-border rounded-xl px-3 py-2 text-xs bg-card focus:outline-none focus:ring-2 focus:ring-primary/20">
                   <option value="">Status</option>
@@ -4071,7 +3965,6 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
                                       </div>
                                       <p className="text-sm font-medium mt-0.5 truncate">{b.customerNome}</p>
                                       <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
-                                        {b.tecnico && <span>Téc: {b.tecnico}</span>}
                                         <span>{fmtDate(b.createdAt)}</span>
                                         {b.customerCidade && <span>{b.customerCidade}</span>}
                                       </div>
@@ -4143,7 +4036,6 @@ export default function App() {
       setInitMsg("Verificando tabelas...");
       await runMigrations();
       const tablesOk = await checkTablesExist();
-      if (tablesOk) await seedTecnicosOnExistingBudgets().catch(() => {});
       if (!tablesOk) { setAppState("setup"); return; }
 
       setInitMsg("Carregando composição interna do preço...");

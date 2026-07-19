@@ -1094,6 +1094,8 @@ function BudgetEditor({
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [editAreaInput, setEditAreaInput] = useState("");
+  const [editTabela, setEditTabela] = useState<BudgetPriceTable>(1);
+  const [editPrecoEspecialInput, setEditPrecoEspecialInput] = useState("");
   const [showSaveDialog, setShowSaveDialog] = useState(false); // unused but kept for type safety
   const [isDirty, setIsDirty] = useState(false);
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
@@ -1184,6 +1186,8 @@ function BudgetEditor({
   function startEditItem(item: BudgetItem) {
     setEditingItemId(item.id);
     setEditAreaInput(String(item.areaM2).replace(".", ","));
+    setEditTabela(item.tabelaPreco);
+    setEditPrecoEspecialInput(String(item.precoM2).replace(".", ","));
   }
 
   async function confirmEditItem(itemId: string) {
@@ -1191,42 +1195,23 @@ function BudgetEditor({
     if (!item) return;
     const newArea = parseFloat(editAreaInput.replace(",", "."));
     if (!newArea || newArea <= 0) { toast.error("Área inválida"); return; }
+    const precoM2 = editTabela === "TE"
+      ? parseFloat(editPrecoEspecialInput.replace(",", "."))
+      : (item.product[priceKey(editTabela)] as number | null);
+    if (!precoM2 || precoM2 <= 0) {
+      toast.error(editTabela === "TE" ? "Informe o preço especial por m²" : `Preço não disponível para tabela ${editTabela}`);
+      return;
+    }
     const caixas = item.product.m2PorCaixa > 0 ? Math.ceil(newArea / item.product.m2PorCaixa) : item.caixas;
     setSaving(true);
     try {
-      await updateBudgetItem(itemId, newArea, caixas, item.precoM2);
-      const updatedItem = { ...item, areaM2: newArea, caixas, subtotal: round2(newArea * item.precoM2) };
+      await updateBudgetItem(itemId, newArea, caixas, precoM2, editTabela);
+      const updatedItem = { ...item, areaM2: newArea, caixas, precoM2, tabelaPreco: editTabela, subtotal: round2(newArea * precoM2) };
       const b = updateLocal({ items: budget.items.map((i) => i.id === itemId ? updatedItem : i) });
       await persistTotals(b);
       markDirty();
       setEditingItemId(null);
-      toast.success("Metragem atualizada!");
-    } catch (e: any) { toast.error("Erro: " + e.message); }
-    finally { setSaving(false); }
-  }
-
-
-  async function handleChangeItemTabela(item: BudgetItem, tabelaPreco: BudgetPriceTable) {
-    if (isLocked) return;
-    let precoM2: number | null;
-    if (tabelaPreco === "TE") {
-      const input = prompt("Informe o preço especial (R$/m²) para este produto:", String(item.precoM2).replace(".", ","));
-      if (input === null) return;
-      precoM2 = parseFloat(input.replace(",", "."));
-      if (!precoM2 || precoM2 <= 0) { toast.error("Preço especial inválido"); return; }
-    } else {
-      precoM2 = item.product[priceKey(tabelaPreco)] as number | null;
-      if (!precoM2 || precoM2 <= 0) { toast.error(`Preço não disponível para tabela ${tabelaPreco}`); return; }
-    }
-
-    setSaving(true);
-    try {
-      await updateBudgetItem(item.id, item.areaM2, item.caixas, precoM2, tabelaPreco);
-      const updatedItem = { ...item, tabelaPreco, precoM2, subtotal: round2(item.areaM2 * precoM2) };
-      const b = updateLocal({ items: budget.items.map((i) => i.id === item.id ? updatedItem : i) });
-      await persistTotals(b);
-      markDirty();
-      toast.success(`Tabela ${tabelaPrecoLabel(tabelaPreco)} aplicada ao produto.`);
+      toast.success("Item atualizado!");
     } catch (e: any) { toast.error("Erro: " + e.message); }
     finally { setSaving(false); }
   }
@@ -1473,7 +1458,6 @@ ${budget.observacoes ? `
                   <tr className="text-xs text-muted-foreground bg-muted/30 border-b border-border">
                     <th className="text-left px-5 py-2.5 font-medium">Produto</th>
                     <th className="text-left px-3 py-2.5 font-medium hidden md:table-cell">Formato</th>
-                    <th className="text-center px-3 py-2.5 font-medium">Tabela</th>
                     <th className="text-right px-3 py-2.5 font-medium">m²</th>
                     <th className="text-right px-3 py-2.5 font-medium">Cx</th>
                     <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">R$/m²</th>
@@ -1486,6 +1470,11 @@ ${budget.observacoes ? `
                     const isEditing = editingItemId === item.id;
                     const previewArea = parseFloat(editAreaInput.replace(",", ".")) || 0;
                     const previewCx = item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : 0;
+                    const previewPrecoM2 = isEditing
+                      ? (editTabela === "TE"
+                        ? parseFloat(editPrecoEspecialInput.replace(",", ".")) || item.precoM2
+                        : ((item.product[priceKey(editTabela)] as number | null) || item.precoM2))
+                      : item.precoM2;
                     return (
                       <tr key={item.id} className={`transition-colors ${isEditing ? "bg-primary/4" : "hover:bg-muted/20"}`}>
                         <td className="px-5 py-3">
@@ -1496,22 +1485,26 @@ ${budget.observacoes ? `
                             {item.product?.superficie}
                           </p>
                           <p className="text-xs text-muted-foreground font-mono">Ref: {item.product?.referencia}</p>
-                        </td>
-                        <td className="px-3 py-3 text-xs text-muted-foreground hidden md:table-cell">{item.product?.formato}</td>
-                        <td className="px-3 py-3 text-center">
-                          {isLocked ? (
-                            <span className="inline-flex items-center justify-center rounded-full border border-border px-2 py-0.5 text-xs font-semibold text-primary bg-primary/5">
-                              {tabelaPrecoLabel(item.tabelaPreco)}
-                            </span>
-                          ) : (
-                            <select value={String(item.tabelaPreco)} onChange={(e) => handleChangeItemTabela(item, mapTabelaPreco(e.target.value))}
-                              className="border border-border rounded-lg px-2 py-1 text-xs bg-card focus:outline-none focus:ring-2 focus:ring-primary/20">
-                              {([1, 2, 3, 4, "TE"] as const).map((t) => (
-                                <option key={t} value={t}>{tabelaPrecoLabel(t)}</option>
-                              ))}
-                            </select>
+                          {isEditing && (
+                            <div className="mt-3 space-y-2">
+                              <p className="text-xs font-medium text-muted-foreground">Tabela de preço deste item</p>
+                              <div className="flex flex-wrap gap-1.5">
+                                {([1, 2, 3, 4, "TE"] as const).map((t) => (
+                                  <button key={t} onClick={() => setEditTabela(t)}
+                                    className={`rounded-lg border px-2.5 py-1 text-xs font-semibold transition-all ${editTabela === t ? "border-primary bg-primary/8 text-primary" : "border-border hover:border-primary/40"}`}>
+                                    {tabelaPrecoLabel(t)}
+                                  </button>
+                                ))}
+                              </div>
+                              {editTabela === "TE" && (
+                                <input type="text" value={editPrecoEspecialInput} onChange={(e) => setEditPrecoEspecialInput(e.target.value)}
+                                  placeholder="Preço especial R$/m²"
+                                  className="w-full max-w-44 border border-border rounded-lg px-2.5 py-1.5 text-xs bg-card focus:outline-none focus:ring-2 focus:ring-primary/20 font-mono" />
+                              )}
+                            </div>
                           )}
                         </td>
+                        <td className="px-3 py-3 text-xs text-muted-foreground hidden md:table-cell">{item.product?.formato}</td>
                         <td className="px-3 py-3 text-right">
                           {isEditing ? (
                             <input type="text" value={editAreaInput} onChange={(e) => setEditAreaInput(e.target.value)}
@@ -1532,10 +1525,10 @@ ${budget.observacoes ? `
                             ? <span className="text-primary font-semibold">{previewCx}</span>
                             : item.caixas}
                         </td>
-                        <td className="px-3 py-3 text-right font-mono text-sm hidden sm:table-cell">{fmtBRL(item.precoM2)}</td>
+                        <td className="px-3 py-3 text-right font-mono text-sm hidden sm:table-cell">{fmtBRL(previewPrecoM2)}</td>
                         <td className="px-3 py-3 text-right font-mono font-semibold text-sm">
                           {isEditing && previewArea > 0
-                            ? <span className="text-primary">{fmtBRL(previewArea * item.precoM2)}</span>
+                            ? <span className="text-primary">{fmtBRL(previewArea * previewPrecoM2)}</span>
                             : fmtBRL(item.subtotal)}
                         </td>
                         <td className="px-3 py-3">

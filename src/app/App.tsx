@@ -74,6 +74,14 @@ interface BudgetItem {
 
 type BudgetStatus = "rascunho" | "enviado_fabrica" | "enviado_cliente" | "fechado" | "cancelado";
 
+type AppUserRole = "admin" | "vendas";
+
+interface AppUser {
+  username: AppUserRole;
+  password: string;
+  label: string;
+}
+
 interface Budget {
   id: string;
   numero: number;
@@ -84,6 +92,7 @@ interface Budget {
   percentualImposto: number;
   observacoes?: string;
   tecnico?: string;
+  createdByUser?: AppUserRole;
   enderecoEntrega?: string;
   items: BudgetItem[];
   subtotal: number;
@@ -92,7 +101,14 @@ interface Budget {
   updatedAt: string;
 }
 
-const TECNICOS = ["Fernanda Costa", "Ricardo Almeida", "Juliana Mendes"];
+const APP_USERS: AppUser[] = [
+  { username: "admin", password: "Neiemara2026", label: "Administrador" },
+  { username: "vendas", password: "Vendas2026", label: "Vendas" },
+];
+
+function canAccessBudget(user: AppUser, budget: Pick<Budget, "createdByUser">): boolean {
+  return user.username === "admin" || budget.createdByUser === user.username;
+}
 
 // ── Mappers (DB snake_case → JS camelCase) ────────────────────────
 
@@ -166,6 +182,7 @@ function mapBudget(r: any, items: BudgetItem[] = []): Budget {
     percentualImposto: parseFloat(r.percentual_imposto) || 0,
     observacoes: r.observacoes || "",
     tecnico: r.tecnico || "",
+    createdByUser: (r.created_by_user || "admin") as AppUserRole,
     enderecoEntrega: r.endereco_entrega || "",
     items,
     subtotal: parseFloat(r.subtotal) || 0,
@@ -220,6 +237,7 @@ CREATE TABLE IF NOT EXISTS budgets (
   percentual_imposto DECIMAL(5,2) DEFAULT 0,
   observacoes TEXT, subtotal DECIMAL(12,2) DEFAULT 0,
   total_final DECIMAL(12,2) DEFAULT 0,
+  created_by_user TEXT DEFAULT 'admin',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -240,6 +258,8 @@ ALTER TABLE budget_items DISABLE ROW LEVEL SECURITY;
 
 -- Migrações (execute se já tiver as tabelas criadas)
 ALTER TABLE budgets ADD COLUMN IF NOT EXISTS tecnico TEXT;
+ALTER TABLE budgets ADD COLUMN IF NOT EXISTS created_by_user TEXT DEFAULT 'admin';
+UPDATE budgets SET created_by_user = 'admin' WHERE created_by_user IS NULL;
 ALTER TABLE budgets ADD COLUMN IF NOT EXISTS endereco_entrega TEXT;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
@@ -373,22 +393,22 @@ function mapBudgetSummary(r: any): BudgetSummary {
   return { ...mapBudget(r, []), customerNome: r.customers?.nome || "", customerCidade: r.customers?.cidade || "" };
 }
 
-async function fetchRecentBudgets(limit = 5): Promise<BudgetSummary[]> {
-  const { data, error } = await supabase
+async function fetchRecentBudgets(currentUser: AppUser, limit = 5): Promise<BudgetSummary[]> {
+  let q = supabase
     .from("budgets")
-    .select("*, customers(nome, cidade)")
-    .order("created_at", { ascending: false })
-    .limit(limit);
+    .select("*, customers(nome, cidade)");
+  if (currentUser.username !== "admin") q = q.eq("created_by_user", currentUser.username);
+  const { data, error } = await q.order("created_at", { ascending: false }).limit(limit);
   if (error) throw error;
   return (data || []).map(mapBudgetSummary);
 }
 
-async function fetchBudgetsFiltered(filters: {
-  tecnico?: string; status?: string; customerQ?: string;
+async function fetchBudgetsFiltered(currentUser: AppUser, filters: {
+  status?: string; customerQ?: string;
   dataInicio?: string; dataFim?: string;
 }): Promise<BudgetSummary[]> {
   let q = supabase.from("budgets").select("*, customers(nome, cidade)");
-  if (filters.tecnico) q = q.eq("tecnico", filters.tecnico);
+  if (currentUser.username !== "admin") q = q.eq("created_by_user", currentUser.username);
   if (filters.status) q = q.eq("status", filters.status);
   if (filters.dataInicio) q = q.gte("created_at", filters.dataInicio);
   if (filters.dataFim) q = q.lte("created_at", filters.dataFim + "T23:59:59");
@@ -402,13 +422,6 @@ async function fetchBudgetsFiltered(filters: {
   return rows;
 }
 
-async function seedTecnicosOnExistingBudgets(): Promise<void> {
-  const { data } = await supabase.from("budgets").select("id, tecnico").is("tecnico", null);
-  if (!data?.length) return;
-  await Promise.all(data.map((b, i) =>
-    supabase.from("budgets").update({ tecnico: TECNICOS[i % TECNICOS.length] }).eq("id", b.id)
-  ));
-}
 
 async function fetchAllProducts(): Promise<Product[]> {
   const { data, error } = await supabase.from("products").select("*").order("linha");
@@ -582,12 +595,13 @@ async function deleteCustomer(id: string): Promise<void> {
   if (error) throw error;
 }
 
-async function getBudgetsForCustomer(customerId: string): Promise<Budget[]> {
-  const { data, error } = await supabase
+async function getBudgetsForCustomer(customerId: string, currentUser: AppUser): Promise<Budget[]> {
+  let q = supabase
     .from("budgets")
     .select("*")
-    .eq("customer_id", customerId)
-    .order("numero", { ascending: false });
+    .eq("customer_id", customerId);
+  if (currentUser.username !== "admin") q = q.eq("created_by_user", currentUser.username);
+  const { data, error } = await q.order("numero", { ascending: false });
   if (error) throw error;
   return (data || []).map((r) => mapBudget(r, []));
 }
@@ -602,10 +616,10 @@ async function getBudgetWithItems(budgetId: string): Promise<Budget> {
   return mapBudget(b, (items || []).map(mapItem));
 }
 
-async function createBudget(customerId: string, tecnico: string): Promise<Budget> {
+async function createBudget(customerId: string, currentUser: AppUser): Promise<Budget> {
   const { data, error } = await supabase
     .from("budgets")
-    .insert({ customer_id: customerId, status: "rascunho", tabela_preco: 1, frete: 0, percentual_imposto: 0.65, tecnico })
+    .insert({ customer_id: customerId, status: "rascunho", tabela_preco: 1, frete: 0, percentual_imposto: 0.65, created_by_user: currentUser.username })
     .select()
     .single();
   if (error) throw error;
@@ -616,6 +630,8 @@ async function runMigrations(): Promise<void> {
   try {
     await supabase.rpc("exec_sql", { sql: `
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS tecnico TEXT;
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS created_by_user TEXT DEFAULT 'admin';
+      UPDATE budgets SET created_by_user = 'admin' WHERE created_by_user IS NULL;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS endereco_entrega TEXT;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
@@ -685,7 +701,7 @@ async function deleteBudget(id: string): Promise<void> {
   if (error) throw error;
 }
 
-async function duplicateBudget(original: Budget, tecnico: string): Promise<Budget> {
+async function duplicateBudget(original: Budget, currentUser: AppUser): Promise<Budget> {
   const { data, error } = await supabase
     .from("budgets")
     .insert({
@@ -695,7 +711,8 @@ async function duplicateBudget(original: Budget, tecnico: string): Promise<Budge
       frete: original.frete,
       percentual_imposto: original.percentualImposto,
       observacoes: original.observacoes,
-      tecnico,
+      tecnico: original.tecnico,
+      created_by_user: currentUser.username,
       subtotal: original.subtotal,
       total_final: original.totalFinal,
     })
@@ -1011,9 +1028,9 @@ function ProductModal({
 // ── Budget Editor ─────────────────────────────────────────────────
 
 function BudgetEditor({
-  budget: initBudget, allProducts, customer, onBack, onGoHome, onBudgetChange, onOpenBudget,
+  budget: initBudget, allProducts, customer, currentUser, onBack, onGoHome, onBudgetChange, onOpenBudget,
 }: {
-  budget: Budget; allProducts: Product[]; customer: Customer;
+  budget: Budget; allProducts: Product[]; customer: Customer; currentUser: AppUser;
   onBack: () => void; onGoHome: () => void; onBudgetChange: (b: Budget) => void;
   onOpenBudget?: (b: Budget) => void;
 }) {
@@ -1030,8 +1047,6 @@ function BudgetEditor({
   const [showSaveDialog, setShowSaveDialog] = useState(false); // unused but kept for type safety
   const [isDirty, setIsDirty] = useState(false);
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
-  const [dupTecnico, setDupTecnico] = useState("");
-  const [dupTecnicoCustom, setDupTecnicoCustom] = useState("");
   const [duplicating, setDuplicating] = useState(false);
 
   // Delivery address
@@ -1045,11 +1060,9 @@ function BudgetEditor({
   const isLocked = budget.status === "enviado_fabrica" || budget.status === "fechado";
 
   async function handleDuplicate() {
-    const tecnico = dupTecnico === "__custom__" ? dupTecnicoCustom.trim() : dupTecnico;
-    if (!tecnico) { toast.error("Selecione o técnico responsável"); return; }
     setDuplicating(true);
     try {
-      const newBudget = await duplicateBudget(budget, tecnico);
+      const newBudget = await duplicateBudget(budget, currentUser);
       const full = await getBudgetWithItems(newBudget.id);
       setShowDuplicateModal(false);
       toast.success(`Orçamento #${full.numero} criado como cópia!`);
@@ -1288,7 +1301,6 @@ function BudgetEditor({
   <tr><td>Telefone</td><td>${customer.telefone || ""}</td></tr>
   <tr><td>Cidade - CEP</td><td>${customer.cidade || ""}${customer.estado ? " / " + customer.estado : ""}</td></tr>
   <tr><td>E-mail</td><td>${customer.email || ""}</td></tr>
-  ${budget.tecnico ? `<tr><td>Técnico Responsável</td><td>${budget.tecnico}</td></tr>` : ""}
 </table>
 
 <div class="section-header">PRODUTOS / ESPECIFICAÇÕES</div>
@@ -1339,7 +1351,7 @@ ${budget.observacoes ? `
           <div className="flex-1 min-w-0">
             <p className="text-xs opacity-60 truncate">{customer.nome}</p>
             <p className="font-semibold text-sm">Orçamento #{budget.numero}</p>
-            {budget.tecnico && <p className="text-xs opacity-50 truncate">Técnico: {budget.tecnico}</p>}
+            <p className="text-xs opacity-50 truncate">Usuário: {budget.createdByUser || "admin"}</p>
           </div>
           <div className="flex items-center gap-2">
             <StatusPill status={budget.status} />
@@ -1379,7 +1391,7 @@ ${budget.observacoes ? `
               </span>
             </div>
             <button
-              onClick={() => { setDupTecnico(""); setDupTecnicoCustom(""); setShowDuplicateModal(true); }}
+              onClick={() => setShowDuplicateModal(true)}
               className="flex items-center gap-1.5 bg-amber-600 text-white px-4 py-2 rounded-xl text-xs font-medium hover:bg-amber-700 transition-colors shrink-0">
               <Copy size={13} /> Copiar Orçamento
             </button>
@@ -1674,37 +1686,9 @@ ${budget.observacoes ? `
               </button>
             </div>
             <p className="text-sm text-muted-foreground mb-4">
-              Selecione o técnico responsável pelo novo orçamento (cópia do #{budget.numero}):
+              A cópia do orçamento #{budget.numero} será criada para o usuário {currentUser.username}.
             </p>
-            <div className="space-y-2 mb-4">
-              {TECNICOS.map((nome) => (
-                <button key={nome} onClick={() => setDupTecnico(nome)}
-                  className={`w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-all ${
-                    dupTecnico === nome
-                      ? "border-primary bg-primary/8 text-primary"
-                      : "border-border hover:border-primary/40 hover:bg-muted/40"
-                  }`}>
-                  {nome}
-                </button>
-              ))}
-              <button onClick={() => setDupTecnico("__custom__")}
-                className={`w-full text-left px-4 py-3 rounded-xl border text-sm transition-all ${
-                  dupTecnico === "__custom__"
-                    ? "border-primary bg-primary/8 text-primary"
-                    : "border-dashed border-border hover:border-primary/40 text-muted-foreground"
-                }`}>
-                + Outro nome...
-              </button>
-            </div>
-            {dupTecnico === "__custom__" && (
-              <input
-                type="text" value={dupTecnicoCustom} onChange={(e) => setDupTecnicoCustom(e.target.value)}
-                placeholder="Nome do técnico"
-                autoFocus
-                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 mb-4"
-              />
-            )}
-            <button onClick={handleDuplicate} disabled={duplicating || !dupTecnico || (dupTecnico === "__custom__" && !dupTecnicoCustom.trim())}
+            <button onClick={handleDuplicate} disabled={duplicating}
               className="w-full bg-amber-600 text-white py-3 rounded-xl text-sm font-medium hover:bg-amber-700 disabled:opacity-40 flex items-center justify-center gap-2 transition-colors mt-2">
               {duplicating ? <><Spinner size={14} /> Copiando...</> : <><Copy size={14} /> Criar Cópia</>}
             </button>
@@ -1718,9 +1702,9 @@ ${budget.observacoes ? `
 // ── Customer View ─────────────────────────────────────────────────
 
 function CustomerView({
-  customer: initCustomer, allProducts, onBack, onOpenBudget,
+  customer: initCustomer, allProducts, currentUser, onBack, onOpenBudget,
 }: {
-  customer: Customer; allProducts: Product[];
+  customer: Customer; allProducts: Product[]; currentUser: AppUser;
   onBack: () => void;
   onOpenBudget: (b: Budget, c: Customer) => void;
 }) {
@@ -1734,34 +1718,22 @@ function CustomerView({
     cpf: formatCPF(initCustomer.cpf || ""),
     telefone: formatPhone(initCustomer.telefone || ""),
   });
-  const [showTecnicoModal, setShowTecnicoModal] = useState(false);
-  const [tecnicoSelecionado, setTecnicoSelecionado] = useState("");
-  const [tecnicoCustom, setTecnicoCustom] = useState("");
   const [deleting, setDeleting] = useState(false);
 
   async function loadBudgets() {
     setLoading(true);
     try {
-      setBudgets(await getBudgetsForCustomer(customer.id));
+      setBudgets(await getBudgetsForCustomer(customer.id, currentUser));
     } catch { toast.error("Erro ao carregar orçamentos"); }
     finally { setLoading(false); }
   }
 
   useEffect(() => { loadBudgets(); }, [customer.id]);
 
-  function openTecnicoModal() {
-    setTecnicoSelecionado("");
-    setTecnicoCustom("");
-    setShowTecnicoModal(true);
-  }
-
   async function handleCreateBudget() {
-    const tecnico = tecnicoSelecionado === "__custom__" ? tecnicoCustom.trim() : tecnicoSelecionado;
-    if (!tecnico) { toast.error("Selecione ou informe o técnico responsável"); return; }
-    setShowTecnicoModal(false);
     setCreating(true);
     try {
-      const b = await createBudget(customer.id, tecnico);
+      const b = await createBudget(customer.id, currentUser);
       onOpenBudget(b, customer);
     } catch (e: any) { toast.error("Erro: " + e.message); setCreating(false); }
   }
@@ -1830,7 +1802,7 @@ function CustomerView({
               className="border border-red-400/40 bg-red-500/10 text-red-200 hover:bg-red-500/20 px-3 py-1.5 rounded-lg text-xs transition-colors flex items-center gap-1 disabled:opacity-50">
               {deleting ? <Spinner size={11} /> : <Trash2 size={11} />} Excluir
             </button>
-            <button onClick={openTecnicoModal} disabled={creating}
+            <button onClick={handleCreateBudget} disabled={creating}
               className="bg-white/15 hover:bg-white/25 border border-white/20 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 disabled:opacity-50">
               {creating ? <Spinner size={12} /> : <Plus size={12} />} Novo Orçamento
             </button>
@@ -1864,7 +1836,7 @@ function CustomerView({
           <div className="text-center py-16">
             <FileText size={40} className="mx-auto mb-3 text-muted-foreground opacity-20" />
             <p className="text-sm text-muted-foreground">Nenhum orçamento ainda</p>
-            <button onClick={openTecnicoModal} className="mt-3 text-primary text-sm hover:underline">Criar primeiro orçamento</button>
+            <button onClick={handleCreateBudget} className="mt-3 text-primary text-sm hover:underline">Criar primeiro orçamento</button>
           </div>
         ) : (
           <div className="space-y-3">
@@ -1893,52 +1865,6 @@ function CustomerView({
           </div>
         )}
       </div>
-
-      {/* Modal seleção de técnico */}
-      {showTecnicoModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-card rounded-2xl shadow-2xl w-full max-w-sm p-6 border border-border">
-            <div className="flex items-center justify-between mb-5">
-              <h3 className="font-semibold">Técnico Responsável</h3>
-              <button onClick={() => setShowTecnicoModal(false)} className="text-muted-foreground hover:text-foreground"><X size={16} /></button>
-            </div>
-            <p className="text-sm text-muted-foreground mb-4">Selecione quem está elaborando este orçamento:</p>
-            <div className="space-y-2 mb-4">
-              {TECNICOS.map((nome) => (
-                <button key={nome} onClick={() => setTecnicoSelecionado(nome)}
-                  className={`w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-all ${
-                    tecnicoSelecionado === nome
-                      ? "border-primary bg-primary/8 text-primary"
-                      : "border-border hover:border-primary/40 hover:bg-muted/40"
-                  }`}>
-                  {nome}
-                </button>
-              ))}
-              <button onClick={() => setTecnicoSelecionado("__custom__")}
-                className={`w-full text-left px-4 py-3 rounded-xl border text-sm transition-all ${
-                  tecnicoSelecionado === "__custom__"
-                    ? "border-primary bg-primary/8 text-primary"
-                    : "border-dashed border-border hover:border-primary/40 text-muted-foreground"
-                }`}>
-                + Outro nome...
-              </button>
-            </div>
-            {tecnicoSelecionado === "__custom__" && (
-              <input
-                type="text" value={tecnicoCustom} onChange={(e) => setTecnicoCustom(e.target.value)}
-                placeholder="Nome do técnico"
-                autoFocus
-                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 mb-4"
-              />
-            )}
-            <button onClick={handleCreateBudget}
-              disabled={!tecnicoSelecionado || (tecnicoSelecionado === "__custom__" && !tecnicoCustom.trim())}
-              className="w-full bg-primary text-primary-foreground py-3 rounded-xl text-sm font-medium hover:opacity-90 disabled:opacity-40 flex items-center justify-center gap-2">
-              <Plus size={14} /> Criar Orçamento
-            </button>
-          </div>
-        </div>
-      )}
 
       {showEdit && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 overflow-y-auto">
@@ -2428,8 +2354,8 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
 
 // ── Customer Search (Home) ────────────────────────────────────────
 
-function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
-  onSelect: (c: Customer) => void;
+function CustomerSearch({ onSelect, allProducts, currentUser, onOpenBudgetById }: {
+  onSelect: (c: Customer) => void; currentUser: AppUser;
   allProducts: Product[];
   onOpenBudgetById: (budgetId: string, customerId: string) => void;
 }) {
@@ -2445,7 +2371,6 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
   const [recentBudgets, setRecentBudgets] = useState<BudgetSummary[]>([]);
   const [filteredBudgets, setFilteredBudgets] = useState<BudgetSummary[]>([]);
   const [budgetsLoading, setBudgetsLoading] = useState(true);
-  const [filterTecnico, setFilterTecnico] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [filterCliente, setFilterCliente] = useState("");
   const [filterDataInicio, setFilterDataInicio] = useState("");
@@ -2453,10 +2378,10 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
   const [isFiltering, setIsFiltering] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  const hasFilter = !!(filterTecnico || filterStatus || filterCliente || filterDataInicio || filterDataFim);
+  const hasFilter = !!(filterStatus || filterCliente || filterDataInicio || filterDataFim);
 
   useEffect(() => {
-    fetchRecentBudgets(5)
+    fetchRecentBudgets(currentUser, 5)
       .then(setRecentBudgets)
       .catch(() => {})
       .finally(() => setBudgetsLoading(false));
@@ -2467,15 +2392,15 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
     const t = setTimeout(async () => {
       setIsFiltering(true);
       try {
-        setFilteredBudgets(await fetchBudgetsFiltered({
-          tecnico: filterTecnico, status: filterStatus, customerQ: filterCliente,
+        setFilteredBudgets(await fetchBudgetsFiltered(currentUser, {
+          status: filterStatus, customerQ: filterCliente,
           dataInicio: filterDataInicio, dataFim: filterDataFim,
         }));
       } catch {}
       finally { setIsFiltering(false); }
     }, 300);
     return () => clearTimeout(t);
-  }, [filterTecnico, filterStatus, filterCliente, filterDataInicio, filterDataFim]);
+  }, [currentUser, filterStatus, filterCliente, filterDataInicio, filterDataFim]);
 
   useEffect(() => {
     if (!q.trim()) { setResults([]); return; }
@@ -2710,18 +2635,13 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
               <div className="flex items-center justify-between mb-3">
                 <h2 className="font-semibold">Orçamentos</h2>
                 {hasFilter && (
-                  <button onClick={() => { setFilterTecnico(""); setFilterStatus(""); setFilterCliente(""); setFilterDataInicio(""); setFilterDataFim(""); }}
+                  <button onClick={() => { setFilterStatus(""); setFilterCliente(""); setFilterDataInicio(""); setFilterDataFim(""); }}
                     className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1">
                     <X size={11} /> Limpar filtros
                   </button>
                 )}
               </div>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-2">
-                <select value={filterTecnico} onChange={(e) => setFilterTecnico(e.target.value)}
-                  className="border border-border rounded-xl px-3 py-2 text-xs bg-card focus:outline-none focus:ring-2 focus:ring-primary/20">
-                  <option value="">Técnico</option>
-                  {TECNICOS.map((t) => <option key={t} value={t}>{t}</option>)}
-                </select>
                 <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}
                   className="border border-border rounded-xl px-3 py-2 text-xs bg-card focus:outline-none focus:ring-2 focus:ring-primary/20">
                   <option value="">Status</option>
@@ -2777,7 +2697,7 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
                                       </div>
                                       <p className="text-sm font-medium mt-0.5 truncate">{b.customerNome}</p>
                                       <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
-                                        {b.tecnico && <span>Téc: {b.tecnico}</span>}
+                                        <span>Usuário: {b.createdByUser || "admin"}</span>
                                         <span>{fmtDate(b.createdAt)}</span>
                                         {b.customerCidade && <span>{b.customerCidade}</span>}
                                       </div>
@@ -2827,6 +2747,47 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
   );
 }
 
+
+function LoginScreen({ onLogin }: { onLogin: (user: AppUser) => void }) {
+  const [username, setUsername] = useState<AppUserRole>("vendas");
+  const [password, setPassword] = useState("");
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const user = APP_USERS.find((u) => u.username === username && u.password === password);
+    if (!user) { toast.error("Usuário ou senha inválidos."); return; }
+    setPassword("");
+    onLogin(user);
+  }
+
+  return (
+    <div className="min-h-screen bg-background flex items-center justify-center px-4">
+      <form onSubmit={submit} className="max-w-sm w-full bg-card border border-border rounded-2xl p-6 shadow-sm space-y-4">
+        <div className="text-center mb-2">
+          <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-serif)" }}>Entrar</h1>
+          <p className="text-sm text-muted-foreground mt-1">Acesse o Sistema de Orçamentos</p>
+        </div>
+        <div>
+          <label className="text-xs font-medium text-muted-foreground">Usuário</label>
+          <select value={username} onChange={(e) => setUsername(e.target.value as AppUserRole)}
+            className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25">
+            {APP_USERS.map((u) => <option key={u.username} value={u.username}>{u.username}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-xs font-medium text-muted-foreground">Senha</label>
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus
+            className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+        </div>
+        <button type="submit" className="w-full bg-primary text-primary-foreground py-3 rounded-xl text-sm font-medium hover:opacity-90">
+          Entrar
+        </button>
+      </form>
+      <Toaster position="bottom-right" richColors />
+    </div>
+  );
+}
+
 // ── App Root ──────────────────────────────────────────────────────
 
 type View =
@@ -2840,6 +2801,7 @@ export default function App() {
   const [initMsg, setInitMsg] = useState("Verificando banco de dados...");
   const [initError, setInitError] = useState<string | null>(null);
   const [allProducts, setAllProducts] = useState<Product[]>([]);
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
 
   async function init() {
     setAppState("loading");
@@ -2848,7 +2810,6 @@ export default function App() {
       setInitMsg("Verificando tabelas...");
       await runMigrations();
       const tablesOk = await checkTablesExist();
-      if (tablesOk) await seedTecnicosOnExistingBudgets().catch(() => {});
       if (!tablesOk) { setAppState("setup"); return; }
 
       setInitMsg("Verificando catálogo...");
@@ -2874,6 +2835,10 @@ export default function App() {
   }
 
   useEffect(() => { init(); }, []);
+
+  if (!currentUser) {
+    return <LoginScreen onLogin={setCurrentUser} />;
+  }
 
   if (appState === "setup") {
     return <SetupScreen onVerify={init} />;
@@ -2912,12 +2877,14 @@ export default function App() {
         <CustomerSearch
           onSelect={(c) => setView({ type: "customer", customer: c })}
           allProducts={allProducts}
+          currentUser={currentUser}
           onOpenBudgetById={async (budgetId, customerId) => {
             try {
               const [full, { data: cData }] = await Promise.all([
                 getBudgetWithItems(budgetId),
                 supabase.from("customers").select("*").eq("id", customerId).single(),
               ]);
+              if (!canAccessBudget(currentUser, full)) { toast.error("Você não tem acesso a este orçamento."); return; }
               if (cData) setView({ type: "budget", budget: full, customer: mapCustomer(cData) });
             } catch (e: any) { toast.error("Erro ao abrir orçamento: " + e.message); }
           }}
@@ -2927,6 +2894,7 @@ export default function App() {
         <CustomerView
           customer={view.customer}
           allProducts={allProducts}
+          currentUser={currentUser}
           onBack={() => setView({ type: "home" })}
           onOpenBudget={(b, c) => setView({ type: "budget", budget: b, customer: c })}
         />
@@ -2936,6 +2904,7 @@ export default function App() {
           budget={view.budget}
           allProducts={allProducts}
           customer={view.customer}
+          currentUser={currentUser}
           onBack={() => setView({ type: "customer", customer: view.customer })}
           onGoHome={() => setView({ type: "home" })}
           onBudgetChange={(b) => setView({ type: "budget", budget: b, customer: view.customer })}

@@ -43,6 +43,17 @@ interface Product {
   preco3: number | null;
   preco4: number | null;
   descontinuado: boolean;
+  marca: string;
+  categoriaComplementar: string;
+  tipoRejunte: string;
+  tipoEmbalagem: string;
+}
+
+interface PricingSettings {
+  id?: string;
+  impostoPercentual: number;
+  taxaCartaoPercentual: number;
+  fretePor100Kg: number;
 }
 
 interface Customer {
@@ -73,6 +84,7 @@ interface BudgetItem {
 }
 
 type BudgetStatus = "rascunho" | "enviado_fabrica" | "enviado_cliente" | "fechado" | "cancelado";
+type FormaPagamento = "avista" | "avista_pix" | "cartao";
 
 interface Budget {
   id: string;
@@ -82,9 +94,20 @@ interface Budget {
   tabelaPreco: 1 | 2 | 3 | 4;
   frete: number;
   percentualImposto: number;
+  formaPagamento: FormaPagamento;
+  parcelasCartao: number;
+  descontoPixPercentual: number;
+  descontoPixIncluiFrete: boolean;
   observacoes?: string;
   tecnico?: string;
   enderecoEntrega?: string;
+  entregaCep?: string;
+  entregaLogradouro?: string;
+  entregaNumero?: string;
+  entregaComplemento?: string;
+  entregaBairro?: string;
+  entregaCidade?: string;
+  entregaEstado?: string;
   items: BudgetItem[];
   subtotal: number;
   totalFinal: number;
@@ -121,6 +144,10 @@ function mapProduct(r: any): Product {
     preco3: r.preco3 != null ? parseFloat(r.preco3) : null,
     preco4: r.preco4 != null ? parseFloat(r.preco4) : null,
     descontinuado: r.descontinuado ?? false,
+    marca: r.marca || "Villagres",
+    categoriaComplementar: r.categoria_complementar || "",
+    tipoRejunte: r.tipo_rejunte || "",
+    tipoEmbalagem: r.tipo_embalagem || "",
   };
 }
 
@@ -160,13 +187,24 @@ function mapBudget(r: any, items: BudgetItem[] = []): Budget {
     id: r.id,
     numero: r.numero,
     customerId: r.customer_id,
-    status: r.status as BudgetStatus,
+    status: (r.status === "enviado_fabrica" ? "rascunho" : r.status) as BudgetStatus,
     tabelaPreco: r.tabela_preco as 1 | 2 | 3 | 4,
     frete: parseFloat(r.frete) || 0,
     percentualImposto: parseFloat(r.percentual_imposto) || 0,
+    formaPagamento: (r.forma_pagamento || "avista") as FormaPagamento,
+    parcelasCartao: parseInt(r.parcelas_cartao) || 1,
+    descontoPixPercentual: parseFloat(r.desconto_pix_percentual) || 0,
+    descontoPixIncluiFrete: r.desconto_pix_inclui_frete === true,
     observacoes: r.observacoes || "",
     tecnico: r.tecnico || "",
     enderecoEntrega: r.endereco_entrega || "",
+    entregaCep: r.entrega_cep || "",
+    entregaLogradouro: r.entrega_logradouro || "",
+    entregaNumero: r.entrega_numero || "",
+    entregaComplemento: r.entrega_complemento || "",
+    entregaBairro: r.entrega_bairro || "",
+    entregaCidade: r.entrega_cidade || "",
+    entregaEstado: r.entrega_estado || "",
     items,
     subtotal: parseFloat(r.subtotal) || 0,
     totalFinal: parseFloat(r.total_final) || 0,
@@ -195,9 +233,22 @@ CREATE TABLE IF NOT EXISTS products (
   espessura_mm DECIMAL(10,2) DEFAULT 0,
   preco1 DECIMAL(12,4), preco2 DECIMAL(12,4),
   preco3 DECIMAL(12,4), preco4 DECIMAL(12,4),
+  marca TEXT DEFAULT 'Villagres',
+  categoria_complementar TEXT,
+  tipo_rejunte TEXT,
+  tipo_embalagem TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE products DISABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS pricing_settings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  imposto_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
+  taxa_cartao_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
+  frete_por_100kg NUMERIC(10,2) NOT NULL DEFAULT 4,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE pricing_settings DISABLE ROW LEVEL SECURITY;
 
 CREATE TABLE IF NOT EXISTS customers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -218,6 +269,10 @@ CREATE TABLE IF NOT EXISTS budgets (
   tabela_preco INTEGER DEFAULT 1,
   frete DECIMAL(12,2) DEFAULT 0,
   percentual_imposto DECIMAL(5,2) DEFAULT 0,
+  forma_pagamento TEXT DEFAULT 'avista',
+  parcelas_cartao INTEGER DEFAULT 1,
+  desconto_pix_percentual NUMERIC(5,2) DEFAULT 0,
+  desconto_pix_inclui_frete BOOLEAN DEFAULT FALSE,
   observacoes TEXT, subtotal DECIMAL(12,2) DEFAULT 0,
   total_final DECIMAL(12,2) DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -416,6 +471,77 @@ async function fetchAllProducts(): Promise<Product[]> {
   return (data || []).map(mapProduct);
 }
 
+async function loadPricingSettings(): Promise<PricingSettings> {
+  const { data, error } = await supabase
+    .from("pricing_settings")
+    .select("*")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+
+  if (data) {
+    return {
+      id: data.id,
+      impostoPercentual: parseDecimalInput(data.imposto_percentual),
+      taxaCartaoPercentual: parseDecimalInput(data.taxa_cartao_percentual),
+      fretePor100Kg: data.frete_por_100kg == null ? 4 : parseDecimalInput(data.frete_por_100kg),
+    };
+  }
+
+  const { data: created, error: createError } = await supabase
+    .from("pricing_settings")
+    .insert({ imposto_percentual: 0, taxa_cartao_percentual: 0, frete_por_100kg: 4 })
+    .select()
+    .single();
+  if (createError) throw createError;
+
+  return {
+    id: created.id,
+    impostoPercentual: parseDecimalInput(created.imposto_percentual),
+    taxaCartaoPercentual: parseDecimalInput(created.taxa_cartao_percentual),
+    fretePor100Kg: created.frete_por_100kg == null ? 4 : parseDecimalInput(created.frete_por_100kg),
+  };
+}
+
+async function savePricingSettings(settings: PricingSettings): Promise<PricingSettings> {
+  const payload = {
+    imposto_percentual: parseDecimalInput(settings.impostoPercentual),
+    taxa_cartao_percentual: parseDecimalInput(settings.taxaCartaoPercentual),
+    frete_por_100kg: parseDecimalInput(settings.fretePor100Kg) || 0,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (settings.id) {
+    const { data, error } = await supabase
+      .from("pricing_settings")
+      .update(payload)
+      .eq("id", settings.id)
+      .select()
+      .single();
+    if (error) throw error;
+    return {
+      id: data.id,
+      impostoPercentual: parseDecimalInput(data.imposto_percentual),
+      taxaCartaoPercentual: parseDecimalInput(data.taxa_cartao_percentual),
+      fretePor100Kg: data.frete_por_100kg == null ? 4 : parseDecimalInput(data.frete_por_100kg),
+    };
+  }
+
+  const { data, error } = await supabase
+    .from("pricing_settings")
+    .insert(payload)
+    .select()
+    .single();
+  if (error) throw error;
+  return {
+    id: data.id,
+    impostoPercentual: parseDecimalInput(data.imposto_percentual),
+    taxaCartaoPercentual: parseDecimalInput(data.taxa_cartao_percentual),
+    fretePor100Kg: data.frete_por_100kg == null ? 4 : parseDecimalInput(data.frete_por_100kg),
+  };
+}
+
 async function searchCustomers(q: string): Promise<Customer[]> {
   if (!q.trim()) return [];
   const { data, error } = await supabase
@@ -476,6 +602,52 @@ function formatPhone(value: string): string {
   }
 
   return `(${ddd}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+}
+
+function formatCEP(value: string): string {
+  const digits = onlyDigits(value).slice(0, 8);
+  if (digits.length <= 5) return digits;
+  return `${digits.slice(0, 5)}-${digits.slice(5)}`;
+}
+
+function isValidCEP(value: string): boolean {
+  return onlyDigits(value).length === 8;
+}
+
+interface ViaCepAddress {
+  logradouro: string;
+  bairro: string;
+  localidade: string;
+  uf: string;
+}
+
+async function fetchAddressByCEP(value: string): Promise<ViaCepAddress | null> {
+  const cep = onlyDigits(value);
+  if (!isValidCEP(cep)) return null;
+
+  const response = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+  if (!response.ok) throw new Error("network");
+
+  const data = await response.json();
+  if (data.erro) return null;
+
+  return {
+    logradouro: data.logradouro || "",
+    bairro: data.bairro || "",
+    localidade: data.localidade || "",
+    uf: data.uf || "",
+  };
+}
+
+function buildFullAddress(address: {
+  logradouro?: string; numero?: string; complemento?: string; bairro?: string;
+  cidade?: string; estado?: string; cep?: string;
+}): string {
+  const street = [address.logradouro, address.numero, address.complemento].filter(Boolean).join(", ");
+  const district = address.bairro || "";
+  const cityState = address.cidade ? `${address.cidade}${address.estado ? `/${address.estado}` : ""}` : (address.estado || "");
+  const cep = address.cep ? `CEP ${address.cep}` : "";
+  return [street, district, cityState, cep].filter(Boolean).join(" - ");
 }
 
 function isValidCPF(value: string): boolean {
@@ -605,7 +777,7 @@ async function getBudgetWithItems(budgetId: string): Promise<Budget> {
 async function createBudget(customerId: string, tecnico: string): Promise<Budget> {
   const { data, error } = await supabase
     .from("budgets")
-    .insert({ customer_id: customerId, status: "rascunho", tabela_preco: 1, frete: 0, percentual_imposto: 0.65, tecnico })
+    .insert({ customer_id: customerId, status: "rascunho", tabela_preco: 1, frete: 0, percentual_imposto: 0, forma_pagamento: "avista", parcelas_cartao: 1, desconto_pix_percentual: 0, desconto_pix_inclui_frete: false, tecnico })
     .select()
     .single();
   if (error) throw error;
@@ -617,7 +789,30 @@ async function runMigrations(): Promise<void> {
     await supabase.rpc("exec_sql", { sql: `
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS tecnico TEXT;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS endereco_entrega TEXT;
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_cep TEXT;
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_logradouro TEXT;
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_numero TEXT;
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_complemento TEXT;
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_bairro TEXT;
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_cidade TEXT;
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_estado TEXT;
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS forma_pagamento TEXT DEFAULT 'avista';
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS parcelas_cartao INTEGER DEFAULT 1;
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS desconto_pix_percentual NUMERIC(5,2) DEFAULT 0;
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS desconto_pix_inclui_frete BOOLEAN DEFAULT FALSE;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS marca TEXT DEFAULT 'Villagres';
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS categoria_complementar TEXT;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS tipo_rejunte TEXT;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS tipo_embalagem TEXT;
+      CREATE TABLE IF NOT EXISTS pricing_settings (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        imposto_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
+        taxa_cartao_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
+        frete_por_100kg NUMERIC(10,2) NOT NULL DEFAULT 4,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      ALTER TABLE pricing_settings ADD COLUMN IF NOT EXISTS frete_por_100kg NUMERIC(10,2) NOT NULL DEFAULT 4;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS logradouro TEXT;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS numero_end TEXT;
@@ -631,8 +826,10 @@ async function runMigrations(): Promise<void> {
 
 async function saveBudgetFields(id: string, patch: {
   status?: string; tabela_preco?: number; frete?: number;
-  percentual_imposto?: number; observacoes?: string;
-  subtotal?: number; total_final?: number; endereco_entrega?: string;
+  percentual_imposto?: number; forma_pagamento?: string; parcelas_cartao?: number; desconto_pix_percentual?: number; desconto_pix_inclui_frete?: boolean; observacoes?: string;
+  subtotal?: number; total_final?: number; endereco_entrega?: string | null;
+  entrega_cep?: string | null; entrega_logradouro?: string | null; entrega_numero?: string | null;
+  entrega_complemento?: string | null; entrega_bairro?: string | null; entrega_cidade?: string | null; entrega_estado?: string | null;
 }): Promise<void> {
   const { error } = await supabase
     .from("budgets")
@@ -641,9 +838,27 @@ async function saveBudgetFields(id: string, patch: {
   if (error) throw error;
 }
 
+function calculatePaymentDiscount(
+  subtotal: number,
+  frete: number,
+  formaPagamento: FormaPagamento,
+  descontoPixPercentual: number,
+  descontoPixIncluiFrete = false
+): number {
+  if (formaPagamento !== "avista_pix") return 0;
+  const percent = Math.min(parseDecimalInput(descontoPixPercentual), 3);
+  const baseDesconto = subtotal + (descontoPixIncluiFrete ? frete : 0);
+  return round2(baseDesconto * (percent / 100));
+}
+
+function calculateBudgetTotal(subtotal: number, frete: number, formaPagamento: FormaPagamento, descontoPixPercentual: number, descontoPixIncluiFrete = false): number {
+  const discount = calculatePaymentDiscount(subtotal, frete, formaPagamento, descontoPixPercentual, descontoPixIncluiFrete);
+  return round2(subtotal + frete - discount);
+}
+
 async function recalcBudgetTotals(budget: Budget): Promise<void> {
   const subtotal = budget.items.reduce((s, i) => s + i.subtotal, 0);
-  const totalFinal = subtotal + subtotal * (budget.percentualImposto / 100) + budget.frete;
+  const totalFinal = calculateBudgetTotal(subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual, budget.descontoPixIncluiFrete);
   await saveBudgetFields(budget.id, { subtotal: round2(subtotal), total_final: round2(totalFinal) });
 }
 
@@ -651,6 +866,7 @@ async function addBudgetItem(budgetId: string, item: {
   productId: string; product: Product;
   areaM2: number; caixas: number; precoM2: number; subtotal: number;
 }): Promise<BudgetItem> {
+  const subtotal = round2(item.subtotal);
   const { data, error } = await supabase
     .from("budget_items")
     .insert({
@@ -659,12 +875,22 @@ async function addBudgetItem(budgetId: string, item: {
       area_m2: item.areaM2,
       caixas: item.caixas,
       preco_m2: item.precoM2,
-      subtotal: round2(item.subtotal),
+      subtotal,
     })
-    .select("*, products(*)")
+    .select("*")
     .single();
   if (error) throw error;
-  return mapItem(data);
+
+  return {
+    id: data.id,
+    productId: data.product_id,
+    product: item.product,
+    areaM2: parseFloat(data.area_m2),
+    caixas: data.caixas,
+    precoM2: parseFloat(data.preco_m2),
+    subtotal: parseFloat(data.subtotal),
+    observacao: data.observacao || "",
+  };
 }
 
 async function updateBudgetItem(id: string, areaM2: number, caixas: number, precoM2: number): Promise<void> {
@@ -693,9 +919,21 @@ async function duplicateBudget(original: Budget, tecnico: string): Promise<Budge
       status: "rascunho",
       tabela_preco: original.tabelaPreco,
       frete: original.frete,
-      percentual_imposto: original.percentualImposto,
+      percentual_imposto: 0,
+      forma_pagamento: original.formaPagamento,
+      parcelas_cartao: original.parcelasCartao,
+      desconto_pix_percentual: original.descontoPixPercentual,
+      desconto_pix_inclui_frete: original.descontoPixIncluiFrete,
       observacoes: original.observacoes,
       tecnico,
+      endereco_entrega: original.enderecoEntrega || null,
+      entrega_cep: original.entregaCep || null,
+      entrega_logradouro: original.entregaLogradouro || null,
+      entrega_numero: original.entregaNumero || null,
+      entrega_complemento: original.entregaComplemento || null,
+      entrega_bairro: original.entregaBairro || null,
+      entrega_cidade: original.entregaCidade || null,
+      entrega_estado: original.entregaEstado || null,
       subtotal: original.subtotal,
       total_final: original.totalFinal,
     })
@@ -728,17 +966,54 @@ function fmtBRL(v: number): string {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+function fmtKg(v: number): string {
+  return `${v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kg`;
+}
+
+function isVillacolProduct(product?: Product | null): boolean {
+  return product?.marca === "Villacol";
+}
+
+function getComplementaryUnitLabel(product?: Product | null, plural = false): string {
+  if (product?.categoriaComplementar === "Rejunte") return plural ? "potes" : "pote";
+  if (product?.categoriaComplementar === "Argamassa") return plural ? "sacos" : "saco";
+  if (product?.categoriaComplementar === "Niveladores/Cunhas") return plural ? "pacotes" : "pacote";
+  return plural ? "unidades" : "unidade";
+}
+
+function calculateItemRealAreaM2(item: BudgetItem): number {
+  const caixas = Number.isFinite(item.caixas) ? item.caixas : 0;
+  const m2PorCaixa = Number.isFinite(item.product?.m2PorCaixa) ? item.product.m2PorCaixa : 0;
+  return round2(caixas * m2PorCaixa);
+}
+
+function calculateItemWeightKg(item: BudgetItem): number {
+  const caixas = Number.isFinite(item.caixas) ? item.caixas : 0;
+  const pesoPorCaixa = Number.isFinite(item.product?.pesoBrutoCx) ? item.product.pesoBrutoCx : 0;
+  return round2(caixas * pesoPorCaixa);
+}
+
+function calculateBudgetWeightKg(items: BudgetItem[]): number {
+  return round2(items.reduce((sum, item) => sum + calculateItemWeightKg(item), 0));
+}
+
+function calculateFreightByWeight(items: BudgetItem[], fretePor100Kg: number | string | null | undefined): number {
+  return round2((calculateBudgetWeightKg(items) / 100) * parseDecimalInput(fretePor100Kg));
+}
+
 function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
 const STATUS_LABELS: Record<BudgetStatus, string> = {
   rascunho: "Rascunho",
-  enviado_fabrica: "Enviado à Fábrica",
-  enviado_cliente: "Enviado ao Cliente",
-  fechado: "Fechado",
+  enviado_fabrica: "Rascunho",
+  enviado_cliente: "PDF Gerado e Enviado ao Cliente",
+  fechado: "Fechado e Pago",
   cancelado: "Cancelado",
 };
+
+const BUDGET_STATUS_OPTIONS: BudgetStatus[] = ["rascunho", "enviado_cliente", "fechado", "cancelado"];
 
 const STATUS_PILL: Record<BudgetStatus, string> = {
   rascunho: "bg-amber-100 text-amber-800 border-amber-200",
@@ -754,6 +1029,24 @@ const LOCAL_USO: Record<number, string> = {
 
 function priceKey(t: 1 | 2 | 3 | 4): keyof Product {
   return `preco${t}` as keyof Product;
+}
+
+function parseDecimalInput(value: unknown): number {
+  if (value == null || value === "") return 0;
+  const parsed = typeof value === "number" ? value : parseFloat(String(value).replace(",", "."));
+  if (!Number.isFinite(parsed) || Number.isNaN(parsed) || parsed < 0) return 0;
+  return parsed;
+}
+
+function calculateFinalPrice(
+  precoBase: number | null | undefined,
+  impostoPercentual: number | string | null | undefined,
+  taxaCartaoPercentual: number | string | null | undefined
+): number {
+  const base = parseDecimalInput(precoBase);
+  const imposto = parseDecimalInput(impostoPercentual);
+  const taxa = parseDecimalInput(taxaCartaoPercentual);
+  return round2(base * (1 + (imposto + taxa) / 100));
 }
 
 function Spinner({ size = 20 }: { size?: number }) {
@@ -834,43 +1127,57 @@ function SetupScreen({ onVerify }: { onVerify: () => void }) {
 // ── Product Search Modal ──────────────────────────────────────────
 
 function ProductModal({
-  allProducts, tabelaPreco, onSelect, onClose,
+  allProducts, tabelaPreco, pricingSettings, onSelect, onClose,
 }: {
   allProducts: Product[];
   tabelaPreco: 1 | 2 | 3 | 4;
-  onSelect: (product: Product, areaM2: number) => void;
+  pricingSettings?: PricingSettings;
+  onSelect: (product: Product, areaM2: number, tabelaPreco: 1 | 2 | 3 | 4) => void;
   onClose: () => void;
 }) {
   const [q, setQ] = useState("");
+  const [marcaFiltro, setMarcaFiltro] = useState("");
+  const [categoriaFiltro, setCategoriaFiltro] = useState("");
   const [superficie, setSuperficie] = useState("");
+  const [formato, setFormato] = useState("");
   const [localUso, setLocalUso] = useState("");
   const [selected, setSelected] = useState<Product | null>(null);
   const [areaInput, setAreaInput] = useState("");
-  const pk = priceKey(tabelaPreco);
+  const [selectedTabela, setSelectedTabela] = useState<1 | 2 | 3 | 4>(tabelaPreco);
+  const pk = priceKey(selectedTabela);
+  const safeProducts = Array.isArray(allProducts) ? allProducts : [];
+  const effectivePricingSettings = pricingSettings || { impostoPercentual: 0, taxaCartaoPercentual: 0, fretePor100Kg: 4 };
 
-  const results = allProducts.filter((p) => {
+  const results = safeProducts.filter((p) => {
     if (p.descontinuado) return false;
     const txt = q.toLowerCase();
-    const matchQ = !q || [p.linha, p.colecao, p.cor, p.formato, p.referencia, p.superficie]
+    const matchQ = !q || [p.linha, p.colecao, p.cor, p.formato, p.referencia, p.superficie, p.marca, p.categoriaComplementar, p.tipoRejunte, p.tipoEmbalagem]
       .some((f) => f?.toLowerCase().includes(txt));
     return matchQ &&
+      (!marcaFiltro || p.marca === marcaFiltro) &&
+      (!categoriaFiltro || p.categoriaComplementar === categoriaFiltro) &&
       (!superficie || p.superficie === superficie) &&
+      (!formato || p.formato === formato) &&
       (!localUso || String(p.localUso) === localUso);
   }).slice(0, 100);
 
   function confirmAdd() {
     if (!selected) return;
     const area = parseFloat(areaInput.replace(",", "."));
-    if (!area || area <= 0) { toast.error("Informe a área em m²"); return; }
-    onSelect(selected, area);
+    if (!area || area <= 0) { toast.error(isVillacolProduct(selected) ? "Informe a quantidade" : "Informe a área em m²"); return; }
+    onSelect(selected, area, selectedTabela);
   }
 
-  const superficies = [...new Set(allProducts.map((p) => p.superficie).filter(Boolean))].sort();
+  const superficies = [...new Set(safeProducts.map((p) => p.superficie).filter(Boolean))].sort();
+  const formatos = [...new Set(safeProducts.map((p) => p.formato).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true }));
 
   if (selected) {
-    const price = selected[pk] as number | null;
+    const priceBase = selected[pk] as number | null;
+    const price = priceBase != null ? calculateFinalPrice(priceBase, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
     const area = parseFloat(areaInput.replace(",", ".")) || 0;
     const caixas = selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : 0;
+    const selectedIsVillacol = isVillacolProduct(selected);
+    const selectedUnitLabel = getComplementaryUnitLabel(selected, caixas !== 1);
 
     return (
       <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
@@ -884,37 +1191,59 @@ function ProductModal({
               {selected.linha}
               {selected.cor && selected.cor !== "única" && selected.cor !== "-" ? ` · ${selected.cor}` : ""}
             </h3>
-            <p className="text-sm text-muted-foreground mt-0.5">{selected.colecao} · {selected.superficie}</p>
-            <p className="text-xs text-muted-foreground mt-0.5 font-mono">{selected.formato} · Ref: {selected.referencia}</p>
-            <p className="text-xs text-muted-foreground">{LOCAL_USO[selected.localUso]} · {selected.m2PorCaixa} m²/cx · {selected.espessuraMm}mm</p>
+            {selectedIsVillacol ? (
+              <>
+                <p className="text-sm text-muted-foreground mt-0.5">{selected.categoriaComplementar} · {selected.tipoEmbalagem || selected.tipoRejunte || "Embalagem"}</p>
+                <p className="text-xs text-muted-foreground mt-0.5 font-mono">Ref: {selected.referencia}</p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground mt-0.5">{selected.colecao} · {selected.superficie}</p>
+                <p className="text-xs text-muted-foreground mt-0.5 font-mono">{selected.formato} · Ref: {selected.referencia}</p>
+                <p className="text-xs text-muted-foreground">{LOCAL_USO[selected.localUso]} · {selected.m2PorCaixa} m²/cx · {selected.espessuraMm}mm</p>
+              </>
+            )}
+          </div>
+          <div className="mb-4">
+            <p className="text-xs font-medium text-muted-foreground mb-1.5">Tabela de preço deste produto</p>
+            <div className="grid grid-cols-4 gap-1.5">
+              {([1, 2, 3, 4] as const).map((t) => (
+                <button key={t} type="button" onClick={() => setSelectedTabela(t)}
+                  className={`rounded-lg py-1.5 text-xs font-semibold border transition-colors ${selectedTabela === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                  Tabela {t}
+                </button>
+              ))}
+            </div>
           </div>
           {price ? (
             <div className="bg-primary/8 rounded-xl p-3 mb-4 flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Tabela {tabelaPreco}</span>
+              <span className="text-sm text-muted-foreground">Tabela {selectedTabela}</span>
               <span className="text-xl font-semibold text-primary font-mono">
-                {fmtBRL(price)}<span className="text-sm font-normal text-muted-foreground">/m²</span>
+                {fmtBRL(price)}<span className="text-sm font-normal text-muted-foreground">{selectedIsVillacol ? "/un." : "/m²"}</span>
               </span>
             </div>
           ) : (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 flex items-center gap-2 text-sm text-amber-700">
-              <AlertTriangle size={14} /> Preço não disponível para tabela {tabelaPreco}
+              <AlertTriangle size={14} /> Preço não disponível para tabela {selectedTabela}
             </div>
           )}
-          <label className="block text-xs font-medium text-muted-foreground mb-1">Área necessária (m²)</label>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">{selectedIsVillacol ? `Quantidade de ${getComplementaryUnitLabel(selected, true)}` : "Área necessária (m²)"}</label>
           <input type="text" value={areaInput} onChange={(e) => setAreaInput(e.target.value)}
-            placeholder="Ex: 45,50" autoFocus
+            placeholder={selectedIsVillacol ? "Ex: 10" : "Ex: 45,50"} autoFocus
             onKeyDown={(e) => e.key === "Enter" && confirmAdd()}
             className="w-full border border-border rounded-xl px-4 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 mb-3 font-mono" />
           {area > 0 && selected.m2PorCaixa > 0 && (
             <div className="bg-muted rounded-xl p-3 mb-4 text-sm space-y-1.5">
               <div className="flex justify-between text-muted-foreground">
-                <span>Caixas necessárias</span>
-                <span className="font-mono font-medium text-foreground">{caixas} cx</span>
+                <span>{selectedIsVillacol ? "Quantidade calculada" : "Caixas necessárias"}</span>
+                <span className="font-mono font-medium text-foreground">{caixas} {selectedIsVillacol ? selectedUnitLabel : "cx"}</span>
               </div>
-              <div className="flex justify-between text-muted-foreground">
-                <span>m² real (arredondado)</span>
-                <span className="font-mono text-foreground">{(caixas * selected.m2PorCaixa).toFixed(2)} m²</span>
-              </div>
+              {!selectedIsVillacol && (
+                <div className="flex justify-between text-muted-foreground">
+                  <span>m² real (arredondado)</span>
+                  <span className="font-mono text-foreground">{(caixas * selected.m2PorCaixa).toFixed(2)} m²</span>
+                </div>
+              )}
               {price && (
                 <div className="flex justify-between pt-1.5 border-t border-border font-medium">
                   <span>Subtotal estimado</span>
@@ -941,7 +1270,7 @@ function ProductModal({
         <div className="px-5 py-4 border-b border-border flex items-center justify-between">
           <div>
             <h3 className="font-semibold">Buscar Produto</h3>
-            <p className="text-xs text-muted-foreground">Tabela {tabelaPreco} ativa</p>
+            <p className="text-xs text-muted-foreground">Escolha a tabela no nível do produto</p>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X size={18} /></button>
         </div>
@@ -949,17 +1278,44 @@ function ProductModal({
           <div className="relative">
             <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <input type="text" value={q} onChange={(e) => setQ(e.target.value)} autoFocus
-              placeholder="Coleção, cor, formato, referência..."
+              placeholder="Marca, coleção, cor, formato, referência..."
               className="w-full border border-border rounded-xl pl-9 pr-4 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
           </div>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-1.5 border border-border rounded-xl px-3 py-2 bg-muted/30">
+            <span className="text-xs text-muted-foreground mr-1">Tabela do produto:</span>
+            {([1, 2, 3, 4] as const).map((t) => (
+              <button key={t} type="button" onClick={() => setSelectedTabela(t)}
+                className={`w-7 h-6 rounded text-xs font-semibold transition-all ${selectedTabela === t ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>
+                {t}
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
+            <select value={marcaFiltro} onChange={(e) => setMarcaFiltro(e.target.value)}
+              className="border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
+              <option value="">Todas as marcas</option>
+              <option value="Villagres">Villagres</option>
+              <option value="Villacol">Villacol</option>
+            </select>
+            <select value={categoriaFiltro} onChange={(e) => setCategoriaFiltro(e.target.value)}
+              className="border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
+              <option value="">Todos os complementares</option>
+              <option value="Argamassa">Argamassa</option>
+              <option value="Rejunte">Rejunte</option>
+              <option value="Niveladores/Cunhas">Niveladores/Cunhas</option>
+            </select>
             <select value={superficie} onChange={(e) => setSuperficie(e.target.value)}
-              className="flex-1 border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
+              className="border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
               <option value="">Todas as superfícies</option>
               {superficies.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
+            <select value={formato} onChange={(e) => setFormato(e.target.value)}
+              className="border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
+              <option value="">Todos os formatos</option>
+              {formatos.map((f) => <option key={f} value={f}>{f}</option>)}
+            </select>
             <select value={localUso} onChange={(e) => setLocalUso(e.target.value)}
-              className="flex-1 border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
+              className="border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
               <option value="">Todos os locais</option>
               <option value="2">Parede</option>
               <option value="3">Piso Interno</option>
@@ -971,12 +1327,13 @@ function ProductModal({
           {results.length === 0 ? (
             <div className="py-16 text-center text-muted-foreground text-sm">
               <Package size={32} className="mx-auto mb-2 opacity-20" />
-              {q || superficie || localUso ? "Nenhum produto encontrado" : "Digite para buscar"}
+              {q || marcaFiltro || categoriaFiltro || superficie || formato || localUso ? "Nenhum produto encontrado" : "Digite para buscar"}
             </div>
           ) : (
             <div className="divide-y divide-border">
               {results.map((p) => {
                 const price = p[pk] as number | null;
+                const finalPrice = price != null ? calculateFinalPrice(price, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
                 return (
                   <button key={p.id} onClick={() => setSelected(p)}
                     className="w-full text-left px-5 py-3 hover:bg-muted/50 transition-colors group">
@@ -984,15 +1341,16 @@ function ProductModal({
                       <div className="min-w-0">
                         <p className="font-medium text-sm">
                           {p.linha}
+                          <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground border border-border font-medium">{p.marca || "Villagres"}</span>
                           {p.cor && p.cor !== "única" && p.cor !== "-"
                             ? <span className="text-muted-foreground font-normal"> · {p.cor}</span> : null}
                         </p>
-                        <p className="text-xs text-muted-foreground mt-0.5">{p.formato} · {p.superficie} · {LOCAL_USO[p.localUso]}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">{p.marca === "Villacol" ? [p.categoriaComplementar, p.tipoRejunte || p.tipoEmbalagem].filter(Boolean).join(" · ") : `${p.formato} · ${p.superficie} · ${LOCAL_USO[p.localUso]}`}</p>
                         <p className="text-xs text-muted-foreground font-mono">{p.referencia} · {p.colecao}</p>
                       </div>
                       <div className="text-right shrink-0">
-                        {price
-                          ? <p className="text-sm font-semibold text-primary font-mono">{fmtBRL(price)}/m²</p>
+                        {finalPrice != null
+                          ? <p className="text-sm font-semibold text-primary font-mono">{fmtBRL(finalPrice)}/m²</p>
                           : <p className="text-xs text-amber-600">Consultar</p>}
                         <p className="text-xs text-muted-foreground">{p.m2PorCaixa} m²/cx</p>
                       </div>
@@ -1011,9 +1369,9 @@ function ProductModal({
 // ── Budget Editor ─────────────────────────────────────────────────
 
 function BudgetEditor({
-  budget: initBudget, allProducts, customer, onBack, onGoHome, onBudgetChange, onOpenBudget,
+  budget: initBudget, allProducts, pricingSettings, customer, onBack, onGoHome, onBudgetChange, onOpenBudget,
 }: {
-  budget: Budget; allProducts: Product[]; customer: Customer;
+  budget: Budget; allProducts: Product[]; pricingSettings: PricingSettings; customer: Customer;
   onBack: () => void; onGoHome: () => void; onBudgetChange: (b: Budget) => void;
   onOpenBudget?: (b: Budget) => void;
 }) {
@@ -1021,12 +1379,16 @@ function BudgetEditor({
   const [showModal, setShowModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [frete, setFrete] = useState(String(initBudget.frete || "0"));
-  const [imposto, setImposto] = useState(String(initBudget.percentualImposto || "0.65"));
+  const [formaPagamento, setFormaPagamento] = useState<FormaPagamento>(initBudget.formaPagamento || "avista");
+  const [parcelasCartao, setParcelasCartao] = useState(String(initBudget.parcelasCartao || 1));
+  const [descontoPix, setDescontoPix] = useState(String(initBudget.descontoPixPercentual || 0));
+  const [descontoPixIncluiFrete, setDescontoPixIncluiFrete] = useState(Boolean(initBudget.descontoPixIncluiFrete));
   const [obs, setObs] = useState(initBudget.observacoes || "");
   const [editFinancials, setEditFinancials] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [editAreaInput, setEditAreaInput] = useState("");
+  const [editTabela, setEditTabela] = useState<1 | 2 | 3 | 4>(initBudget.tabelaPreco);
   const [showSaveDialog, setShowSaveDialog] = useState(false); // unused but kept for type safety
   const [isDirty, setIsDirty] = useState(false);
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
@@ -1035,14 +1397,76 @@ function BudgetEditor({
   const [duplicating, setDuplicating] = useState(false);
 
   // Delivery address
-  const customerAddr = [customer.logradouro, customer.numero, customer.complemento, customer.bairro, customer.cidade, customer.estado]
-    .filter(Boolean).join(", ");
-  const [mesmoEndereco, setMesmoEndereco] = useState(
-    !initBudget.enderecoEntrega || initBudget.enderecoEntrega === customerAddr
-  );
-  const [enderecoEntrega, setEnderecoEntrega] = useState(initBudget.enderecoEntrega || "");
+  const customerAddr = buildFullAddress(customer);
+  const hasCustomerAddress = Boolean(customerAddr);
+  const savedDelivery = {
+    cep: initBudget.entregaCep || "",
+    logradouro: initBudget.entregaLogradouro || "",
+    numero: initBudget.entregaNumero || "",
+    complemento: initBudget.entregaComplemento || "",
+    bairro: initBudget.entregaBairro || "",
+    cidade: initBudget.entregaCidade || "",
+    estado: initBudget.entregaEstado || "",
+  };
+  const savedDeliveryAddress = buildFullAddress(savedDelivery);
+  const customerDelivery = {
+    cep: formatCEP(customer.cep || ""),
+    logradouro: customer.logradouro || "",
+    numero: customer.numero || "",
+    complemento: customer.complemento || "",
+    bairro: customer.bairro || "",
+    cidade: customer.cidade || "",
+    estado: customer.estado || "",
+  };
+  const initialDelivery = savedDeliveryAddress ? savedDelivery : hasCustomerAddress ? customerDelivery : savedDelivery;
+  const [deliveryMode, setDeliveryMode] = useState<"customer" | "different" | "">(savedDeliveryAddress ? "different" : hasCustomerAddress ? "customer" : "");
+  const [entrega, setEntrega] = useState(initialDelivery);
+  const [consultandoEntregaCep, setConsultandoEntregaCep] = useState(false);
+  const [showDeliveryModal, setShowDeliveryModal] = useState(false);
 
-  const isLocked = budget.status === "enviado_fabrica" || budget.status === "fechado";
+  const isLocked = budget.status === "fechado";
+  const villagresItems = budget.items.filter((item) => !isVillacolProduct(item.product));
+  const villacolItems = budget.items.filter((item) => isVillacolProduct(item.product));
+  const pixOnlyCategories = ["Rejunte", "Niveladores/Cunhas"];
+  const topFinancialItems = budget.items.filter((item) => !pixOnlyCategories.includes(item.product?.categoriaComplementar || ""));
+  const pixOnlyItems = budget.items.filter((item) => pixOnlyCategories.includes(item.product?.categoriaComplementar || ""));
+  const cardFactor = 1 + (pricingSettings.impostoPercentual + pricingSettings.taxaCartaoPercentual) / 100;
+  const taxOnlyFactor = 1 + pricingSettings.impostoPercentual / 100;
+  const pixPriceFactor = cardFactor > 0 ? taxOnlyFactor / cardFactor : 1;
+  const noTaxOrCardFactor = cardFactor > 0 ? 1 / cardFactor : 1;
+  const paymentPriceFactor = budget.formaPagamento === "avista_pix" ? pixPriceFactor : 1;
+  const villagresSubtotal = round2(villagresItems.reduce((sum, item) => sum + item.subtotal * paymentPriceFactor, 0));
+  const argamassaSubtotal = round2(topFinancialItems
+    .filter((item) => item.product?.categoriaComplementar === "Argamassa")
+    .reduce((sum, item) => sum + item.subtotal * paymentPriceFactor, 0));
+  const topSubtotalBeforeDiscount = round2(villagresSubtotal + argamassaSubtotal);
+  const topSubtotalLabel = budget.formaPagamento === "cartao"
+    ? `Subtotal Cartão ${budget.parcelasCartao}x`
+    : budget.formaPagamento === "avista_pix"
+      ? "Subtotal PIX"
+      : "Subtotal Débito";
+  const topPixDiscount = budget.formaPagamento === "avista_pix" ? round2(topSubtotalBeforeDiscount * Math.min(budget.descontoPixPercentual, 3) / 100) : 0;
+  const topTotal = round2(topSubtotalBeforeDiscount - topPixDiscount);
+  const pixOnlyProductsSubtotal = round2(pixOnlyItems.reduce((sum, item) => sum + item.subtotal * noTaxOrCardFactor, 0));
+  const pixOnlySubtotal = round2(pixOnlyProductsSubtotal + budget.frete);
+  const generalTotal = round2(topTotal + pixOnlySubtotal);
+  const totalWeightKg = calculateBudgetWeightKg(budget.items);
+  const suggestedFreightByWeight = calculateFreightByWeight(budget.items, pricingSettings.fretePor100Kg);
+
+  function formatFreightInput(value: number): string {
+    return round2(value).toFixed(2).replace(".", ",");
+  }
+
+  function openFinancialsEditor() {
+    const freightValue = budget.frete > 0 ? budget.frete : suggestedFreightByWeight;
+    setFrete(formatFreightInput(freightValue));
+    setFormaPagamento(budget.formaPagamento);
+    setParcelasCartao(String(budget.parcelasCartao));
+    setDescontoPix(String(budget.descontoPixPercentual));
+    setDescontoPixIncluiFrete(Boolean(budget.descontoPixIncluiFrete));
+    setObs(budget.observacoes || "");
+    setEditFinancials(true);
+  }
 
   async function handleDuplicate() {
     const tecnico = dupTecnico === "__custom__" ? dupTecnicoCustom.trim() : dupTecnico;
@@ -1064,11 +1488,20 @@ function BudgetEditor({
 
   function markDirty() { setIsDirty(true); }
 
+  function getSentBudgetDraftPatch(): Partial<Budget> {
+    if (budget.status !== "enviado_cliente") return {};
+    toast.warning("Este orçamento já foi enviado ao cliente e voltará para Rascunho. Reenvie o PDF após concluir as alterações.");
+    return { status: "rascunho" };
+  }
+
   function updateLocal(patch: Partial<Budget>) {
     const updated = { ...budget, ...patch };
     const subtotal = updated.items.reduce((s, i) => s + i.subtotal, 0);
-    const totalFinal = subtotal + subtotal * (updated.percentualImposto / 100) + updated.frete;
+    const totalFinal = calculateBudgetTotal(subtotal, updated.frete, updated.formaPagamento, updated.descontoPixPercentual, updated.descontoPixIncluiFrete);
     const final = { ...updated, subtotal: round2(subtotal), totalFinal: round2(totalFinal) };
+    if (Object.prototype.hasOwnProperty.call(patch, "frete")) {
+      setFrete(formatFreightInput(final.frete));
+    }
     setBudget(final);
     onBudgetChange(final);
     return final;
@@ -1079,28 +1512,46 @@ function BudgetEditor({
       subtotal: b.subtotal,
       total_final: b.totalFinal,
       frete: b.frete,
-      percentual_imposto: b.percentualImposto,
+      percentual_imposto: 0,
+      forma_pagamento: b.formaPagamento,
+      parcelas_cartao: b.parcelasCartao,
+      desconto_pix_percentual: b.descontoPixPercentual,
+      desconto_pix_inclui_frete: b.descontoPixIncluiFrete,
       observacoes: b.observacoes,
       status: b.status,
       tabela_preco: b.tabelaPreco,
     });
   }
 
-  async function handleAddProduct(product: Product, areaM2: number) {
+  async function handleAddProduct(product: Product, areaM2: number, itemTabelaPreco: 1 | 2 | 3 | 4) {
     const already = budget.items.find((i) => i.productId === product.id);
     if (already) {
       setShowModal(false);
       toast.warning(`"${product.linha}" já está no orçamento — edite a metragem diretamente na tabela.`);
       return;
     }
-    const precoM2 = product[priceKey(budget.tabelaPreco)] as number;
+    const precoBase = product[priceKey(itemTabelaPreco)] as number | null;
+    if (precoBase == null || !Number.isFinite(Number(precoBase)) || Number(precoBase) <= 0) {
+      toast.error(`Preço não disponível para a tabela ${itemTabelaPreco}.`);
+      return;
+    }
+    if (!product.m2PorCaixa || product.m2PorCaixa <= 0) {
+      toast.error("Produto sem m²/caixa válido. Corrija o cadastro antes de adicionar.");
+      return;
+    }
+    const precoM2 = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
+    if (!Number.isFinite(precoM2) || precoM2 <= 0) {
+      toast.error("Não foi possível calcular o preço final do produto.");
+      return;
+    }
     const caixas = Math.ceil(areaM2 / product.m2PorCaixa);
     setSaving(true);
     try {
       const newItem = await addBudgetItem(budget.id, {
-        productId: product.id, product, areaM2, caixas, precoM2, subtotal: areaM2 * precoM2,
+        productId: product.id, product, areaM2, caixas, precoM2, subtotal: round2(areaM2 * precoM2),
       });
-      const b = updateLocal({ items: [...budget.items, newItem] });
+      const nextItems = [...budget.items, newItem];
+      const b = updateLocal({ ...getSentBudgetDraftPatch(), items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
       await persistTotals(b);
       markDirty();
       setShowModal(false);
@@ -1113,16 +1564,28 @@ function BudgetEditor({
     setRemovingId(itemId);
     try {
       await deleteBudgetItem(itemId);
-      const b = updateLocal({ items: budget.items.filter((i) => i.id !== itemId) });
+      const nextItems = budget.items.filter((i) => i.id !== itemId);
+      const b = updateLocal({ ...getSentBudgetDraftPatch(), items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
       await persistTotals(b);
       markDirty();
     } catch (e: any) { toast.error("Erro: " + e.message); }
     finally { setRemovingId(null); }
   }
 
+  function inferItemTabela(item: BudgetItem): 1 | 2 | 3 | 4 {
+    for (const t of [1, 2, 3, 4] as const) {
+      const precoBase = item.product[priceKey(t)] as number | null;
+      if (precoBase == null) continue;
+      const precoTabela = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
+      if (Math.abs(precoTabela - item.precoM2) < 0.01) return t;
+    }
+    return budget.tabelaPreco;
+  }
+
   function startEditItem(item: BudgetItem) {
     setEditingItemId(item.id);
     setEditAreaInput(String(item.areaM2).replace(".", ","));
+    setEditTabela(inferItemTabela(item));
   }
 
   async function confirmEditItem(itemId: string) {
@@ -1130,12 +1593,23 @@ function BudgetEditor({
     if (!item) return;
     const newArea = parseFloat(editAreaInput.replace(",", "."));
     if (!newArea || newArea <= 0) { toast.error("Área inválida"); return; }
+    const precoBase = item.product[priceKey(editTabela)] as number | null;
+    if (precoBase == null || !Number.isFinite(Number(precoBase)) || Number(precoBase) <= 0) {
+      toast.error(`Preço não disponível para a tabela ${editTabela}.`);
+      return;
+    }
+    const newPrecoM2 = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
+    if (!Number.isFinite(newPrecoM2) || newPrecoM2 <= 0) {
+      toast.error("Não foi possível calcular o preço final do produto.");
+      return;
+    }
     const caixas = item.product.m2PorCaixa > 0 ? Math.ceil(newArea / item.product.m2PorCaixa) : item.caixas;
     setSaving(true);
     try {
-      await updateBudgetItem(itemId, newArea, caixas, item.precoM2);
-      const updatedItem = { ...item, areaM2: newArea, caixas, subtotal: round2(newArea * item.precoM2) };
-      const b = updateLocal({ items: budget.items.map((i) => i.id === itemId ? updatedItem : i) });
+      await updateBudgetItem(itemId, newArea, caixas, newPrecoM2);
+      const updatedItem = { ...item, areaM2: newArea, caixas, precoM2: newPrecoM2, subtotal: round2(newArea * newPrecoM2) };
+      const nextItems = budget.items.map((i) => i.id === itemId ? updatedItem : i);
+      const b = updateLocal({ ...getSentBudgetDraftPatch(), items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
       await persistTotals(b);
       markDirty();
       setEditingItemId(null);
@@ -1144,12 +1618,31 @@ function BudgetEditor({
     finally { setSaving(false); }
   }
 
+  function handlePixDiscountChange(value: string) {
+    if (value.trim() === "") {
+      setDescontoPix("");
+      return;
+    }
+
+    const parsed = parseFloat(value.replace(",", "."));
+    if (!Number.isFinite(parsed) || Number.isNaN(parsed) || parsed < 0) return;
+    if (parsed > 3) {
+      toast.error("O desconto máximo permitido para PIX é de 3%.");
+      return;
+    }
+
+    setDescontoPix(value);
+  }
+
   async function handleSaveFinancials() {
     const fr = parseFloat(frete.replace(",", ".")) || 0;
-    const imp = parseFloat(imposto.replace(",", ".")) || 0;
+    const forma = formaPagamento;
+    const parcelas = forma === "cartao" ? Math.min(Math.max(parseInt(parcelasCartao) || 1, 1), 6) : 1;
+    const desconto = forma === "avista_pix" ? Math.min(parseDecimalInput(descontoPix), 3) : 0;
+    const incluiFrete = false;
     setSaving(true);
     try {
-      const b = updateLocal({ frete: fr, percentualImposto: imp, observacoes: obs });
+      const b = updateLocal({ frete: fr, percentualImposto: 0, formaPagamento: forma, parcelasCartao: parcelas, descontoPixPercentual: desconto, descontoPixIncluiFrete: incluiFrete, observacoes: obs });
       await persistTotals(b);
       markDirty();
       setEditFinancials(false);
@@ -1158,13 +1651,86 @@ function BudgetEditor({
     finally { setSaving(false); }
   }
 
+
+  async function handleDeliveryCepChange(value: string) {
+    const cep = formatCEP(value);
+    setEntrega((f) => ({ ...f, cep }));
+    markDirty();
+
+    if (!isValidCEP(cep)) return;
+
+    setConsultandoEntregaCep(true);
+    try {
+      const address = await fetchAddressByCEP(cep);
+      if (!address) {
+        toast.error("CEP não encontrado. Preencha o endereço manualmente.");
+        return;
+      }
+
+      setEntrega((f) => ({
+        ...f,
+        cep,
+        logradouro: address.logradouro,
+        bairro: address.bairro,
+        cidade: address.localidade,
+        estado: address.uf,
+      }));
+    } catch {
+      toast.error("Não foi possível consultar o CEP. Preencha o endereço manualmente.");
+    } finally {
+      setConsultandoEntregaCep(false);
+    }
+  }
+
+  function useCustomerAddress() {
+    if (!hasCustomerAddress) {
+      toast.error("Cliente sem endereço cadastrado. Preencha o endereço de entrega manualmente.");
+      setDeliveryMode("different");
+      return;
+    }
+    setEntrega(customerDelivery);
+    setDeliveryMode("customer");
+    setShowDeliveryModal(false);
+    markDirty();
+  }
+
+  function useDifferentDeliveryAddress() {
+    setDeliveryMode("different");
+    setShowDeliveryModal(true);
+    markDirty();
+  }
+
+  function saveDifferentDeliveryAddress() {
+    setDeliveryMode("different");
+    setShowDeliveryModal(false);
+    markDirty();
+  }
+
   async function handleSaveDraft() {
     setSaving(true);
     try {
-      const entrega = mesmoEndereco ? customerAddr : enderecoEntrega.trim();
+      const enderecoEntrega = buildFullAddress(entrega);
       await persistTotals(budget);
-      await saveBudgetFields(budget.id, { endereco_entrega: entrega });
-      updateLocal({ enderecoEntrega: entrega });
+      await saveBudgetFields(budget.id, {
+        endereco_entrega: enderecoEntrega,
+        entrega_cep: entrega.cep || null,
+        entrega_logradouro: entrega.logradouro || null,
+        entrega_numero: entrega.numero || null,
+        entrega_complemento: entrega.complemento || null,
+        entrega_bairro: entrega.bairro || null,
+        entrega_cidade: entrega.cidade || null,
+        entrega_estado: entrega.estado || null,
+      });
+      updateLocal({
+        enderecoEntrega,
+        entregaCep: entrega.cep,
+        entregaLogradouro: entrega.logradouro,
+        entregaNumero: entrega.numero,
+        entregaComplemento: entrega.complemento,
+        entregaBairro: entrega.bairro,
+        entregaCidade: entrega.cidade,
+        entregaEstado: entrega.estado,
+      });
       setIsDirty(false);
       toast.success("Rascunho salvo!");
     } catch (e: any) { toast.error("Erro: " + e.message); }
@@ -1172,6 +1738,11 @@ function BudgetEditor({
   }
 
   async function changeStatus(status: BudgetStatus) {
+    if (budget.status === "fechado") {
+      toast.error("Orçamento fechado e pago não pode ter o status alterado.");
+      return;
+    }
+    if (status === "enviado_fabrica") return;
     setSaving(true);
     try {
       await saveBudgetFields(budget.id, { status });
@@ -1181,29 +1752,6 @@ function BudgetEditor({
     } catch (e: any) { toast.error("Erro: " + e.message); }
     finally { setSaving(false); }
   }
-
-  async function changeTabela(t: 1 | 2 | 3 | 4) {
-    const pk = priceKey(t);
-    const updatedItems = budget.items.map((item) => {
-      const newPreco = item.product[pk] as number | null;
-      if (!newPreco) return item;
-      return { ...item, precoM2: newPreco, subtotal: round2(item.areaM2 * newPreco) };
-    });
-    setSaving(true);
-    try {
-      // Update each item price in DB
-      await Promise.all(updatedItems.map((item) =>
-        updateBudgetItem(item.id, item.areaM2, item.caixas, item.precoM2)
-      ));
-      const b = updateLocal({ tabelaPreco: t, items: updatedItems });
-      await persistTotals(b);
-      markDirty();
-      toast.info(`Tabela ${t} — preços recalculados`);
-    } catch (e: any) { toast.error("Erro: " + e.message); }
-    finally { setSaving(false); }
-  }
-
-  const impostoVal = round2(budget.subtotal * (budget.percentualImposto / 100));
 
   async function printBudget() {
     const fmtBRLStr = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -1221,7 +1769,9 @@ function BudgetEditor({
     } catch { /* logo omitido se falhar */ }
     const dateStr = new Date(budget.createdAt).toLocaleDateString("pt-BR");
 
-    const rows = budget.items.map((item) => {
+    const deliveryAddressForPrint = budget.enderecoEntrega || (deliveryMode === "customer" ? customerAddr : buildFullAddress(entrega));
+
+    const rows = villagresItems.map((item) => {
       const p = item.product;
       const cor = p?.cor && p.cor !== "única" && p.cor !== "-" ? p.cor : "";
       return `<tr>
@@ -1231,7 +1781,24 @@ function BudgetEditor({
         <td>${p?.formato ?? ""}</td>
         <td style="text-align:right">${fmtBRLStr(item.precoM2)}</td>
         <td style="text-align:right">${item.areaM2.toFixed(2)}</td>
+        <td style="text-align:right">${calculateItemRealAreaM2(item).toFixed(2)}</td>
         <td style="text-align:right">${p?.m2PorCaixa ?? ""}</td>
+        <td style="text-align:right">${fmtKg(calculateItemWeightKg(item))}</td>
+        <td style="text-align:right">${fmtBRLStr(item.subtotal)}</td>
+      </tr>`;
+    }).join("");
+
+    const complementaryRows = villacolItems.map((item) => {
+      const p = item.product;
+      const embalagem = p?.tipoEmbalagem || p?.tipoRejunte || p?.categoriaComplementar || "";
+      return `<tr>
+        <td>${p?.referencia ?? ""}</td>
+        <td>${p?.linha ?? ""}</td>
+        <td>${p?.categoriaComplementar ?? ""}</td>
+        <td>${embalagem}</td>
+        <td style="text-align:right">${item.caixas} ${getComplementaryUnitLabel(p, item.caixas !== 1)}</td>
+        <td style="text-align:right">${fmtKg(calculateItemWeightKg(item))}</td>
+        <td style="text-align:right">${fmtBRLStr(item.precoM2)}</td>
         <td style="text-align:right">${fmtBRLStr(item.subtotal)}</td>
       </tr>`;
     }).join("");
@@ -1257,7 +1824,7 @@ function BudgetEditor({
   .section-header { background: #222; color: #fff; font-weight: 700; font-size: 11px; padding: 4px 8px; margin-bottom: 0; }
   .prod-table th { border: 1px solid #333; padding: 5px 7px; background: #e8e8e8; font-weight: 700; text-align: left; white-space: nowrap; }
   .prod-table td { border: 1px solid #333; padding: 5px 7px; vertical-align: top; }
-  .prod-table th:nth-child(5), .prod-table th:nth-child(6), .prod-table th:nth-child(7), .prod-table th:nth-child(8) { text-align: right; }
+  .prod-table th:nth-child(5), .prod-table th:nth-child(6), .prod-table th:nth-child(7), .prod-table th:nth-child(8), .prod-table th:nth-child(9), .prod-table th:nth-child(10) { text-align: right; }
   .total-row td { border: 1px solid #333; padding: 4px 8px; }
   .total-row td:first-child { font-weight: 700; text-align: right; }
   .total-row td:last-child { font-weight: 700; text-align: right; }
@@ -1289,26 +1856,46 @@ function BudgetEditor({
   <tr><td>Cidade - CEP</td><td>${customer.cidade || ""}${customer.estado ? " / " + customer.estado : ""}</td></tr>
   <tr><td>E-mail</td><td>${customer.email || ""}</td></tr>
   ${budget.tecnico ? `<tr><td>Técnico Responsável</td><td>${budget.tecnico}</td></tr>` : ""}
+  ${deliveryAddressForPrint ? `<tr><td>Endereço de Entrega</td><td>${deliveryAddressForPrint}</td></tr>` : ""}
 </table>
 
-<div class="section-header">PRODUTOS / ESPECIFICAÇÕES</div>
+${rows ? `<div class="section-header">PRODUTOS / ESPECIFICAÇÕES</div>
 <table class="prod-table">
   <thead>
     <tr>
       <th>Ref</th><th>Linha</th><th>Cor</th><th>Formato</th>
-      <th>Valor m²</th><th>Qnt m²</th><th>M²/cx</th><th>Valor R$</th>
+      <th>Valor m²</th><th>Qnt m²</th><th>M² real</th><th>M²/cx</th><th>Peso total</th><th>Valor R$</th>
     </tr>
   </thead>
   <tbody>
     ${rows}
   </tbody>
-</table>
+</table>` : ""}
+
+${complementaryRows ? `<div class="section-header">PRODUTOS COMPLEMENTARES</div>
+<table class="prod-table">
+  <thead>
+    <tr>
+      <th>Ref</th><th>Produto</th><th>Tipo</th><th>Embalagem</th>
+      <th>Quantidade</th><th>Peso total</th><th>Valor un.</th><th>Valor R$</th>
+    </tr>
+  </thead>
+  <tbody>
+    ${complementaryRows}
+  </tbody>
+</table>` : ""}
 
 <div class="clearfix">
   <table class="totals-box">
-    ${budget.frete > 0 ? `<tr><td>Frete</td><td>${fmtBRLStr(budget.frete)}</td></tr>` : ""}
-    ${budget.percentualImposto > 0 ? `<tr><td>Impostos (${budget.percentualImposto}%)</td><td>${fmtBRLStr(impostoVal)}</td></tr>` : ""}
-    <tr><td>TOTAL</td><td>${fmtBRLStr(budget.totalFinal)}</td></tr>
+    <tr><td>Produtos Villagres</td><td>${fmtBRLStr(villagresSubtotal)}</td></tr>
+    <tr><td>Argamassas</td><td>${fmtBRLStr(argamassaSubtotal)}</td></tr>
+    ${topPixDiscount > 0 ? `<tr><td>Desconto PIX (${budget.descontoPixPercentual}%)</td><td>- ${fmtBRLStr(topPixDiscount)}</td></tr>` : ""}
+    <tr><td>${topSubtotalLabel}</td><td>${fmtBRLStr(topTotal)}</td></tr>
+    <tr><td>Rejuntes/Niveladores Villacol (PIX)</td><td>${fmtBRLStr(pixOnlyProductsSubtotal)}</td></tr>
+    ${budget.frete > 0 ? `<tr><td>Frete (PIX)</td><td>${fmtBRLStr(budget.frete)}</td></tr>` : ""}
+    <tr><td>Subtotal PIX</td><td>${fmtBRLStr(pixOnlySubtotal)}</td></tr>
+    <tr><td>Peso total da carga</td><td>${fmtKg(calculateBudgetWeightKg(budget.items))}</td></tr>
+    <tr><td>TOTAL GERAL</td><td>${fmtBRLStr(generalTotal)}</td></tr>
   </table>
 </div>
 
@@ -1324,6 +1911,15 @@ ${budget.observacoes ? `
 
     const w = window.open("", "_blank");
     if (w) { w.document.write(html); w.document.close(); }
+    if (budget.status !== "fechado" && budget.status !== "enviado_cliente") {
+      try {
+        await saveBudgetFields(budget.id, { status: "enviado_cliente" });
+        updateLocal({ status: "enviado_cliente" });
+        setIsDirty(false);
+      } catch (e: any) {
+        toast.error("PDF gerado, mas não foi possível atualizar o status: " + e.message);
+      }
+    }
   }
 
   return (
@@ -1347,21 +1943,13 @@ ${budget.observacoes ? `
           </div>
         </div>
         <div className="px-5 py-2.5 flex flex-wrap items-center gap-4 text-sm">
-          <div className="flex items-center gap-2">
-            <span className="text-xs opacity-60">Tabela:</span>
-            {([1, 2, 3, 4] as const).map((t) => (
-              <button key={t} onClick={() => changeTabela(t)}
-                className={`w-7 h-7 rounded text-xs font-semibold transition-all ${budget.tabelaPreco === t ? "bg-white text-primary" : "bg-white/10 hover:bg-white/20"}`}>
-                {t}
-              </button>
-            ))}
-          </div>
           <div className="flex items-center gap-2 ml-auto">
             <span className="text-xs opacity-60">Status:</span>
             <select value={budget.status} onChange={(e) => changeStatus(e.target.value as BudgetStatus)}
-              className="bg-white/10 border border-white/20 rounded-lg px-2 py-1 text-xs focus:outline-none">
-              {Object.entries(STATUS_LABELS).map(([k, v]) => (
-                <option key={k} value={k} className="text-foreground bg-card">{v}</option>
+              disabled={budget.status === "fechado"}
+              className="bg-white/10 border border-white/20 rounded-lg px-2 py-1 text-xs focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed">
+              {BUDGET_STATUS_OPTIONS.map((status) => (
+                <option key={status} value={status} className="text-foreground bg-card">{STATUS_LABELS[status]}</option>
               ))}
             </select>
           </div>
@@ -1407,23 +1995,30 @@ ${budget.observacoes ? `
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              {villagresItems.length > 0 && (
+                <table className="w-full text-sm">
                 <thead>
                   <tr className="text-xs text-muted-foreground bg-muted/30 border-b border-border">
                     <th className="text-left px-5 py-2.5 font-medium">Produto</th>
                     <th className="text-left px-3 py-2.5 font-medium hidden md:table-cell">Formato</th>
                     <th className="text-right px-3 py-2.5 font-medium">m²</th>
                     <th className="text-right px-3 py-2.5 font-medium">Cx</th>
+                    <th className="text-right px-3 py-2.5 font-medium hidden md:table-cell">m² real</th>
                     <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">R$/m²</th>
+                    <th className="text-right px-3 py-2.5 font-medium hidden lg:table-cell">Peso</th>
                     <th className="text-right px-3 py-2.5 font-medium">Subtotal</th>
                     <th className="px-3 py-2.5 w-16"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {budget.items.map((item) => {
+                  {villagresItems.map((item) => {
                     const isEditing = editingItemId === item.id;
                     const previewArea = parseFloat(editAreaInput.replace(",", ".")) || 0;
                     const previewCx = item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : 0;
+                    const previewRealArea = round2(previewCx * (item.product.m2PorCaixa || 0));
+                    const previewWeight = round2(previewCx * (item.product.pesoBrutoCx || 0));
+                    const editPrecoBase = item.product[priceKey(editTabela)] as number | null;
+                    const editPrecoM2 = editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
                     return (
                       <tr key={item.id} className={`transition-colors ${isEditing ? "bg-primary/4" : "hover:bg-muted/20"}`}>
                         <td className="px-5 py-3">
@@ -1456,10 +2051,32 @@ ${budget.observacoes ? `
                             ? <span className="text-primary font-semibold">{previewCx}</span>
                             : item.caixas}
                         </td>
-                        <td className="px-3 py-3 text-right font-mono text-sm hidden sm:table-cell">{fmtBRL(item.precoM2)}</td>
+                        <td className="px-3 py-3 text-right font-mono text-sm hidden md:table-cell">
+                          {isEditing && previewArea > 0
+                            ? <span className="text-primary font-semibold">{previewRealArea.toFixed(2)}</span>
+                            : calculateItemRealAreaM2(item).toFixed(2)}
+                        </td>
+                        <td className="px-3 py-3 text-right text-sm hidden sm:table-cell">
+                          {isEditing ? (
+                            <div className="space-y-1">
+                              <div className="grid grid-cols-4 gap-1">
+                                {([1, 2, 3, 4] as const).map((t) => (
+                                  <button key={t} type="button" onClick={() => setEditTabela(t)}
+                                    className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                                    T{t}
+                                  </button>
+                                ))}
+                              </div>
+                              <p className="font-mono text-primary font-semibold">{fmtBRL(editPrecoM2)}</p>
+                            </div>
+                          ) : <span className="font-mono">{fmtBRL(item.precoM2)}</span>}
+                        </td>
+                        <td className="px-3 py-3 text-right font-mono text-sm hidden lg:table-cell">
+                          {isEditing && previewArea > 0 ? fmtKg(previewWeight) : fmtKg(calculateItemWeightKg(item))}
+                        </td>
                         <td className="px-3 py-3 text-right font-mono font-semibold text-sm">
                           {isEditing && previewArea > 0
-                            ? <span className="text-primary">{fmtBRL(previewArea * item.precoM2)}</span>
+                            ? <span className="text-primary">{fmtBRL(previewArea * editPrecoM2)}</span>
                             : fmtBRL(item.subtotal)}
                         </td>
                         <td className="px-3 py-3">
@@ -1488,7 +2105,107 @@ ${budget.observacoes ? `
                     );
                   })}
                 </tbody>
-              </table>
+                </table>
+              )}
+
+              {villacolItems.length > 0 && (
+                <div className="border-t border-border mt-2">
+                  <div className="px-5 py-3 bg-muted/20 border-b border-border">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Produtos complementares Villacol</h3>
+                  </div>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-xs text-muted-foreground bg-muted/30 border-b border-border">
+                        <th className="text-left px-5 py-2.5 font-medium">Produto</th>
+                        <th className="text-left px-3 py-2.5 font-medium hidden md:table-cell">Embalagem</th>
+                        <th className="text-right px-3 py-2.5 font-medium">Quantidade</th>
+                        <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">Peso total</th>
+                        <th className="text-right px-3 py-2.5 font-medium hidden md:table-cell">Valor un.</th>
+                        <th className="text-right px-3 py-2.5 font-medium">Subtotal</th>
+                        <th className="px-3 py-2.5 w-16"></th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {villacolItems.map((item) => {
+                        const isEditing = editingItemId === item.id;
+                        const previewQty = parseFloat(editAreaInput.replace(",", ".")) || 0;
+                        const previewCx = item.product.m2PorCaixa > 0 ? Math.ceil(previewQty / item.product.m2PorCaixa) : Math.ceil(previewQty);
+                        const previewWeight = round2(previewCx * (item.product.pesoBrutoCx || 0));
+                        const editPrecoBase = item.product[priceKey(editTabela)] as number | null;
+                        const editPrecoM2 = editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
+                        const embalagem = item.product.tipoEmbalagem || item.product.tipoRejunte || item.product.categoriaComplementar || "—";
+                        const unitLabel = getComplementaryUnitLabel(item.product, item.caixas !== 1);
+                        const previewUnitLabel = getComplementaryUnitLabel(item.product, previewCx !== 1);
+                        return (
+                          <tr key={item.id} className={`transition-colors ${isEditing ? "bg-primary/4" : "hover:bg-muted/20"}`}>
+                            <td className="px-5 py-3">
+                              <p className="font-medium text-sm leading-tight">{item.product.linha}</p>
+                              <p className="text-xs text-muted-foreground">{item.product.categoriaComplementar}{item.product.cor ? ` · ${item.product.cor}` : ""}</p>
+                              <p className="text-xs text-muted-foreground font-mono">Ref: {item.product.referencia}</p>
+                            </td>
+                            <td className="px-3 py-3 text-xs text-muted-foreground hidden md:table-cell">{embalagem}</td>
+                            <td className="px-3 py-3 text-right">
+                              {isEditing ? (
+                                <input type="text" value={editAreaInput} onChange={(e) => setEditAreaInput(e.target.value)}
+                                  onKeyDown={(e) => { if (e.key === "Enter") confirmEditItem(item.id); if (e.key === "Escape") setEditingItemId(null); }}
+                                  autoFocus
+                                  className="w-20 border border-primary rounded-lg px-2 py-1 text-sm text-right font-mono bg-card focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                              ) : (
+                                <button onClick={() => !isLocked && startEditItem(item)}
+                                  className={`font-mono text-sm group flex items-center gap-1 ml-auto transition-colors ${isLocked ? "cursor-default" : "hover:text-primary"}`}
+                                  title={isLocked ? "Orçamento bloqueado" : "Clique para editar quantidade"}>
+                                  {item.caixas} {unitLabel}
+                                  {!isLocked && <Pencil size={10} className="opacity-0 group-hover:opacity-40 transition-opacity" />}
+                                </button>
+                              )}
+                              {isEditing && previewQty > 0 && <p className="text-[10px] text-primary mt-1">{previewCx} {previewUnitLabel}</p>}
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono text-sm hidden sm:table-cell">
+                              {isEditing && previewQty > 0 ? fmtKg(previewWeight) : fmtKg(calculateItemWeightKg(item))}
+                            </td>
+                            <td className="px-3 py-3 text-right text-sm hidden md:table-cell">
+                              {isEditing ? (
+                                <div className="space-y-1">
+                                  <div className="grid grid-cols-4 gap-1">
+                                    {([1, 2, 3, 4] as const).map((t) => (
+                                      <button key={t} type="button" onClick={() => setEditTabela(t)}
+                                        className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                                        T{t}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  <p className="font-mono text-primary font-semibold">{fmtBRL(editPrecoM2)}</p>
+                                </div>
+                              ) : <span className="font-mono">{fmtBRL(item.precoM2)}</span>}
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono font-semibold text-sm">
+                              {isEditing && previewQty > 0
+                                ? <span className="text-primary">{fmtBRL(previewQty * editPrecoM2)}</span>
+                                : fmtBRL(item.subtotal)}
+                            </td>
+                            <td className="px-3 py-3">
+                              {isEditing ? (
+                                <div className="flex items-center gap-1.5">
+                                  <button onClick={() => confirmEditItem(item.id)} className="text-primary hover:opacity-70" title="Confirmar"><Check size={14} /></button>
+                                  <button onClick={() => setEditingItemId(null)} className="text-muted-foreground hover:text-foreground" title="Cancelar"><X size={14} /></button>
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-1.5">
+                                  {!isLocked && <button onClick={() => startEditItem(item)} className="text-muted-foreground hover:text-primary transition-colors" title="Editar quantidade"><Pencil size={13} /></button>}
+                                  <button onClick={() => handleRemoveItem(item.id)} disabled={removingId === item.id || isLocked}
+                                    className="text-muted-foreground hover:text-destructive transition-colors disabled:opacity-40" title="Remover">
+                                    {removingId === item.id ? <Spinner size={13} /> : <Trash2 size={13} />}
+                                  </button>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1499,7 +2216,7 @@ ${budget.observacoes ? `
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold text-sm">Condições do Orçamento</h3>
               {!editFinancials && !isLocked && (
-                <button onClick={() => setEditFinancials(true)}
+                <button onClick={openFinancialsEditor}
                   className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors">
                   <Pencil size={12} /> Editar
                 </button>
@@ -1514,28 +2231,47 @@ ${budget.observacoes ? `
                     placeholder="Condições de pagamento, prazo de entrega..."
                     className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 resize-none" />
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div>
                   <div>
-                    <div className="flex items-center justify-between mb-1">
+                    <div className="mb-1">
                       <label className="text-xs font-medium text-muted-foreground">Frete (R$)</label>
-                      <button type="button"
-                        onClick={() => setFrete(round2(budget.subtotal * 0.02).toFixed(2).replace(".", ","))}
-                        className="text-xs text-primary hover:underline">
-                        2% = {fmtBRL(round2(budget.subtotal * 0.02))}
-                      </button>
                     </div>
                     <input type="text" value={frete} onChange={(e) => setFrete(e.target.value)} placeholder="0,00"
                       className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono" />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">Impostos (%)</label>
-                    <input type="text" value={imposto} onChange={(e) => setImposto(e.target.value)} placeholder="0,65"
-                      className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono" />
-                    <p className="text-xs text-muted-foreground mt-1">padrão: 0,65%</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      Frete sugerido: {fmtBRL(suggestedFreightByWeight)}.
+                    </p>
                   </div>
                 </div>
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">Forma de pagamento</label>
+                    <select value={formaPagamento} onChange={(e) => setFormaPagamento(e.target.value as FormaPagamento)}
+                      className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25">
+                      <option value="avista">Débito</option>
+                      <option value="avista_pix">PIX</option>
+                      <option value="cartao">Cartão de crédito</option>
+                    </select>
+                  </div>
+                  {formaPagamento === "cartao" ? (
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground block mb-1">Parcelas no cartão</label>
+                      <select value={parcelasCartao} onChange={(e) => setParcelasCartao(e.target.value)}
+                        className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25">
+                        {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}x</option>)}
+                      </select>
+                    </div>
+                  ) : formaPagamento === "avista_pix" ? (
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground block mb-1">Desconto PIX (%)</label>
+                      <input type="text" value={descontoPix} onChange={(e) => handlePixDiscountChange(e.target.value)} placeholder="Até 3"
+                        className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono" />
+                      <p className="text-[11px] text-muted-foreground mt-1">Máximo permitido: 3%</p>
+                    </div>
+                  ) : null}
+                </div>
                 <div className="flex gap-2">
-                  <button onClick={() => { setEditFinancials(false); setFrete(String(budget.frete)); setImposto(String(budget.percentualImposto)); setObs(budget.observacoes || ""); }}
+                  <button onClick={() => { setEditFinancials(false); setFrete(String(budget.frete)); setFormaPagamento(budget.formaPagamento); setParcelasCartao(String(budget.parcelasCartao)); setDescontoPix(String(budget.descontoPixPercentual)); setDescontoPixIncluiFrete(Boolean(budget.descontoPixIncluiFrete)); setObs(budget.observacoes || ""); }}
                     className="flex-1 border border-border rounded-xl py-2 text-xs hover:bg-muted transition-colors">Cancelar</button>
                   <button onClick={handleSaveFinancials} disabled={saving}
                     className="flex-1 bg-primary text-primary-foreground rounded-xl py-2 text-xs font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-1.5">
@@ -1550,9 +2286,15 @@ ${budget.observacoes ? `
                   <span className="font-mono text-xs">{fmtBRL(budget.frete)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground text-xs">Impostos</span>
-                  <span className="font-mono text-xs">{budget.percentualImposto}%</span>
+                  <span className="text-muted-foreground text-xs">Pagamento</span>
+                  <span className="font-mono text-xs">{budget.formaPagamento === "cartao" ? `Cartão ${budget.parcelasCartao}x` : budget.formaPagamento === "avista_pix" ? "PIX" : "Débito"}</span>
                 </div>
+                {budget.formaPagamento === "avista_pix" && budget.descontoPixPercentual > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground text-xs">Desconto PIX</span>
+                    <span className="font-mono text-xs">{budget.descontoPixPercentual}%</span>
+                  </div>
+                )}
                 {budget.observacoes
                   ? <p className="text-xs text-muted-foreground bg-muted/50 rounded-xl p-3 mt-2 leading-relaxed">{budget.observacoes}</p>
                   : <p className="text-xs text-muted-foreground italic">Sem observações</p>}
@@ -1561,31 +2303,129 @@ ${budget.observacoes ? `
 
             {/* Endereço de entrega */}
             <div className="mt-4 pt-4 border-t border-border">
-              <p className="text-xs font-medium text-muted-foreground mb-2">Endereço de Entrega</p>
-              <div className="flex flex-col gap-2">
-                <label className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border cursor-pointer transition-all text-sm ${mesmoEndereco ? "border-primary bg-primary/5 text-primary" : "border-border hover:border-primary/30"}`}>
-                  <input type="radio" name="entrega" checked={mesmoEndereco} onChange={() => { setMesmoEndereco(true); markDirty(); }} className="accent-primary" />
-                  <span>Mesmo endereço de cadastro</span>
-                </label>
-                {mesmoEndereco && customerAddr && (
-                  <p className="text-xs text-muted-foreground pl-3">{customerAddr}</p>
-                )}
-                <label className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border cursor-pointer transition-all text-sm ${!mesmoEndereco ? "border-primary bg-primary/5 text-primary" : "border-border hover:border-primary/30"}`}>
-                  <input type="radio" name="entrega" checked={!mesmoEndereco} onChange={() => { setMesmoEndereco(false); markDirty(); }} className="accent-primary" />
-                  <span>Endereço de entrega diferente</span>
-                </label>
-                {!mesmoEndereco && (
-                  <textarea
-                    value={enderecoEntrega}
-                    onChange={(e) => { setEnderecoEntrega(e.target.value); markDirty(); }}
-                    placeholder="Rua, número, bairro, cidade/UF, CEP"
-                    rows={2}
-                    disabled={isLocked}
-                    className="w-full border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50 resize-none"
-                  />
-                )}
+              <div className="mb-3">
+                <p className="text-xs font-medium text-muted-foreground">Endereço de Entrega</p>
+                <p className="text-xs text-muted-foreground mt-1">Selecione onde este pedido deve ser entregue.</p>
               </div>
+
+              <div className="space-y-2">
+                <label className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs transition-colors ${deliveryMode === "customer" ? "border-primary bg-primary/8" : "border-border"} ${isLocked ? "opacity-60" : "cursor-pointer hover:bg-muted"}`}>
+                  <input
+                    type="radio"
+                    name="deliveryMode"
+                    checked={deliveryMode === "customer"}
+                    onChange={useCustomerAddress}
+                    disabled={isLocked || !hasCustomerAddress}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="font-medium block">Entregar no endereço do cliente</span>
+                    <span className="text-muted-foreground block mt-0.5">{hasCustomerAddress ? customerAddr : "Cliente sem endereço cadastrado"}</span>
+                  </span>
+                </label>
+
+                <label className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs transition-colors ${deliveryMode === "different" ? "border-primary bg-primary/8" : "border-border"} ${isLocked ? "opacity-60" : "cursor-pointer hover:bg-muted"}`}>
+                  <input
+                    type="radio"
+                    name="deliveryMode"
+                    checked={deliveryMode === "different"}
+                    onChange={useDifferentDeliveryAddress}
+                    disabled={isLocked}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="font-medium block">Entregar em outro endereço</span>
+                    <span className="text-muted-foreground block mt-0.5">{deliveryMode === "different" ? buildFullAddress(entrega) || "Endereço ainda não preenchido" : "Selecionar para preencher em uma janela separada."}</span>
+                  </span>
+                </label>
+              </div>
+
+              {!hasCustomerAddress && deliveryMode !== "different" && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-700 mt-3">
+                  O cliente não possui endereço cadastrado. Selecione “Entregar em outro endereço” para preencher os dados de entrega.
+                </div>
+              )}
+
+              {deliveryMode === "different" && !isLocked && (
+                <button type="button" onClick={() => setShowDeliveryModal(true)}
+                  className="mt-3 text-xs text-primary hover:underline">
+                  Editar endereço de entrega
+                </button>
+              )}
             </div>
+
+            {showDeliveryModal && (
+              <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+                <div className="bg-card border border-border rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-5">
+                  <div className="flex items-start justify-between gap-3 mb-4">
+                    <div>
+                      <h3 className="font-semibold text-base">Endereço de entrega</h3>
+                      <p className="text-xs text-muted-foreground mt-1">Digite o CEP para consultar automaticamente e complete número/complemento.</p>
+                    </div>
+                    <button type="button" onClick={() => setShowDeliveryModal(false)} className="text-muted-foreground hover:text-foreground">
+                      <X size={18} />
+                    </button>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground">CEP</label>
+                      <input
+                        value={entrega.cep}
+                        onChange={(e) => handleDeliveryCepChange(e.target.value)}
+                        placeholder="00000-000"
+                        disabled={isLocked}
+                        className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50"
+                      />
+                      {consultandoEntregaCep && <p className="text-xs text-muted-foreground mt-1">Consultando CEP...</p>}
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="col-span-2">
+                        <label className="text-xs font-medium text-muted-foreground">Logradouro</label>
+                        <input value={entrega.logradouro} onChange={(e) => { setEntrega((f) => ({ ...f, logradouro: e.target.value })); markDirty(); }} disabled={isLocked}
+                          className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground">Número</label>
+                        <input value={entrega.numero} onChange={(e) => { setEntrega((f) => ({ ...f, numero: e.target.value })); markDirty(); }} disabled={isLocked}
+                          className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground">Complemento</label>
+                        <input value={entrega.complemento} onChange={(e) => { setEntrega((f) => ({ ...f, complemento: e.target.value })); markDirty(); }} disabled={isLocked}
+                          className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground">Bairro</label>
+                        <input value={entrega.bairro} onChange={(e) => { setEntrega((f) => ({ ...f, bairro: e.target.value })); markDirty(); }} disabled={isLocked}
+                          className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="col-span-2">
+                        <label className="text-xs font-medium text-muted-foreground">Cidade</label>
+                        <input value={entrega.cidade} onChange={(e) => { setEntrega((f) => ({ ...f, cidade: e.target.value })); markDirty(); }} disabled={isLocked}
+                          className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground">Estado</label>
+                        <input value={entrega.estado} onChange={(e) => { setEntrega((f) => ({ ...f, estado: e.target.value.toUpperCase().slice(0, 2) })); markDirty(); }} disabled={isLocked} maxLength={2}
+                          className="w-full mt-1 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 mt-5">
+                    <button type="button" onClick={() => setShowDeliveryModal(false)}
+                      className="flex-1 border border-border rounded-xl py-2 text-xs hover:bg-muted transition-colors">Cancelar</button>
+                    <button type="button" onClick={saveDifferentDeliveryAddress}
+                      className="flex-1 bg-primary text-primary-foreground rounded-xl py-2 text-xs font-medium hover:opacity-90">Salvar endereço</button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="mt-5 pt-4 border-t border-border space-y-2">
               <button onClick={handleSaveDraft} disabled={saving || !canSaveDraft}
@@ -1593,16 +2433,6 @@ ${budget.observacoes ? `
                 title={!canSaveDraft ? "Faça uma alteração para salvar novamente como rascunho" : undefined}>
                 {saving ? <Spinner size={14} /> : <Save size={14} />} Salvar Rascunho
               </button>
-              <div className="grid grid-cols-2 gap-2">
-                <button onClick={() => changeStatus("enviado_fabrica")}
-                  className="flex items-center justify-center gap-1.5 border border-primary text-primary py-2 rounded-xl text-xs font-medium hover:bg-primary/5 transition-colors">
-                  <Send size={12} /> Fábrica
-                </button>
-                <button onClick={() => changeStatus("enviado_cliente")}
-                  className="flex items-center justify-center gap-1.5 border border-border py-2 rounded-xl text-xs hover:bg-muted transition-colors">
-                  <Send size={12} /> Cliente
-                </button>
-              </div>
               <button onClick={printBudget}
                 className="w-full flex items-center justify-center gap-2 border border-border py-2.5 rounded-xl text-xs hover:bg-muted transition-colors text-muted-foreground hover:text-foreground">
                 <Printer size={13} /> Imprimir / Gerar PDF
@@ -1612,28 +2442,54 @@ ${budget.observacoes ? `
 
           <div className="bg-card border border-border rounded-2xl p-5">
             <h3 className="font-semibold text-sm mb-4">Resumo Financeiro</h3>
-            <div className="space-y-2.5">
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">
-                  Subtotal ({budget.items.length} {budget.items.length === 1 ? "produto" : "produtos"})
-                </span>
-                <span className="font-mono">{fmtBRL(budget.subtotal)}</span>
+            <div className="space-y-3">
+              <div className="rounded-xl border border-border p-3 space-y-2 bg-muted/10">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Villagres + Argamassas</p>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Produtos Villagres</span>
+                  <span className="font-mono">{fmtBRL(villagresSubtotal)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Argamassas</span>
+                  <span className="font-mono">{fmtBRL(argamassaSubtotal)}</span>
+                </div>
+                {topPixDiscount > 0 && (
+                  <div className="flex justify-between text-sm text-green-700">
+                    <span>Desconto PIX ({budget.descontoPixPercentual}%)</span>
+                    <span className="font-mono">- {fmtBRL(topPixDiscount)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-sm font-semibold pt-2 border-t border-border">
+                  <span>{topSubtotalLabel}</span>
+                  <span className="font-mono">{fmtBRL(topTotal)}</span>
+                </div>
               </div>
-              {budget.frete > 0 && (
+
+              <div className="rounded-xl border border-border p-3 space-y-2 bg-muted/10">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Frete + Rejuntes/Niveladores Villacol (PIX)</p>
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Frete</span>
-                  <span className="font-mono">{fmtBRL(budget.frete)}</span>
+                  <span className="text-muted-foreground">Rejuntes/Niveladores</span>
+                  <span className="font-mono">{fmtBRL(pixOnlyProductsSubtotal)}</span>
                 </div>
-              )}
-              {budget.percentualImposto > 0 && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Impostos ({budget.percentualImposto}%)</span>
-                  <span className="font-mono">{fmtBRL(impostoVal)}</span>
+                {budget.frete > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Frete</span>
+                    <span className="font-mono">{fmtBRL(budget.frete)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-sm font-semibold pt-2 border-t border-border">
+                  <span>Subtotal PIX</span>
+                  <span className="font-mono">{fmtBRL(pixOnlySubtotal)}</span>
                 </div>
-              )}
+              </div>
+
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Peso total da carga</span>
+                <span className="font-mono">{fmtKg(totalWeightKg)}</span>
+              </div>
               <div className="border-t border-border pt-3 flex justify-between items-baseline">
-                <span className="font-semibold">Total Final</span>
-                <span className="font-mono text-2xl font-semibold text-primary">{fmtBRL(budget.totalFinal)}</span>
+                <span className="font-semibold">Total Geral</span>
+                <span className="font-mono text-2xl font-semibold text-primary">{fmtBRL(generalTotal)}</span>
               </div>
             </div>
             {budget.items.length > 0 && (
@@ -1648,11 +2504,15 @@ ${budget.observacoes ? `
                     <span>Total de m²</span>
                     <span className="font-mono">{budget.items.reduce((s, i) => s + i.areaM2, 0).toFixed(2)} m²</span>
                   </div>
+                  <div className="flex justify-between">
+                    <span>Peso total</span>
+                    <span className="font-mono">{fmtKg(totalWeightKg)}</span>
+                  </div>
                 </div>
               </div>
             )}
             <p className="mt-4 text-xs text-muted-foreground text-right">
-              #{budget.numero} · {fmtDate(budget.createdAt)} · Tabela {budget.tabelaPreco}
+              #{budget.numero} · {fmtDate(budget.createdAt)}
             </p>
           </div>
         </div>
@@ -1660,7 +2520,7 @@ ${budget.observacoes ? `
 
 
       {showModal && (
-        <ProductModal allProducts={allProducts} tabelaPreco={budget.tabelaPreco}
+        <ProductModal allProducts={allProducts} tabelaPreco={budget.tabelaPreco} pricingSettings={pricingSettings}
           onSelect={handleAddProduct} onClose={() => setShowModal(false)} />
       )}
 
@@ -1718,9 +2578,9 @@ ${budget.observacoes ? `
 // ── Customer View ─────────────────────────────────────────────────
 
 function CustomerView({
-  customer: initCustomer, allProducts, onBack, onOpenBudget,
+  customer: initCustomer, allProducts, pricingSettings, onBack, onOpenBudget,
 }: {
-  customer: Customer; allProducts: Product[];
+  customer: Customer; allProducts: Product[]; pricingSettings: PricingSettings;
   onBack: () => void;
   onOpenBudget: (b: Budget, c: Customer) => void;
 }) {
@@ -1733,11 +2593,42 @@ function CustomerView({
     ...initCustomer,
     cpf: formatCPF(initCustomer.cpf || ""),
     telefone: formatPhone(initCustomer.telefone || ""),
+    cep: formatCEP(initCustomer.cep || ""),
   });
   const [showTecnicoModal, setShowTecnicoModal] = useState(false);
   const [tecnicoSelecionado, setTecnicoSelecionado] = useState("");
   const [tecnicoCustom, setTecnicoCustom] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [consultandoEditCep, setConsultandoEditCep] = useState(false);
+
+  async function handleEditCepChange(value: string) {
+    const cep = formatCEP(value);
+    setEditForm((f) => ({ ...f, cep }));
+
+    if (!isValidCEP(cep)) return;
+
+    setConsultandoEditCep(true);
+    try {
+      const address = await fetchAddressByCEP(cep);
+      if (!address) {
+        toast.error("CEP não encontrado. Preencha o endereço manualmente.");
+        return;
+      }
+
+      setEditForm((f) => ({
+        ...f,
+        cep,
+        logradouro: address.logradouro,
+        bairro: address.bairro,
+        cidade: address.localidade,
+        estado: address.uf,
+      }));
+    } catch {
+      toast.error("Não foi possível consultar o CEP. Preencha o endereço manualmente.");
+    } finally {
+      setConsultandoEditCep(false);
+    }
+  }
 
   async function loadBudgets() {
     setLoading(true);
@@ -1975,6 +2866,13 @@ function CustomerView({
                   className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
               </div>
               <p className="text-xs font-semibold text-muted-foreground pt-1">Endereço</p>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">CEP</label>
+                <input value={editForm.cep || ""} onChange={(e) => handleEditCepChange(e.target.value)}
+                  placeholder="00000-000"
+                  className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+                {consultandoEditCep && <p className="text-xs text-muted-foreground mt-1">Consultando CEP...</p>}
+              </div>
               <div className="grid grid-cols-3 gap-3">
                 <div className="col-span-2">
                   <label className="text-xs font-medium text-muted-foreground">Logradouro</label>
@@ -2009,17 +2907,11 @@ function CustomerView({
                     className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground">UF</label>
-                  <input value={editForm.estado || ""} onChange={(e) => setEditForm((f) => ({ ...f, estado: e.target.value }))}
+                  <label className="text-xs font-medium text-muted-foreground">Estado</label>
+                  <input value={editForm.estado || ""} onChange={(e) => setEditForm((f) => ({ ...f, estado: e.target.value.toUpperCase().slice(0, 2) }))}
                     maxLength={2}
                     className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                 </div>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">CEP</label>
-                <input value={editForm.cep || ""} onChange={(e) => setEditForm((f) => ({ ...f, cep: e.target.value }))}
-                  placeholder="00000-000"
-                  className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
               </div>
               <div className="flex gap-2 pt-1">
                 <button onClick={() => setShowEdit(false)} className="flex-1 border border-border rounded-xl py-2.5 text-sm hover:bg-muted transition-colors">Cancelar</button>
@@ -2111,10 +3003,67 @@ async function updateProduct(id: string, patch: Partial<Omit<Product, "id">>): P
     referencia: patch.referencia, formato: patch.formato, linha: patch.linha,
     colecao: patch.colecao, cor: patch.cor, superficie: patch.superficie,
     m2_por_caixa: patch.m2PorCaixa, pecas_por_caixa: patch.pecasPorCaixa,
+    m2_por_pallet: patch.m2PorPallet, cx_por_pallet: patch.cxPorPallet,
+    peso_bruto_m2: patch.pesoBrutoM2, peso_bruto_cx: patch.pesoBrutoCx, espessura_mm: patch.espessuraMm,
     preco1: patch.preco1, preco2: patch.preco2, preco3: patch.preco3, preco4: patch.preco4,
     descontinuado: patch.descontinuado ?? false,
+    marca: patch.marca || "Villagres",
+    categoria_complementar: patch.categoriaComplementar || null,
+    tipo_rejunte: patch.tipoRejunte || null,
+    tipo_embalagem: patch.tipoEmbalagem || null,
   }).eq("id", id);
   if (error) throw error;
+}
+
+async function createProduct(product: Omit<Product, "id">): Promise<Product> {
+  const { data, error } = await supabase.from("products").insert({
+    referencia: product.referencia, formato: product.formato, linha: product.linha,
+    colecao: product.colecao, cor: product.cor, superficie: product.superficie,
+    faces: product.faces, variacao: product.variacao, local_uso: product.localUso, derivacao: product.derivacao,
+    m2_por_caixa: product.m2PorCaixa, pecas_por_caixa: product.pecasPorCaixa,
+    m2_por_pallet: product.m2PorPallet, cx_por_pallet: product.cxPorPallet,
+    peso_bruto_m2: product.pesoBrutoM2, peso_bruto_cx: product.pesoBrutoCx, espessura_mm: product.espessuraMm,
+    preco1: product.preco1, preco2: product.preco2, preco3: product.preco3, preco4: product.preco4,
+    descontinuado: product.descontinuado ?? false,
+    marca: product.marca || "Villagres",
+    categoria_complementar: product.categoriaComplementar || null,
+    tipo_rejunte: product.tipoRejunte || null,
+    tipo_embalagem: product.tipoEmbalagem || null,
+  }).select().single();
+  if (error) throw error;
+  return mapProduct(data);
+}
+
+function createEmptyProduct(marca: "Villagres" | "Villacol" = "Villagres"): Product {
+  return {
+    id: "",
+    marca,
+    categoriaComplementar: marca === "Villacol" ? "Argamassa" : "",
+    tipoRejunte: "",
+    tipoEmbalagem: "",
+    formato: "",
+    referencia: "",
+    linha: marca === "Villacol" ? "Argamassa" : "",
+    colecao: "",
+    cor: "",
+    superficie: "",
+    faces: 0,
+    variacao: "",
+    localUso: 3,
+    derivacao: "",
+    m2PorCaixa: marca === "Villacol" ? 1 : 0,
+    pecasPorCaixa: marca === "Villacol" ? 1 : 0,
+    m2PorPallet: 0,
+    cxPorPallet: 0,
+    pesoBrutoM2: 0,
+    pesoBrutoCx: 0,
+    espessuraMm: 0,
+    preco1: null,
+    preco2: null,
+    preco3: null,
+    preco4: null,
+    descontinuado: false,
+  };
 }
 
 // ── Product Edit Modal ────────────────────────────────────────────
@@ -2126,6 +3075,11 @@ function ProductEditModal({ product, onSave, onClose }: {
 }) {
   const [form, setForm] = useState({ ...product });
   const [saving, setSaving] = useState(false);
+  const isNew = !product.id;
+  const isVillacol = form.marca === "Villacol";
+  const isRejunte = isVillacol && form.categoriaComplementar === "Rejunte";
+  const isArgamassa = isVillacol && form.categoriaComplementar === "Argamassa";
+  const isNiveladorCunha = isVillacol && form.categoriaComplementar === "Niveladores/Cunhas";
 
   function field(key: keyof Product) {
     return {
@@ -2135,60 +3089,235 @@ function ProductEditModal({ product, onSave, onClose }: {
     };
   }
 
+  function handleMarcaChange(marca: string) {
+    setForm((f) => ({
+      ...f,
+      marca,
+      categoriaComplementar: marca === "Villacol" ? f.categoriaComplementar || "Argamassa" : "",
+      linha: marca === "Villacol" ? f.categoriaComplementar || "Argamassa" : f.linha,
+      m2PorCaixa: marca === "Villacol" && !f.m2PorCaixa ? 1 : f.m2PorCaixa,
+      pecasPorCaixa: marca === "Villacol" && !f.pecasPorCaixa ? 1 : f.pecasPorCaixa,
+    }));
+  }
+
+  function handleCategoriaComplementarChange(categoria: string) {
+    setForm((f) => ({
+      ...f,
+      categoriaComplementar: categoria,
+      linha: categoria,
+      cor: categoria === "Argamassa" || categoria === "Niveladores/Cunhas" ? "" : f.cor,
+      tipoRejunte: categoria === "Rejunte" ? f.tipoRejunte : "",
+      tipoEmbalagem: f.tipoEmbalagem,
+    }));
+  }
+
   async function handleSave() {
+    if (!form.referencia.trim()) { toast.error("Informe a referência do produto."); return; }
+    if (!form.linha.trim()) { toast.error("Informe o nome do produto."); return; }
     setSaving(true);
     try {
-      await updateProduct(form.id, {
+      const normalizedProduct: Product = {
         ...form,
-        preco1: form.preco1 != null ? parseFloat(String(form.preco1).replace(",", ".")) : null,
-        preco2: form.preco2 != null ? parseFloat(String(form.preco2).replace(",", ".")) : null,
-        preco3: form.preco3 != null ? parseFloat(String(form.preco3).replace(",", ".")) : null,
-        preco4: form.preco4 != null ? parseFloat(String(form.preco4).replace(",", ".")) : null,
-        m2PorCaixa: parseFloat(String(form.m2PorCaixa).replace(",", ".")) || 0,
-        pecasPorCaixa: parseInt(String(form.pecasPorCaixa)) || 0,
-      });
-      onSave({ ...form });
-      toast.success("Produto atualizado!");
+        marca: form.marca || "Villagres",
+        categoriaComplementar: form.marca === "Villacol" ? form.categoriaComplementar || "Argamassa" : "",
+        tipoRejunte: form.marca === "Villacol" && form.categoriaComplementar === "Rejunte" ? form.tipoRejunte : "",
+        tipoEmbalagem: form.marca === "Villacol" ? form.tipoEmbalagem : "",
+        preco1: form.preco1 != null && form.preco1 !== "" ? parseFloat(String(form.preco1).replace(",", ".")) : null,
+        preco2: form.preco2 != null && form.preco2 !== "" ? parseFloat(String(form.preco2).replace(",", ".")) : null,
+        preco3: form.preco3 != null && form.preco3 !== "" ? parseFloat(String(form.preco3).replace(",", ".")) : null,
+        preco4: form.preco4 != null && form.preco4 !== "" ? parseFloat(String(form.preco4).replace(",", ".")) : null,
+        faces: parseInt(String(form.faces)) || 0,
+        localUso: parseInt(String(form.localUso)) || 3,
+        m2PorCaixa: parseFloat(String(form.m2PorCaixa).replace(",", ".")) || (form.marca === "Villacol" ? 1 : 0),
+        pecasPorCaixa: parseInt(String(form.pecasPorCaixa)) || (form.marca === "Villacol" ? 1 : 0),
+        m2PorPallet: parseFloat(String(form.m2PorPallet).replace(",", ".")) || 0,
+        cxPorPallet: parseInt(String(form.cxPorPallet)) || 0,
+        pesoBrutoCx: parseFloat(String(form.pesoBrutoCx).replace(",", ".")) || 0,
+        pesoBrutoM2: parseFloat(String(form.pesoBrutoM2).replace(",", ".")) || 0,
+        espessuraMm: parseFloat(String(form.espessuraMm).replace(",", ".")) || 0,
+      };
+      if (isNew) {
+        const created = await createProduct(normalizedProduct);
+        onSave(created);
+        toast.success("Produto criado!");
+      } else {
+        await updateProduct(form.id, normalizedProduct);
+        onSave(normalizedProduct);
+        toast.success("Produto atualizado!");
+      }
     } catch (e: any) { toast.error("Erro: " + e.message); }
     finally { setSaving(false); }
   }
 
   const inputCls = "w-full border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25";
-
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-card rounded-2xl shadow-2xl w-full max-w-lg border border-border flex flex-col max-h-[90vh]">
+      <div className="bg-card rounded-2xl shadow-2xl w-full max-w-2xl border border-border flex flex-col max-h-[90vh]">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <div>
-            <h3 className="font-semibold">Editar Produto</h3>
-            <p className="text-xs text-muted-foreground font-mono">Ref: {product.referencia}</p>
+            <h3 className="font-semibold">{isNew ? "Novo Produto" : "Editar Produto"}</h3>
+            <p className="text-xs text-muted-foreground font-mono">{isNew ? "Cadastre Villagres ou Villacol" : `Ref: ${product.referencia}`}</p>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X size={18} /></button>
         </div>
 
         <div className="overflow-y-auto flex-1 px-6 py-4 space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            {([["Linha", "linha"], ["Coleção", "colecao"], ["Cor", "cor"], ["Formato", "formato"], ["Superfície", "superficie"], ["Referência", "referencia"]] as const).map(([label, key]) => (
-              <div key={key}>
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">{label}</label>
-                <input {...field(key)} className={inputCls} />
-              </div>
-            ))}
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Marca</label>
+              <select value={form.marca} onChange={(e) => handleMarcaChange(e.target.value)} className={inputCls}>
+                <option value="Villagres">Villagres</option>
+                <option value="Villacol">Villacol</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Referência</label>
+              <input {...field("referencia")} className={inputCls} />
+            </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">m²/caixa</label>
-              <input {...field("m2PorCaixa")} className={inputCls} />
+          {isVillacol ? (
+            <div className="space-y-3 rounded-xl border border-border p-4 bg-muted/20">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Produto Villacol</label>
+                  <select value={form.categoriaComplementar || "Argamassa"} onChange={(e) => handleCategoriaComplementarChange(e.target.value)} className={inputCls}>
+                    <option value="Argamassa">Argamassa</option>
+                    <option value="Rejunte">Rejunte</option>
+                    <option value="Niveladores/Cunhas">Niveladores/Cunhas</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Nome comercial</label>
+                  <input {...field("linha")} placeholder={form.categoriaComplementar || "Argamassa"} className={inputCls} />
+                </div>
+              </div>
+              {isRejunte && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Cor do rejunte</label>
+                    <input {...field("cor")} placeholder="Ex.: Branco, Cinza" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Tipo de rejunte</label>
+                    <input {...field("tipoRejunte")} placeholder="Ex.: Acrílico, Cimentício" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Tipo de embalagem</label>
+                    <input {...field("tipoEmbalagem")} placeholder="Ex.: Pote 1 kg, Pote 5 kg" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Peso da embalagem (kg)</label>
+                    <input {...field("pesoBrutoCx")} inputMode="decimal" placeholder="5" className={inputCls} />
+                  </div>
+                </div>
+              )}
+              {isNiveladorCunha && (
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Espessura</label>
+                    <input {...field("espessuraMm")} inputMode="decimal" placeholder="Ex.: 1,50" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Tipo de embalagem</label>
+                    <input {...field("tipoEmbalagem")} placeholder="Ex.: Pacote" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Quantidade por embalagem</label>
+                    <input {...field("pecasPorCaixa")} inputMode="numeric" placeholder="100" className={inputCls} />
+                  </div>
+                </div>
+              )}
+              {isArgamassa && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Tipo de embalagem</label>
+                    <input {...field("tipoEmbalagem")} placeholder="Ex.: Saco 20 kg" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Peso da embalagem (kg)</label>
+                    <input {...field("pesoBrutoCx")} inputMode="decimal" placeholder="20" className={inputCls} />
+                  </div>
+                </div>
+              )}
             </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">Peças/caixa</label>
-              <input {...field("pecasPorCaixa")} className={inputCls} />
-            </div>
-          </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                {([ ["Linha", "linha"], ["Coleção", "colecao"], ["Cor", "cor"], ["Formato", "formato"], ["Superfície", "superficie"] ] as const).map(([label, key]) => (
+                  <div key={key}>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">{label}</label>
+                    <input {...field(key)} className={inputCls} />
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Faces</label>
+                  <input {...field("faces")} inputMode="numeric" className={inputCls} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Variação</label>
+                  <input {...field("variacao")} placeholder="Ex.: V1, V2, V3" className={inputCls} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Local de uso</label>
+                  <select
+                    value={String(form.localUso ?? 3)}
+                    onChange={(e) => setForm((f) => ({ ...f, localUso: Number(e.target.value) }))}
+                    className={inputCls}
+                  >
+                    {Object.entries(LOCAL_USO).map(([value, label]) => (
+                      <option key={value} value={value}>{value} - {label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Derivação</label>
+                  <input {...field("derivacao")} className={inputCls} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">m²/caixa</label>
+                  <input {...field("m2PorCaixa")} inputMode="decimal" className={inputCls} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Peças/caixa</label>
+                  <input {...field("pecasPorCaixa")} inputMode="numeric" className={inputCls} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">m²/pallet</label>
+                  <input {...field("m2PorPallet")} inputMode="decimal" className={inputCls} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Caixas/pallet</label>
+                  <input {...field("cxPorPallet")} inputMode="numeric" className={inputCls} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Peso bruto/m² (kg)</label>
+                  <input {...field("pesoBrutoM2")} inputMode="decimal" className={inputCls} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Peso bruto/caixa (kg)</label>
+                  <input {...field("pesoBrutoCx")} inputMode="decimal" className={inputCls} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Espessura (mm)</label>
+                  <input {...field("espessuraMm")} inputMode="decimal" className={inputCls} />
+                </div>
+              </div>
+            </>
+          )}
+
+          {isVillacol && (
+            <p className="text-xs text-muted-foreground rounded-xl bg-blue-50 border border-blue-100 px-3 py-2">
+              Produtos Villacol entram como itens complementares. Use m²/caixa = 1 para controlar por unidade/embalagem no orçamento.
+            </p>
+          )}
 
           <div>
-            <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Tabelas de Preço (R$/m²)</p>
+            <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Tabelas de Preço {isVillacol ? "(R$/unidade ou embalagem)" : "(R$/m²)"}</p>
             <div className="grid grid-cols-4 gap-2">
               {([1, 2, 3, 4] as const).map((t) => (
                 <div key={t}>
@@ -2197,6 +3326,7 @@ function ProductEditModal({ product, onSave, onClose }: {
                     value={String(form[`preco${t}`] ?? "")}
                     onChange={(e) => setForm((f) => ({ ...f, [`preco${t}`]: e.target.value === "" ? null : e.target.value }))}
                     placeholder="—"
+                    inputMode="decimal"
                     className={inputCls + " text-center font-mono"}
                   />
                 </div>
@@ -2226,7 +3356,7 @@ function ProductEditModal({ product, onSave, onClose }: {
           <button onClick={onClose} className="flex-1 border border-border rounded-xl py-2.5 text-sm hover:bg-muted transition-colors">Cancelar</button>
           <button onClick={handleSave} disabled={saving}
             className="flex-1 bg-primary text-primary-foreground rounded-xl py-2.5 text-sm font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2">
-            {saving ? <Spinner size={14} /> : <Check size={14} />} Salvar Alterações
+            {saving ? <Spinner size={14} /> : <Check size={14} />} {isNew ? "Criar Produto" : "Salvar Alterações"}
           </button>
         </div>
       </div>
@@ -2236,24 +3366,42 @@ function ProductEditModal({ product, onSave, onClose }: {
 
 // ── All Products List ─────────────────────────────────────────────
 
-function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] }) {
+function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingSettingsChange, onProductsChange }: { allProducts: Product[]; pricingSettings: PricingSettings; onPricingSettingsChange: (settings: PricingSettings) => void; onProductsChange: (products: Product[]) => void }) {
   const [products, setProducts] = useState<Product[]>(initProducts);
   const [q, setQ] = useState("");
   const [superficie, setSuperficie] = useState("");
   const [localUso, setLocalUso] = useState("");
+  const [marcaFiltro, setMarcaFiltro] = useState("");
+  const [categoriaFiltro, setCategoriaFiltro] = useState("");
   const [tabela, setTabela] = useState<1 | 2 | 3 | 4>(1);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ ok: number; total: number } | null>(null);
   const [showDescontinuados, setShowDescontinuados] = useState(false);
+  const [pricingForm, setPricingForm] = useState({
+    imposto: String(pricingSettings.impostoPercentual || ""),
+    taxa: String(pricingSettings.taxaCartaoPercentual || ""),
+    fretePor100Kg: String(pricingSettings.fretePor100Kg ?? 4),
+  });
+  const [savingPricing, setSavingPricing] = useState(false);
+
+  useEffect(() => {
+    setPricingForm({
+      imposto: String(pricingSettings.impostoPercentual || ""),
+      taxa: String(pricingSettings.taxaCartaoPercentual || ""),
+      fretePor100Kg: String(pricingSettings.fretePor100Kg ?? 4),
+    });
+  }, [pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual, pricingSettings.fretePor100Kg]);
 
   const superficies = [...new Set(products.map((p) => p.superficie).filter(Boolean))].sort();
 
   const filtered = products.filter((p) => {
     const txt = q.toLowerCase();
-    const matchQ = !q || [p.linha, p.colecao, p.cor, p.formato, p.referencia, p.superficie]
+    const matchQ = !q || [p.linha, p.colecao, p.cor, p.formato, p.referencia, p.superficie, p.marca, p.categoriaComplementar, p.tipoRejunte, p.tipoEmbalagem]
       .some((f) => f?.toLowerCase().includes(txt));
     return matchQ &&
+      (!marcaFiltro || p.marca === marcaFiltro) &&
+      (!categoriaFiltro || p.categoriaComplementar === categoriaFiltro) &&
       (!superficie || p.superficie === superficie) &&
       (!localUso || String(p.localUso) === localUso) &&
       (showDescontinuados || !p.descontinuado);
@@ -2264,8 +3412,42 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
   const pk = priceKey(tabela);
 
   function handleProductSaved(updated: Product) {
-    setProducts((ps) => ps.map((p) => p.id === updated.id ? updated : p));
+    setProducts((ps) => {
+      const next = ps.some((p) => p.id === updated.id)
+        ? ps.map((p) => p.id === updated.id ? updated : p)
+        : [updated, ...ps];
+      onProductsChange(next);
+      return next;
+    });
     setEditingProduct(null);
+  }
+
+  function handlePricingInput(key: "imposto" | "taxa" | "fretePor100Kg", value: string) {
+    if (value.trim() === "") {
+      setPricingForm((f) => ({ ...f, [key]: "" }));
+      return;
+    }
+    const parsed = parseFloat(value.replace(",", "."));
+    if (!Number.isFinite(parsed) || Number.isNaN(parsed) || parsed < 0) return;
+    setPricingForm((f) => ({ ...f, [key]: value }));
+  }
+
+  async function handleSavePricingSettings() {
+    setSavingPricing(true);
+    try {
+      const saved = await savePricingSettings({
+        ...pricingSettings,
+        impostoPercentual: parseDecimalInput(pricingForm.imposto),
+        taxaCartaoPercentual: parseDecimalInput(pricingForm.taxa),
+        fretePor100Kg: parseDecimalInput(pricingForm.fretePor100Kg) || 0,
+      });
+      onPricingSettingsChange(saved);
+      toast.success("Composição interna do preço salva!");
+    } catch (e: any) {
+      toast.error("Erro ao salvar composição: " + e.message);
+    } finally {
+      setSavingPricing(false);
+    }
   }
 
   async function handleImportCSV(e: React.ChangeEvent<HTMLInputElement>) {
@@ -2281,6 +3463,7 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
       await seedProducts(parsed);
       const refreshed = await fetchAllProducts();
       setProducts(refreshed);
+      onProductsChange(refreshed);
       setImportResult({ ok: parsed.length, total: parsed.length });
       toast.success(`${parsed.length} produtos importados com sucesso!`);
     } catch (e: any) { toast.error("Erro ao importar: " + e.message); }
@@ -2294,9 +3477,22 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
         <div className="relative flex-1 min-w-48">
           <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <input type="text" value={q} onChange={(e) => setQ(e.target.value)}
-            placeholder="Coleção, cor, formato, referência..."
+            placeholder="Marca, coleção, cor, formato, referência..."
             className="w-full border border-border rounded-xl pl-9 pr-4 py-2.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/25" />
         </div>
+        <select value={marcaFiltro} onChange={(e) => setMarcaFiltro(e.target.value)}
+          className="border border-border rounded-xl px-3 py-2.5 text-xs bg-card focus:outline-none">
+          <option value="">Todas as marcas</option>
+          <option value="Villagres">Villagres</option>
+          <option value="Villacol">Villacol</option>
+        </select>
+        <select value={categoriaFiltro} onChange={(e) => setCategoriaFiltro(e.target.value)}
+          className="border border-border rounded-xl px-3 py-2.5 text-xs bg-card focus:outline-none">
+          <option value="">Todos os complementares</option>
+          <option value="Argamassa">Argamassa</option>
+          <option value="Rejunte">Rejunte</option>
+          <option value="Niveladores/Cunhas">Niveladores/Cunhas</option>
+        </select>
         <select value={superficie} onChange={(e) => setSuperficie(e.target.value)}
 
           className="border border-border rounded-xl px-3 py-2.5 text-xs bg-card focus:outline-none">
@@ -2319,6 +3515,11 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
             </button>
           ))}
         </div>
+
+        <button type="button" onClick={() => setEditingProduct(createEmptyProduct("Villagres"))}
+          className="flex items-center gap-1.5 bg-primary text-primary-foreground rounded-xl px-3 py-2 text-xs hover:opacity-90 transition-opacity">
+          <Plus size={12} /> Novo Produto
+        </button>
 
         {/* Toggle descontinuados */}
         <button onClick={() => setShowDescontinuados((v) => !v)}
@@ -2358,6 +3559,62 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
         </div>
       )}
 
+      <div className="bg-card border border-border rounded-2xl p-5 shadow-sm space-y-4">
+        <div>
+          <h3 className="font-semibold text-sm">Composição interna do preço</h3>
+          <p className="text-xs text-muted-foreground mt-1">Esses percentuais e o valor de frete por peso serão usados nos orçamentos e não serão exibidos como composição interna ao cliente.</p>
+        </div>
+        <div className="grid lg:grid-cols-[1fr_1fr_1.2fr_auto] sm:grid-cols-2 gap-3 items-end">
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">Impostos (%)</label>
+            <input
+              value={pricingForm.imposto}
+              onChange={(e) => handlePricingInput("imposto", e.target.value)}
+              inputMode="decimal"
+              placeholder="0"
+              className="w-full border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">Taxa de cartão (%)</label>
+            <input
+              value={pricingForm.taxa}
+              onChange={(e) => handlePricingInput("taxa", e.target.value)}
+              inputMode="decimal"
+              placeholder="0"
+              className="w-full border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">Valor do Frete a cada 100 Kilos</label>
+            <input
+              value={pricingForm.fretePor100Kg}
+              onChange={(e) => handlePricingInput("fretePor100Kg", e.target.value)}
+              inputMode="decimal"
+              placeholder="4,00"
+              className="w-full border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono"
+            />
+          </div>
+          <button
+            onClick={handleSavePricingSettings}
+            disabled={savingPricing}
+            className="bg-primary text-primary-foreground rounded-xl px-4 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {savingPricing ? <Spinner size={14} /> : <Save size={14} />} Salvar composição
+          </button>
+        </div>
+        <div className="rounded-xl bg-muted/40 border border-border px-4 py-3 text-sm grid md:grid-cols-2 gap-2">
+          <div className="flex justify-between gap-3">
+            <span className="text-muted-foreground">Exemplo com preço-base de R$ 1.000,00</span>
+            <span className="font-semibold font-mono text-primary">Preço final: {fmtBRL(calculateFinalPrice(1000, pricingForm.imposto, pricingForm.taxa))}</span>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-muted-foreground">Exemplo de frete para 100 kg</span>
+            <span className="font-semibold font-mono text-primary">{fmtBRL(parseDecimalInput(pricingForm.fretePor100Kg))}</span>
+          </div>
+        </div>
+      </div>
+
       <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-sm">
         <div className="px-5 py-2.5 border-b border-border bg-muted/30 flex items-center justify-between">
           <p className="text-xs text-muted-foreground">{filtered.length} produtos · Tabela {tabela}</p>
@@ -2371,7 +3628,7 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
                 <th className="text-left px-3 py-2.5 font-medium hidden md:table-cell">Formato</th>
                 <th className="text-left px-3 py-2.5 font-medium hidden lg:table-cell">Superfície</th>
                 <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">m²/cx</th>
-                <th className="text-right px-3 py-2.5 font-medium">R$/m²</th>
+                <th className="text-right px-3 py-2.5 font-medium">Preço-base</th>
                 <th className="w-10 px-3 py-2.5"></th>
               </tr>
             </thead>
@@ -2383,12 +3640,15 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
                     <td className="px-5 py-2.5">
                       <div className="flex items-center gap-2">
                         <p className={`font-medium text-sm leading-tight ${p.descontinuado ? "line-through text-muted-foreground" : ""}`}>{p.linha}</p>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground border border-border font-medium shrink-0">{p.marca || "Villagres"}</span>
                         {p.descontinuado && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200 font-medium shrink-0">Descontinuado</span>
                         )}
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        {p.cor && p.cor !== "única" && p.cor !== "-" ? `${p.cor} · ` : ""}{p.colecao}
+                        {p.marca === "Villacol"
+                          ? [p.categoriaComplementar, p.tipoRejunte || p.tipoEmbalagem, p.cor].filter(Boolean).join(" · ")
+                          : `${p.cor && p.cor !== "única" && p.cor !== "-" ? `${p.cor} · ` : ""}${p.colecao}`}
                       </p>
                       <p className="text-xs text-muted-foreground font-mono">Ref: {p.referencia}</p>
                     </td>
@@ -2397,7 +3657,7 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
                     <td className="px-3 py-2.5 text-right text-xs font-mono hidden sm:table-cell">{p.m2PorCaixa}</td>
                     <td className="px-3 py-2.5 text-right">
                       {price
-                        ? <span className="font-semibold font-mono text-primary">{fmtBRL(price)}</span>
+                        ? <span className="font-mono text-muted-foreground">{fmtBRL(price)}</span>
                         : <span className="text-xs text-amber-600">Consultar</span>}
                     </td>
                     <td className="px-3 py-2.5 text-center">
@@ -2428,9 +3688,12 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
 
 // ── Customer Search (Home) ────────────────────────────────────────
 
-function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
+function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSettingsChange, onProductsChange, onOpenBudgetById }: {
   onSelect: (c: Customer) => void;
   allProducts: Product[];
+  pricingSettings: PricingSettings;
+  onPricingSettingsChange: (settings: PricingSettings) => void;
+  onProductsChange: (products: Product[]) => void;
   onOpenBudgetById: (budgetId: string, customerId: string) => void;
 }) {
   const [tab, setTab] = useState<"orcamentos" | "clientes" | "produtos">("orcamentos");
@@ -2440,6 +3703,7 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ nome: "", cpf: "", email: "", telefone: "", cep: "", logradouro: "", numero: "", complemento: "", bairro: "", cidade: "", estado: "" });
   const [creating, setCreating] = useState(false);
+  const [consultandoCustomerCep, setConsultandoCustomerCep] = useState(false);
 
   // Orçamentos tab state
   const [recentBudgets, setRecentBudgets] = useState<BudgetSummary[]>([]);
@@ -2488,8 +3752,37 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
     return () => clearTimeout(t);
   }, [q]);
 
-  async function handleCreate() {
-    if (!form.nome.trim()) { toast.error("Nome é obrigatório"); return; }
+
+  async function handleCustomerCepChange(value: string) {
+    const cep = formatCEP(value);
+    setForm((f) => ({ ...f, cep }));
+
+    if (!isValidCEP(cep)) return;
+
+    setConsultandoCustomerCep(true);
+    try {
+      const address = await fetchAddressByCEP(cep);
+      if (!address) {
+        toast.error("CEP não encontrado. Preencha o endereço manualmente.");
+        return;
+      }
+
+      setForm((f) => ({
+        ...f,
+        cep,
+        logradouro: address.logradouro,
+        bairro: address.bairro,
+        cidade: address.localidade,
+        estado: address.uf,
+      }));
+    } catch {
+      toast.error("Não foi possível consultar o CEP. Preencha o endereço manualmente.");
+    } finally {
+      setConsultandoCustomerCep(false);
+    }
+  }
+
+  async function handleCreate() {    if (!form.nome.trim()) { toast.error("Nome é obrigatório"); return; }
     if (!validateCustomerContactFields(form.cpf, form.telefone)) return;
     setCreating(true);
     try {
@@ -2647,6 +3940,13 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
                             className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                         </div>
                         <p className="text-xs font-semibold text-muted-foreground pt-1">Endereço</p>
+                        <div>
+                          <label className="text-xs font-medium text-muted-foreground">CEP</label>
+                          <input value={form.cep} onChange={(e) => handleCustomerCepChange(e.target.value)}
+                            placeholder="00000-000"
+                            className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+                          {consultandoCustomerCep && <p className="text-xs text-muted-foreground mt-1">Consultando CEP...</p>}
+                        </div>
                         <div className="grid grid-cols-3 gap-3">
                           <div className="col-span-2">
                             <label className="text-xs font-medium text-muted-foreground">Logradouro</label>
@@ -2681,17 +3981,11 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
                               className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                           </div>
                           <div>
-                            <label className="text-xs font-medium text-muted-foreground">UF</label>
-                            <input value={form.estado} onChange={(e) => setForm((f) => ({ ...f, estado: e.target.value }))}
+                            <label className="text-xs font-medium text-muted-foreground">Estado</label>
+                            <input value={form.estado} onChange={(e) => setForm((f) => ({ ...f, estado: e.target.value.toUpperCase().slice(0, 2) }))}
                               placeholder="SP" maxLength={2}
                               className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                           </div>
-                        </div>
-                        <div>
-                          <label className="text-xs font-medium text-muted-foreground">CEP</label>
-                          <input value={form.cep} onChange={(e) => setForm((f) => ({ ...f, cep: e.target.value }))}
-                            placeholder="00000-000"
-                            className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                         </div>
                         <button onClick={handleCreate} disabled={creating}
                           className="w-full bg-primary text-primary-foreground py-3 rounded-xl text-sm font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2">
@@ -2725,7 +4019,7 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
                 <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}
                   className="border border-border rounded-xl px-3 py-2 text-xs bg-card focus:outline-none focus:ring-2 focus:ring-primary/20">
                   <option value="">Status</option>
-                  {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  {BUDGET_STATUS_OPTIONS.map((status) => <option key={status} value={status}>{STATUS_LABELS[status]}</option>)}
                 </select>
                 <div className="relative">
                   <input value={filterCliente} onChange={(e) => setFilterCliente(e.target.value)}
@@ -2821,7 +4115,7 @@ function CustomerSearch({ onSelect, allProducts, onOpenBudgetById }: {
         )}
 
         {tab === "clientes" && <AllCustomersTab onSelect={onSelect} />}
-        {tab === "produtos" && <AllProductsTab allProducts={allProducts} />}
+        {tab === "produtos" && <AllProductsTab allProducts={allProducts} pricingSettings={pricingSettings} onPricingSettingsChange={onPricingSettingsChange} onProductsChange={onProductsChange} />}
       </div>
     </div>
   );
@@ -2840,6 +4134,7 @@ export default function App() {
   const [initMsg, setInitMsg] = useState("Verificando banco de dados...");
   const [initError, setInitError] = useState<string | null>(null);
   const [allProducts, setAllProducts] = useState<Product[]>([]);
+  const [pricingSettings, setPricingSettings] = useState<PricingSettings>({ impostoPercentual: 0, taxaCartaoPercentual: 0, fretePor100Kg: 4 });
 
   async function init() {
     setAppState("loading");
@@ -2850,6 +4145,9 @@ export default function App() {
       const tablesOk = await checkTablesExist();
       if (tablesOk) await seedTecnicosOnExistingBudgets().catch(() => {});
       if (!tablesOk) { setAppState("setup"); return; }
+
+      setInitMsg("Carregando composição interna do preço...");
+      setPricingSettings(await loadPricingSettings());
 
       setInitMsg("Verificando catálogo...");
       const count = await getProductCount();
@@ -2912,6 +4210,9 @@ export default function App() {
         <CustomerSearch
           onSelect={(c) => setView({ type: "customer", customer: c })}
           allProducts={allProducts}
+          pricingSettings={pricingSettings}
+          onPricingSettingsChange={setPricingSettings}
+          onProductsChange={setAllProducts}
           onOpenBudgetById={async (budgetId, customerId) => {
             try {
               const [full, { data: cData }] = await Promise.all([
@@ -2927,6 +4228,7 @@ export default function App() {
         <CustomerView
           customer={view.customer}
           allProducts={allProducts}
+          pricingSettings={pricingSettings}
           onBack={() => setView({ type: "home" })}
           onOpenBudget={(b, c) => setView({ type: "budget", budget: b, customer: c })}
         />
@@ -2935,6 +4237,7 @@ export default function App() {
         <BudgetEditor
           budget={view.budget}
           allProducts={allProducts}
+          pricingSettings={pricingSettings}
           customer={view.customer}
           onBack={() => setView({ type: "customer", customer: view.customer })}
           onGoHome={() => setView({ type: "home" })}

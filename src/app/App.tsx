@@ -73,6 +73,7 @@ interface BudgetItem {
 }
 
 type BudgetStatus = "rascunho" | "enviado_fabrica" | "enviado_cliente" | "fechado" | "cancelado";
+type BudgetPriceTable = 1 | 2 | 3 | 4 | "TE";
 
 type AppUserRole = "admin" | "vendas";
 
@@ -87,7 +88,7 @@ interface Budget {
   numero: number;
   customerId: string;
   status: BudgetStatus;
-  tabelaPreco: 1 | 2 | 3 | 4;
+  tabelaPreco: BudgetPriceTable;
   frete: number;
   percentualImposto: number;
   observacoes?: string;
@@ -177,7 +178,7 @@ function mapBudget(r: any, items: BudgetItem[] = []): Budget {
     numero: r.numero,
     customerId: r.customer_id,
     status: r.status as BudgetStatus,
-    tabelaPreco: r.tabela_preco as 1 | 2 | 3 | 4,
+    tabelaPreco: mapTabelaPreco(r.tabela_preco),
     frete: parseFloat(r.frete) || 0,
     percentualImposto: parseFloat(r.percentual_imposto) || 0,
     observacoes: r.observacoes || "",
@@ -707,7 +708,7 @@ async function duplicateBudget(original: Budget, currentUser: AppUser): Promise<
     .insert({
       customer_id: original.customerId,
       status: "rascunho",
-      tabela_preco: original.tabelaPreco,
+      tabela_preco: tabelaPrecoDbValue(original.tabelaPreco),
       frete: original.frete,
       percentual_imposto: original.percentualImposto,
       observacoes: original.observacoes,
@@ -769,7 +770,19 @@ const LOCAL_USO: Record<number, string> = {
   1: "Parede/Piso", 2: "Parede", 3: "Piso Interno", 4: "Piso Externo",
 };
 
-function priceKey(t: 1 | 2 | 3 | 4): keyof Product {
+function mapTabelaPreco(value: unknown): BudgetPriceTable {
+  return Number(value) === 5 || value === "TE" ? "TE" : ((Number(value) || 1) as 1 | 2 | 3 | 4);
+}
+
+function tabelaPrecoDbValue(t: BudgetPriceTable): number {
+  return t === "TE" ? 5 : t;
+}
+
+function tabelaPrecoLabel(t: BudgetPriceTable): string {
+  return t === "TE" ? "TE" : String(t);
+}
+
+function priceKey(t: Exclude<BudgetPriceTable, "TE">): keyof Product {
   return `preco${t}` as keyof Product;
 }
 
@@ -854,8 +867,8 @@ function ProductModal({
   allProducts, tabelaPreco, onSelect, onClose,
 }: {
   allProducts: Product[];
-  tabelaPreco: 1 | 2 | 3 | 4;
-  onSelect: (product: Product, areaM2: number) => void;
+  tabelaPreco: BudgetPriceTable;
+  onSelect: (product: Product, areaM2: number, precoM2?: number) => void;
   onClose: () => void;
 }) {
   const [q, setQ] = useState("");
@@ -863,7 +876,9 @@ function ProductModal({
   const [localUso, setLocalUso] = useState("");
   const [selected, setSelected] = useState<Product | null>(null);
   const [areaInput, setAreaInput] = useState("");
-  const pk = priceKey(tabelaPreco);
+  const [precoEspecialInput, setPrecoEspecialInput] = useState("");
+  const isTabelaEspecial = tabelaPreco === "TE";
+  const pk = isTabelaEspecial ? null : priceKey(tabelaPreco);
 
   const results = allProducts.filter((p) => {
     if (p.descontinuado) return false;
@@ -879,13 +894,15 @@ function ProductModal({
     if (!selected) return;
     const area = parseFloat(areaInput.replace(",", "."));
     if (!area || area <= 0) { toast.error("Informe a área em m²"); return; }
-    onSelect(selected, area);
+    const precoEspecial = isTabelaEspecial ? parseFloat(precoEspecialInput.replace(",", ".")) : undefined;
+    if (isTabelaEspecial && (!precoEspecial || precoEspecial <= 0)) { toast.error("Informe o preço especial por m²"); return; }
+    onSelect(selected, area, precoEspecial);
   }
 
   const superficies = [...new Set(allProducts.map((p) => p.superficie).filter(Boolean))].sort();
 
   if (selected) {
-    const price = selected[pk] as number | null;
+    const price = isTabelaEspecial ? (parseFloat(precoEspecialInput.replace(",", ".")) || null) : (selected[pk!] as number | null);
     const area = parseFloat(areaInput.replace(",", ".")) || 0;
     const caixas = selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : 0;
 
@@ -905,16 +922,23 @@ function ProductModal({
             <p className="text-xs text-muted-foreground mt-0.5 font-mono">{selected.formato} · Ref: {selected.referencia}</p>
             <p className="text-xs text-muted-foreground">{LOCAL_USO[selected.localUso]} · {selected.m2PorCaixa} m²/cx · {selected.espessuraMm}mm</p>
           </div>
-          {price ? (
+          {isTabelaEspecial ? (
+            <div className="mb-4">
+              <label className="block text-xs font-medium text-muted-foreground mb-1">Preço especial (R$/m²)</label>
+              <input type="text" value={precoEspecialInput} onChange={(e) => setPrecoEspecialInput(e.target.value)}
+                placeholder="Ex: 89,90"
+                className="w-full border border-border rounded-xl px-4 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono" />
+            </div>
+          ) : price ? (
             <div className="bg-primary/8 rounded-xl p-3 mb-4 flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Tabela {tabelaPreco}</span>
+              <span className="text-sm text-muted-foreground">Tabela {tabelaPrecoLabel(tabelaPreco)}</span>
               <span className="text-xl font-semibold text-primary font-mono">
                 {fmtBRL(price)}<span className="text-sm font-normal text-muted-foreground">/m²</span>
               </span>
             </div>
           ) : (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 flex items-center gap-2 text-sm text-amber-700">
-              <AlertTriangle size={14} /> Preço não disponível para tabela {tabelaPreco}
+              <AlertTriangle size={14} /> Preço não disponível para tabela {tabelaPrecoLabel(tabelaPreco)}
             </div>
           )}
           <label className="block text-xs font-medium text-muted-foreground mb-1">Área necessária (m²)</label>
@@ -958,7 +982,7 @@ function ProductModal({
         <div className="px-5 py-4 border-b border-border flex items-center justify-between">
           <div>
             <h3 className="font-semibold">Buscar Produto</h3>
-            <p className="text-xs text-muted-foreground">Tabela {tabelaPreco} ativa</p>
+            <p className="text-xs text-muted-foreground">Tabela {tabelaPrecoLabel(tabelaPreco)} ativa</p>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X size={18} /></button>
         </div>
@@ -993,7 +1017,7 @@ function ProductModal({
           ) : (
             <div className="divide-y divide-border">
               {results.map((p) => {
-                const price = p[pk] as number | null;
+                const price = isTabelaEspecial ? null : (p[pk!] as number | null);
                 return (
                   <button key={p.id} onClick={() => setSelected(p)}
                     className="w-full text-left px-5 py-3 hover:bg-muted/50 transition-colors group">
@@ -1008,9 +1032,11 @@ function ProductModal({
                         <p className="text-xs text-muted-foreground font-mono">{p.referencia} · {p.colecao}</p>
                       </div>
                       <div className="text-right shrink-0">
-                        {price
-                          ? <p className="text-sm font-semibold text-primary font-mono">{fmtBRL(price)}/m²</p>
-                          : <p className="text-xs text-amber-600">Consultar</p>}
+                        {isTabelaEspecial
+                          ? <p className="text-sm font-semibold text-primary font-mono">TE</p>
+                          : price
+                            ? <p className="text-sm font-semibold text-primary font-mono">{fmtBRL(price)}/m²</p>
+                            : <p className="text-xs text-amber-600">Consultar</p>}
                         <p className="text-xs text-muted-foreground">{p.m2PorCaixa} m²/cx</p>
                       </div>
                     </div>
@@ -1095,18 +1121,18 @@ function BudgetEditor({
       percentual_imposto: b.percentualImposto,
       observacoes: b.observacoes,
       status: b.status,
-      tabela_preco: b.tabelaPreco,
+      tabela_preco: tabelaPrecoDbValue(b.tabelaPreco),
     });
   }
 
-  async function handleAddProduct(product: Product, areaM2: number) {
+  async function handleAddProduct(product: Product, areaM2: number, precoEspecial?: number) {
     const already = budget.items.find((i) => i.productId === product.id);
     if (already) {
       setShowModal(false);
       toast.warning(`"${product.linha}" já está no orçamento — edite a metragem diretamente na tabela.`);
       return;
     }
-    const precoM2 = product[priceKey(budget.tabelaPreco)] as number;
+    const precoM2 = budget.tabelaPreco === "TE" ? precoEspecial! : (product[priceKey(budget.tabelaPreco)] as number);
     const caixas = Math.ceil(areaM2 / product.m2PorCaixa);
     setSaving(true);
     try {
@@ -1195,16 +1221,23 @@ function BudgetEditor({
     finally { setSaving(false); }
   }
 
-  async function changeTabela(t: 1 | 2 | 3 | 4) {
-    const pk = priceKey(t);
-    const updatedItems = budget.items.map((item) => {
-      const newPreco = item.product[pk] as number | null;
-      if (!newPreco) return item;
-      return { ...item, precoM2: newPreco, subtotal: round2(item.areaM2 * newPreco) };
-    });
+  async function changeTabela(t: BudgetPriceTable) {
     setSaving(true);
     try {
-      // Update each item price in DB
+      if (t === "TE") {
+        const b = updateLocal({ tabelaPreco: t });
+        await persistTotals(b);
+        markDirty();
+        toast.info("Tabela Especial ativada — informe o preço ao adicionar cada produto.");
+        return;
+      }
+
+      const pk = priceKey(t);
+      const updatedItems = budget.items.map((item) => {
+        const newPreco = item.product[pk] as number | null;
+        if (!newPreco) return item;
+        return { ...item, precoM2: newPreco, subtotal: round2(item.areaM2 * newPreco) };
+      });
       await Promise.all(updatedItems.map((item) =>
         updateBudgetItem(item.id, item.areaM2, item.caixas, item.precoM2)
       ));
@@ -1364,10 +1397,10 @@ ${budget.observacoes ? `
         <div className="px-5 py-2.5 flex flex-wrap items-center gap-4 text-sm">
           <div className="flex items-center gap-2">
             <span className="text-xs opacity-60">Tabela:</span>
-            {([1, 2, 3, 4] as const).map((t) => (
+            {([1, 2, 3, 4, "TE"] as const).map((t) => (
               <button key={t} onClick={() => changeTabela(t)}
                 className={`w-7 h-7 rounded text-xs font-semibold transition-all ${budget.tabelaPreco === t ? "bg-white text-primary" : "bg-white/10 hover:bg-white/20"}`}>
-                {t}
+                {tabelaPrecoLabel(t)}
               </button>
             ))}
           </div>
@@ -1667,7 +1700,7 @@ ${budget.observacoes ? `
               </div>
             )}
             <p className="mt-4 text-xs text-muted-foreground text-right">
-              #{budget.numero} · {fmtDate(budget.createdAt)} · Tabela {budget.tabelaPreco}
+              #{budget.numero} · {fmtDate(budget.createdAt)} · Tabela {tabelaPrecoLabel(budget.tabelaPreco)}
             </p>
           </div>
         </div>
@@ -1858,7 +1891,7 @@ function CustomerView({
                       <StatusPill status={b.status} />
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      {fmtDate(b.createdAt)} · Tabela {b.tabelaPreco}
+                      {fmtDate(b.createdAt)} · Tabela {tabelaPrecoLabel(b.tabelaPreco)}
                     </p>
                   </div>
                   <div className="text-right flex items-center gap-2">
@@ -2311,7 +2344,7 @@ function AllProductsTab({ allProducts: initProducts }: { allProducts: Product[] 
             </thead>
             <tbody className="divide-y divide-border">
               {filtered.slice(0, 200).map((p) => {
-                const price = p[pk] as number | null;
+                const price = isTabelaEspecial ? null : (p[pk!] as number | null);
                 return (
                   <tr key={p.id} className={`transition-colors group ${p.descontinuado ? "bg-amber-50/50 hover:bg-amber-50" : "hover:bg-muted/20"}`}>
                     <td className="px-5 py-2.5">

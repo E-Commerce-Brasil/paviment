@@ -6,7 +6,7 @@ import {
   Search, Plus, ArrowLeft, Package, FileText,
   Trash2, Send, Save, X, ChevronRight,
   RotateCcw, AlertTriangle, Pencil, Check, Copy, Printer,
-  LogOut, UserCircle, LockKeyhole,
+  LogOut, LockKeyhole,
 } from "lucide-react";
 import { Toaster, toast } from "sonner";
 import { projectId, publicAnonKey } from "../../utils/supabase/info";
@@ -3674,9 +3674,8 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
 
 // ── Customer Search (Home) ────────────────────────────────────────
 
-function CustomerSearch({ currentUser, onLogout, onSelect, allProducts, pricingSettings, onPricingSettingsChange, onProductsChange, onOpenBudgetById }: {
+function CustomerSearch({ currentUser, onSelect, allProducts, pricingSettings, onPricingSettingsChange, onProductsChange, onOpenBudgetById }: {
   currentUser: AppUser;
-  onLogout: () => void;
   onSelect: (c: Customer) => void;
   allProducts: Product[];
   pricingSettings: PricingSettings;
@@ -3817,12 +3816,8 @@ function CustomerSearch({ currentUser, onLogout, onSelect, allProducts, pricingS
             <div className="w-6 h-px bg-white/25 mt-3" />
           </div>
 
-          {/* RIGHT — USER / VILLAGRES */}
-          <div className="flex justify-end items-center gap-4">
-            <div className="hidden md:flex flex-col items-end text-xs text-white/70">
-              <span className="flex items-center gap-1 font-medium text-white"><UserCircle size={14} /> {currentUser.label}</span>
-              <button onClick={onLogout} className="mt-1 text-white/50 hover:text-white transition-colors flex items-center gap-1"><LogOut size={12} /> Sair</button>
-            </div>
+          {/* RIGHT — VILLAGRES */}
+          <div className="flex justify-end">
             <img
               src="/src/imports/logo_villagre.png"
               alt="Villagres"
@@ -4282,7 +4277,6 @@ export default function App() {
       {view.type === "home" && (
         <CustomerSearch
           currentUser={currentUser}
-          onLogout={handleLogout}
           onSelect={(c) => setView({ type: "customer", customer: c })}
           allProducts={allProducts}
           pricingSettings={pricingSettings}

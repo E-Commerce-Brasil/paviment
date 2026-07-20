@@ -50,21 +50,44 @@ interface Product {
   tipoEmbalagem: string;
 }
 
-type UserRole = "admin" | "vendas";
 type PriceTableOption = 1 | 2 | 3 | 4 | "TE";
 
 interface AppUser {
-  username: UserRole;
+  username: string;
   password: string;
   label: string;
 }
 
-const APP_USERS: AppUser[] = [
+const DEFAULT_APP_USERS: AppUser[] = [
   { username: "admin", password: "123456", label: "Administrador" },
   { username: "vendas", password: "123456", label: "Vendas" },
 ];
 
 const AUTH_STORAGE_KEY = "paviment.currentUser";
+const USERS_STORAGE_KEY = "paviment.users";
+
+function loadStoredUsers(): AppUser[] {
+  try {
+    const raw = localStorage.getItem(USERS_STORAGE_KEY);
+    if (!raw) return DEFAULT_APP_USERS;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return DEFAULT_APP_USERS;
+    const users = parsed
+      .filter((user: Partial<AppUser>) => user?.username && user?.password)
+      .map((user: AppUser) => ({
+        username: String(user.username).trim().toLowerCase(),
+        password: String(user.password),
+        label: String(user.label || user.username).trim(),
+      }));
+    return users.some((user) => user.username === "admin") ? users : DEFAULT_APP_USERS;
+  } catch {
+    return DEFAULT_APP_USERS;
+  }
+}
+
+function saveStoredUsers(users: AppUser[]): void {
+  localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
+}
 
 function canAccessBudget(user: AppUser, budgetOwner: string): boolean {
   return user.username === "admin" || budgetOwner === user.username;
@@ -134,7 +157,7 @@ interface Budget {
   totalFinal: number;
   createdAt: string;
   updatedAt: string;
-  createdBy: UserRole;
+  createdBy: string;
 }
 
 
@@ -231,7 +254,7 @@ function mapBudget(r: any, items: BudgetItem[] = []): Budget {
     totalFinal: parseFloat(r.total_final) || 0,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
-    createdBy: (r.created_by || "admin") as UserRole,
+    createdBy: r.created_by || "admin",
   };
 }
 
@@ -297,7 +320,7 @@ CREATE TABLE IF NOT EXISTS budgets (
   desconto_pix_inclui_frete BOOLEAN DEFAULT FALSE,
   observacoes TEXT, subtotal DECIMAL(12,2) DEFAULT 0,
   total_final DECIMAL(12,2) DEFAULT 0,
-  created_by TEXT NOT NULL DEFAULT 'admin' CHECK (created_by IN ('admin', 'vendas')),
+  created_by TEXT NOT NULL DEFAULT 'admin',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -319,8 +342,9 @@ ALTER TABLE budget_items DISABLE ROW LEVEL SECURITY;
 -- Migrações (execute se já tiver as tabelas criadas)
 ALTER TABLE budgets ADD COLUMN IF NOT EXISTS tecnico TEXT;
 ALTER TABLE budgets ADD COLUMN IF NOT EXISTS endereco_entrega TEXT;
-ALTER TABLE budgets ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT 'admin' CHECK (created_by IN ('admin', 'vendas'));
+ALTER TABLE budgets ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT 'admin';
 UPDATE budgets SET created_by = 'admin' WHERE created_by IS NULL;
+ALTER TABLE budgets DROP CONSTRAINT IF EXISTS budgets_created_by_check;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS logradouro TEXT;
@@ -819,8 +843,9 @@ async function runMigrations(): Promise<void> {
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_cidade TEXT;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_estado TEXT;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS forma_pagamento TEXT DEFAULT 'avista';
-      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT 'admin' CHECK (created_by IN ('admin', 'vendas'));
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT 'admin';
       UPDATE budgets SET created_by = 'admin' WHERE created_by IS NULL;
+      ALTER TABLE budgets DROP CONSTRAINT IF EXISTS budgets_created_by_check;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS parcelas_cartao INTEGER DEFAULT 1;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS desconto_pix_percentual NUMERIC(5,2) DEFAULT 0;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS desconto_pix_inclui_frete BOOLEAN DEFAULT FALSE;
@@ -3672,10 +3697,130 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
   );
 }
 
+
+// ── Users Management ──────────────────────────────────────────────
+
+function UsersTab({ users, currentUser, onUsersChange }: {
+  users: AppUser[];
+  currentUser: AppUser;
+  onUsersChange: (users: AppUser[]) => void;
+}) {
+  const [newUser, setNewUser] = useState({ username: "", label: "", password: "" });
+  const [editingPasswords, setEditingPasswords] = useState<Record<string, string>>({});
+
+  function normalizeUsername(value: string): string {
+    return value.trim().toLowerCase().replace(/\s+/g, "_");
+  }
+
+  function handleCreateUser() {
+    const username = normalizeUsername(newUser.username);
+    const label = newUser.label.trim() || username;
+    const password = newUser.password.trim();
+
+    if (!username) { toast.error("Informe o usuário."); return; }
+    if (!/^[a-z0-9._-]+$/.test(username)) { toast.error("Use apenas letras, números, ponto, hífen ou underline no usuário."); return; }
+    if (!password) { toast.error("Informe uma senha."); return; }
+    if (users.some((user) => user.username === username)) { toast.error("Já existe um usuário com este nome."); return; }
+
+    const nextUsers = [...users, { username, label, password }];
+    onUsersChange(nextUsers);
+    setNewUser({ username: "", label: "", password: "" });
+    toast.success(`Usuário ${username} criado.`);
+  }
+
+  function handleSavePassword(username: string) {
+    const password = editingPasswords[username]?.trim();
+    if (!password) { toast.error("Informe uma senha válida."); return; }
+
+    onUsersChange(users.map((user) => user.username === username ? { ...user, password } : user));
+    setEditingPasswords((prev) => ({ ...prev, [username]: "" }));
+    toast.success(`Senha de ${username} atualizada.`);
+  }
+
+  function handleRemoveUser(username: string) {
+    if (username === "admin") { toast.error("O usuário admin não pode ser removido."); return; }
+    if (username === currentUser.username) { toast.error("Você não pode remover o usuário logado."); return; }
+    if (!confirm(`Remover o usuário "${username}"? Os orçamentos criados por ele continuarão salvos, mas ficarão visíveis apenas para o admin.`)) return;
+
+    onUsersChange(users.filter((user) => user.username !== username));
+    toast.success(`Usuário ${username} removido.`);
+  }
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="font-semibold mb-1">Usuários</h2>
+        <p className="text-sm text-muted-foreground">Somente o admin pode criar usuários, alterar senhas e remover acessos.</p>
+      </div>
+
+      <div className="bg-card border border-border rounded-2xl p-5 shadow-sm">
+        <h3 className="font-semibold mb-4">Criar novo usuário</h3>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Usuário *</label>
+            <input value={newUser.username} onChange={(e) => setNewUser((form) => ({ ...form, username: normalizeUsername(e.target.value) }))}
+              placeholder="ex: vendedor_2"
+              className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Nome exibido</label>
+            <input value={newUser.label} onChange={(e) => setNewUser((form) => ({ ...form, label: e.target.value }))}
+              placeholder="Ex: Vendedor 2"
+              className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Senha *</label>
+            <input type="password" value={newUser.password} onChange={(e) => setNewUser((form) => ({ ...form, password: e.target.value }))}
+              placeholder="Senha inicial"
+              className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+          </div>
+        </div>
+        <button onClick={handleCreateUser}
+          className="mt-4 bg-primary text-primary-foreground px-4 py-2.5 rounded-xl text-sm font-medium hover:opacity-90 transition-opacity flex items-center gap-2">
+          <Plus size={14} /> Criar usuário
+        </button>
+      </div>
+
+      <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-sm">
+        <div className="px-5 py-3 border-b border-border bg-muted/30">
+          <p className="text-xs text-muted-foreground">{users.length} usuário{users.length !== 1 ? "s" : ""} cadastrado{users.length !== 1 ? "s" : ""}</p>
+        </div>
+        <div className="divide-y divide-border">
+          {users.map((user) => (
+            <div key={user.username} className="p-5 flex flex-col md:flex-row md:items-center gap-3 md:justify-between">
+              <div>
+                <p className="font-semibold text-sm">{user.label}</p>
+                <p className="text-xs text-muted-foreground font-mono">{user.username}{user.username === "admin" ? " · administrador" : ""}</p>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                <input type="password" value={editingPasswords[user.username] || ""}
+                  onChange={(e) => setEditingPasswords((prev) => ({ ...prev, [user.username]: e.target.value }))}
+                  onKeyDown={(e) => e.key === "Enter" && handleSavePassword(user.username)}
+                  placeholder="Nova senha"
+                  className="border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+                <button onClick={() => handleSavePassword(user.username)}
+                  className="border border-border rounded-xl px-3 py-2 text-sm hover:bg-muted transition-colors flex items-center justify-center gap-1.5">
+                  <Save size={13} /> Salvar senha
+                </button>
+                <button onClick={() => handleRemoveUser(user.username)} disabled={user.username === "admin" || user.username === currentUser.username}
+                  className="border border-border rounded-xl px-3 py-2 text-sm text-muted-foreground hover:text-destructive hover:bg-red-50 transition-colors disabled:opacity-40 disabled:hover:text-muted-foreground disabled:hover:bg-transparent flex items-center justify-center gap-1.5">
+                  <Trash2 size={13} /> Remover
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Customer Search (Home) ────────────────────────────────────────
 
-function CustomerSearch({ currentUser, onSelect, allProducts, pricingSettings, onPricingSettingsChange, onProductsChange, onOpenBudgetById }: {
+function CustomerSearch({ currentUser, users, onUsersChange, onSelect, allProducts, pricingSettings, onPricingSettingsChange, onProductsChange, onOpenBudgetById }: {
   currentUser: AppUser;
+  users: AppUser[];
+  onUsersChange: (users: AppUser[]) => void;
   onSelect: (c: Customer) => void;
   allProducts: Product[];
   pricingSettings: PricingSettings;
@@ -3683,7 +3828,7 @@ function CustomerSearch({ currentUser, onSelect, allProducts, pricingSettings, o
   onProductsChange: (products: Product[]) => void;
   onOpenBudgetById: (budgetId: string, customerId: string) => void;
 }) {
-  const [tab, setTab] = useState<"orcamentos" | "clientes" | "produtos">("orcamentos");
+  const [tab, setTab] = useState<"orcamentos" | "clientes" | "produtos" | "usuarios">("orcamentos");
   const [q, setQ] = useState("");
   const [results, setResults] = useState<Customer[]>([]);
   const [searching, setSearching] = useState(false);
@@ -3784,6 +3929,7 @@ function CustomerSearch({ currentUser, onSelect, allProducts, pricingSettings, o
     { key: "orcamentos", label: "Orçamentos" },
     { key: "clientes", label: "Clientes" },
     { key: "produtos", label: "Produtos" },
+    ...(currentUser.username === "admin" ? [{ key: "usuarios" as const, label: "Usuários" }] : []),
   ] as const;
 
   return (
@@ -4097,6 +4243,7 @@ function CustomerSearch({ currentUser, onSelect, allProducts, pricingSettings, o
 
         {tab === "clientes" && <AllCustomersTab onSelect={onSelect} />}
         {tab === "produtos" && <AllProductsTab allProducts={allProducts} pricingSettings={pricingSettings} onPricingSettingsChange={onPricingSettingsChange} onProductsChange={onProductsChange} />}
+        {tab === "usuarios" && currentUser.username === "admin" && <UsersTab users={users} currentUser={currentUser} onUsersChange={onUsersChange} />}
       </div>
     </div>
   );
@@ -4121,13 +4268,13 @@ function SystemLogoutButton({ currentUser, onLogout }: { currentUser: AppUser; o
 
 // ── Login Screen ─────────────────────────────────────────────────
 
-function LoginScreen({ onLogin }: { onLogin: (user: AppUser) => void }) {
-  const [username, setUsername] = useState<UserRole>("admin");
+function LoginScreen({ users, onLogin }: { users: AppUser[]; onLogin: (user: AppUser) => void }) {
+  const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    const user = APP_USERS.find((candidate) => candidate.username === username && candidate.password === password);
+    const user = users.find((candidate) => candidate.username === username && candidate.password === password);
     if (!user) {
       toast.error("Usuário ou senha inválidos.");
       return;
@@ -4151,9 +4298,9 @@ function LoginScreen({ onLogin }: { onLogin: (user: AppUser) => void }) {
         <form onSubmit={submit} className="space-y-4">
           <div>
             <label className="text-xs font-medium text-muted-foreground">Usuário</label>
-            <select value={username} onChange={(e) => setUsername(e.target.value as UserRole)}
+            <select value={username} onChange={(e) => setUsername(e.target.value)}
               className="w-full mt-1 border border-border rounded-xl px-3 py-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25">
-              {APP_USERS.map((user) => <option key={user.username} value={user.username}>{user.label} ({user.username})</option>)}
+              {users.map((user) => <option key={user.username} value={user.username}>{user.label} ({user.username})</option>)}
             </select>
           </div>
           <div>
@@ -4184,9 +4331,11 @@ type View =
   | { type: "budget"; budget: Budget; customer: Customer };
 
 export default function App() {
+  const [appUsers, setAppUsers] = useState<AppUser[]>(() => loadStoredUsers());
   const [currentUser, setCurrentUser] = useState<AppUser | null>(() => {
+    const users = loadStoredUsers();
     const saved = localStorage.getItem(AUTH_STORAGE_KEY);
-    return APP_USERS.find((user) => user.username === saved) || null;
+    return users.find((user) => user.username === saved) || null;
   });
   const [view, setView] = useState<View>({ type: "home" });
   const [appState, setAppState] = useState<"loading" | "setup" | "seeding" | "ready" | "error">("loading");
@@ -4237,8 +4386,14 @@ export default function App() {
     setView({ type: "home" });
   }
 
+  function handleUsersChange(users: AppUser[]) {
+    setAppUsers(users);
+    saveStoredUsers(users);
+    setCurrentUser((user) => user ? users.find((candidate) => candidate.username === user.username) || null : null);
+  }
+
   if (!currentUser) {
-    return <LoginScreen onLogin={setCurrentUser} />;
+    return <LoginScreen users={appUsers} onLogin={setCurrentUser} />;
   }
 
   if (appState === "setup") {
@@ -4277,6 +4432,8 @@ export default function App() {
       {view.type === "home" && (
         <CustomerSearch
           currentUser={currentUser}
+          users={appUsers}
+          onUsersChange={handleUsersChange}
           onSelect={(c) => setView({ type: "customer", customer: c })}
           allProducts={allProducts}
           pricingSettings={pricingSettings}

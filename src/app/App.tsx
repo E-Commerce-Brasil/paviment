@@ -4108,6 +4108,22 @@ function CustomerSearch({ currentUser, onLogout, onSelect, allProducts, pricingS
 }
 
 
+
+function SystemLogoutButton({ currentUser, onLogout }: { currentUser: AppUser; onLogout: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onLogout}
+      className="fixed right-4 top-4 z-50 flex items-center gap-2 rounded-full border border-white/20 bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-lg transition-all hover:scale-[1.02] hover:opacity-95 focus:outline-none focus:ring-2 focus:ring-primary/30"
+      title={`Sair do sistema (${currentUser.label})`}
+    >
+      <LogOut size={14} />
+      <span>Sair</span>
+      <span className="hidden sm:inline opacity-60">· {currentUser.username}</span>
+    </button>
+  );
+}
+
 // ── Login Screen ─────────────────────────────────────────────────
 
 function LoginScreen({ onLogin }: { onLogin: (user: AppUser) => void }) {
@@ -4310,6 +4326,7 @@ export default function App() {
           onOpenBudget={(b) => setView({ type: "budget", budget: b, customer: view.customer })}
         />
       )}
+      <SystemLogoutButton currentUser={currentUser} onLogout={handleLogout} />
       <Toaster position="bottom-right" richColors />
     </>
   );

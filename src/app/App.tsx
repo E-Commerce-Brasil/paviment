@@ -6,6 +6,7 @@ import {
   Search, Plus, ArrowLeft, Package, FileText,
   Trash2, Send, Save, X, ChevronRight,
   RotateCcw, AlertTriangle, Pencil, Check, Copy, Printer,
+  LogOut, UserCircle, LockKeyhole,
 } from "lucide-react";
 import { Toaster, toast } from "sonner";
 import { projectId, publicAnonKey } from "../../utils/supabase/info";
@@ -47,6 +48,25 @@ interface Product {
   categoriaComplementar: string;
   tipoRejunte: string;
   tipoEmbalagem: string;
+}
+
+type UserRole = "admin" | "vendas";
+
+interface AppUser {
+  username: UserRole;
+  password: string;
+  label: string;
+}
+
+const APP_USERS: AppUser[] = [
+  { username: "admin", password: "123456", label: "Administrador" },
+  { username: "vendas", password: "123456", label: "Vendas" },
+];
+
+const AUTH_STORAGE_KEY = "paviment.currentUser";
+
+function canAccessBudget(user: AppUser, budgetOwner: string): boolean {
+  return user.username === "admin" || budgetOwner === user.username;
 }
 
 interface PricingSettings {
@@ -113,6 +133,7 @@ interface Budget {
   totalFinal: number;
   createdAt: string;
   updatedAt: string;
+  createdBy: UserRole;
 }
 
 
@@ -209,6 +230,7 @@ function mapBudget(r: any, items: BudgetItem[] = []): Budget {
     totalFinal: parseFloat(r.total_final) || 0,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    createdBy: (r.created_by || "admin") as UserRole,
   };
 }
 
@@ -274,6 +296,7 @@ CREATE TABLE IF NOT EXISTS budgets (
   desconto_pix_inclui_frete BOOLEAN DEFAULT FALSE,
   observacoes TEXT, subtotal DECIMAL(12,2) DEFAULT 0,
   total_final DECIMAL(12,2) DEFAULT 0,
+  created_by TEXT NOT NULL DEFAULT 'admin' CHECK (created_by IN ('admin', 'vendas')),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -295,6 +318,8 @@ ALTER TABLE budget_items DISABLE ROW LEVEL SECURITY;
 -- Migrações (execute se já tiver as tabelas criadas)
 ALTER TABLE budgets ADD COLUMN IF NOT EXISTS tecnico TEXT;
 ALTER TABLE budgets ADD COLUMN IF NOT EXISTS endereco_entrega TEXT;
+ALTER TABLE budgets ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT 'admin' CHECK (created_by IN ('admin', 'vendas'));
+UPDATE budgets SET created_by = 'admin' WHERE created_by IS NULL;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS logradouro TEXT;
@@ -427,12 +452,14 @@ function mapBudgetSummary(r: any): BudgetSummary {
   return { ...mapBudget(r, []), customerNome: r.customers?.nome || "", customerCidade: r.customers?.cidade || "" };
 }
 
-async function fetchRecentBudgets(limit = 5): Promise<BudgetSummary[]> {
-  const { data, error } = await supabase
+async function fetchRecentBudgets(currentUser: AppUser, limit = 5): Promise<BudgetSummary[]> {
+  let q = supabase
     .from("budgets")
     .select("*, customers(nome, cidade)")
     .order("created_at", { ascending: false })
     .limit(limit);
+  if (currentUser.username !== "admin") q = q.eq("created_by", currentUser.username);
+  const { data, error } = await q;
   if (error) throw error;
   return (data || []).map(mapBudgetSummary);
 }
@@ -440,8 +467,9 @@ async function fetchRecentBudgets(limit = 5): Promise<BudgetSummary[]> {
 async function fetchBudgetsFiltered(filters: {
   status?: string; customerQ?: string;
   dataInicio?: string; dataFim?: string;
-}): Promise<BudgetSummary[]> {
+}, currentUser: AppUser): Promise<BudgetSummary[]> {
   let q = supabase.from("budgets").select("*, customers(nome, cidade)");
+  if (currentUser.username !== "admin") q = q.eq("created_by", currentUser.username);
   if (filters.status) q = q.eq("status", filters.status);
   if (filters.dataInicio) q = q.gte("created_at", filters.dataInicio);
   if (filters.dataFim) q = q.lte("created_at", filters.dataFim + "T23:59:59");
@@ -745,12 +773,14 @@ async function deleteCustomer(id: string): Promise<void> {
   if (error) throw error;
 }
 
-async function getBudgetsForCustomer(customerId: string): Promise<Budget[]> {
-  const { data, error } = await supabase
+async function getBudgetsForCustomer(customerId: string, currentUser: AppUser): Promise<Budget[]> {
+  let q = supabase
     .from("budgets")
     .select("*")
     .eq("customer_id", customerId)
     .order("numero", { ascending: false });
+  if (currentUser.username !== "admin") q = q.eq("created_by", currentUser.username);
+  const { data, error } = await q;
   if (error) throw error;
   return (data || []).map((r) => mapBudget(r, []));
 }
@@ -765,10 +795,10 @@ async function getBudgetWithItems(budgetId: string): Promise<Budget> {
   return mapBudget(b, (items || []).map(mapItem));
 }
 
-async function createBudget(customerId: string): Promise<Budget> {
+async function createBudget(customerId: string, currentUser: AppUser): Promise<Budget> {
   const { data, error } = await supabase
     .from("budgets")
-    .insert({ customer_id: customerId, status: "rascunho", tabela_preco: 1, frete: 0, percentual_imposto: 0, forma_pagamento: "avista", parcelas_cartao: 1, desconto_pix_percentual: 0, desconto_pix_inclui_frete: false })
+    .insert({ customer_id: customerId, status: "rascunho", tabela_preco: 1, frete: 0, percentual_imposto: 0, forma_pagamento: "avista", parcelas_cartao: 1, desconto_pix_percentual: 0, desconto_pix_inclui_frete: false, created_by: currentUser.username })
     .select()
     .single();
   if (error) throw error;
@@ -788,6 +818,8 @@ async function runMigrations(): Promise<void> {
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_cidade TEXT;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_estado TEXT;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS forma_pagamento TEXT DEFAULT 'avista';
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT 'admin' CHECK (created_by IN ('admin', 'vendas'));
+      UPDATE budgets SET created_by = 'admin' WHERE created_by IS NULL;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS parcelas_cartao INTEGER DEFAULT 1;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS desconto_pix_percentual NUMERIC(5,2) DEFAULT 0;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS desconto_pix_inclui_frete BOOLEAN DEFAULT FALSE;
@@ -902,7 +934,7 @@ async function deleteBudget(id: string): Promise<void> {
   if (error) throw error;
 }
 
-async function duplicateBudget(original: Budget): Promise<Budget> {
+async function duplicateBudget(original: Budget, currentUser: AppUser): Promise<Budget> {
   const { data, error } = await supabase
     .from("budgets")
     .insert({
@@ -926,6 +958,7 @@ async function duplicateBudget(original: Budget): Promise<Budget> {
       entrega_estado: original.entregaEstado || null,
       subtotal: original.subtotal,
       total_final: original.totalFinal,
+      created_by: currentUser.username,
     })
     .select()
     .single();
@@ -1359,9 +1392,9 @@ function ProductModal({
 // ── Budget Editor ─────────────────────────────────────────────────
 
 function BudgetEditor({
-  budget: initBudget, allProducts, pricingSettings, customer, onBack, onGoHome, onBudgetChange, onOpenBudget,
+  budget: initBudget, allProducts, pricingSettings, customer, currentUser, onBack, onGoHome, onBudgetChange, onOpenBudget,
 }: {
-  budget: Budget; allProducts: Product[]; pricingSettings: PricingSettings; customer: Customer;
+  budget: Budget; allProducts: Product[]; pricingSettings: PricingSettings; customer: Customer; currentUser: AppUser;
   onBack: () => void; onGoHome: () => void; onBudgetChange: (b: Budget) => void;
   onOpenBudget?: (b: Budget) => void;
 }) {
@@ -1459,7 +1492,7 @@ function BudgetEditor({
   async function handleDuplicate() {
     setDuplicating(true);
     try {
-      const newBudget = await duplicateBudget(budget);
+      const newBudget = await duplicateBudget(budget, currentUser);
       const full = await getBudgetWithItems(newBudget.id);
       setShowDuplicateModal(false);
       toast.success(`Orçamento #${full.numero} criado como cópia!`);
@@ -2534,9 +2567,9 @@ ${budget.observacoes ? `
 // ── Customer View ─────────────────────────────────────────────────
 
 function CustomerView({
-  customer: initCustomer, allProducts, pricingSettings, onBack, onOpenBudget,
+  customer: initCustomer, allProducts, pricingSettings, currentUser, onBack, onOpenBudget,
 }: {
-  customer: Customer; allProducts: Product[]; pricingSettings: PricingSettings;
+  customer: Customer; allProducts: Product[]; pricingSettings: PricingSettings; currentUser: AppUser;
   onBack: () => void;
   onOpenBudget: (b: Budget, c: Customer) => void;
 }) {
@@ -2586,7 +2619,7 @@ function CustomerView({
   async function loadBudgets() {
     setLoading(true);
     try {
-      setBudgets(await getBudgetsForCustomer(customer.id));
+      setBudgets(await getBudgetsForCustomer(customer.id, currentUser));
     } catch { toast.error("Erro ao carregar orçamentos"); }
     finally { setLoading(false); }
   }
@@ -2596,7 +2629,7 @@ function CustomerView({
   async function handleCreateBudget() {
     setCreating(true);
     try {
-      const b = await createBudget(customer.id);
+      const b = await createBudget(customer.id, currentUser);
       onOpenBudget(b, customer);
     } catch (e: any) { toast.error("Erro: " + e.message); setCreating(false); }
   }
@@ -3588,7 +3621,9 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
 
 // ── Customer Search (Home) ────────────────────────────────────────
 
-function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSettingsChange, onProductsChange, onOpenBudgetById }: {
+function CustomerSearch({ currentUser, onLogout, onSelect, allProducts, pricingSettings, onPricingSettingsChange, onProductsChange, onOpenBudgetById }: {
+  currentUser: AppUser;
+  onLogout: () => void;
   onSelect: (c: Customer) => void;
   allProducts: Product[];
   pricingSettings: PricingSettings;
@@ -3619,7 +3654,7 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
   const hasFilter = !!(filterStatus || filterCliente || filterDataInicio || filterDataFim);
 
   useEffect(() => {
-    fetchRecentBudgets(5)
+    fetchRecentBudgets(currentUser, 5)
       .then(setRecentBudgets)
       .catch(() => {})
       .finally(() => setBudgetsLoading(false));
@@ -3633,12 +3668,12 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
         setFilteredBudgets(await fetchBudgetsFiltered({
           status: filterStatus, customerQ: filterCliente,
           dataInicio: filterDataInicio, dataFim: filterDataFim,
-        }));
+        }, currentUser));
       } catch {}
       finally { setIsFiltering(false); }
     }, 300);
     return () => clearTimeout(t);
-  }, [filterStatus, filterCliente, filterDataInicio, filterDataFim]);
+  }, [filterStatus, filterCliente, filterDataInicio, filterDataFim, currentUser]);
 
   useEffect(() => {
     if (!q.trim()) { setResults([]); return; }
@@ -3729,8 +3764,12 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
             <div className="w-6 h-px bg-white/25 mt-3" />
           </div>
 
-          {/* RIGHT — VILLAGRES */}
-          <div className="flex justify-end">
+          {/* RIGHT — USER / VILLAGRES */}
+          <div className="flex justify-end items-center gap-4">
+            <div className="hidden md:flex flex-col items-end text-xs text-white/70">
+              <span className="flex items-center gap-1 font-medium text-white"><UserCircle size={14} /> {currentUser.label}</span>
+              <button onClick={onLogout} className="mt-1 text-white/50 hover:text-white transition-colors flex items-center gap-1"><LogOut size={12} /> Sair</button>
+            </div>
             <img
               src="/src/imports/logo_villagre.png"
               alt="Villagres"
@@ -3961,6 +4000,7 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
                                       <div className="flex items-center gap-2 flex-wrap">
                                         <span className="font-semibold text-sm">#{b.numero}</span>
                                         <StatusPill status={b.status} />
+                                        <span className="text-[10px] text-muted-foreground border border-border rounded px-1">{b.createdBy === "admin" ? "admin" : "vendas"}</span>
                                         {locked && <span className="text-[10px] text-muted-foreground border border-border rounded px-1">bloqueado</span>}
                                       </div>
                                       <p className="text-sm font-medium mt-0.5 truncate">{b.customerNome}</p>
@@ -4014,6 +4054,64 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
   );
 }
 
+
+// ── Login Screen ─────────────────────────────────────────────────
+
+function LoginScreen({ onLogin }: { onLogin: (user: AppUser) => void }) {
+  const [username, setUsername] = useState<UserRole>("admin");
+  const [password, setPassword] = useState("");
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const user = APP_USERS.find((candidate) => candidate.username === username && candidate.password === password);
+    if (!user) {
+      toast.error("Usuário ou senha inválidos.");
+      return;
+    }
+    localStorage.setItem(AUTH_STORAGE_KEY, user.username);
+    onLogin(user);
+    toast.success(`Bem-vindo, ${user.label}!`);
+  }
+
+  return (
+    <div className="min-h-screen bg-primary flex items-center justify-center px-4 py-8">
+      <div className="w-full max-w-sm bg-card border border-white/10 rounded-3xl p-7 shadow-2xl">
+        <div className="text-center mb-6">
+          <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-4">
+            <LockKeyhole size={25} className="text-primary" />
+          </div>
+          <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-serif)" }}>Entrar no Paviment</h1>
+          <p className="text-sm text-muted-foreground mt-1">Use seu usuário para acessar os orçamentos.</p>
+        </div>
+
+        <form onSubmit={submit} className="space-y-4">
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Usuário</label>
+            <select value={username} onChange={(e) => setUsername(e.target.value as UserRole)}
+              className="w-full mt-1 border border-border rounded-xl px-3 py-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25">
+              {APP_USERS.map((user) => <option key={user.username} value={user.username}>{user.label} ({user.username})</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Senha</label>
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+              placeholder="Digite a senha" autoFocus
+              className="w-full mt-1 border border-border rounded-xl px-3 py-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+          </div>
+          <button type="submit" className="w-full bg-primary text-primary-foreground py-3 rounded-xl text-sm font-medium hover:opacity-90 transition-opacity">
+            Entrar
+          </button>
+        </form>
+
+        <div className="mt-5 rounded-2xl bg-muted/70 p-3 text-xs text-muted-foreground leading-relaxed">
+          <strong>Perfis iniciais:</strong> admin vê e edita todos os orçamentos; vendas vê e edita apenas os orçamentos criados por vendas.
+        </div>
+      </div>
+      <Toaster position="bottom-right" richColors />
+    </div>
+  );
+}
+
 // ── App Root ──────────────────────────────────────────────────────
 
 type View =
@@ -4022,6 +4120,10 @@ type View =
   | { type: "budget"; budget: Budget; customer: Customer };
 
 export default function App() {
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(() => {
+    const saved = localStorage.getItem(AUTH_STORAGE_KEY);
+    return APP_USERS.find((user) => user.username === saved) || null;
+  });
   const [view, setView] = useState<View>({ type: "home" });
   const [appState, setAppState] = useState<"loading" | "setup" | "seeding" | "ready" | "error">("loading");
   const [initMsg, setInitMsg] = useState("Verificando banco de dados...");
@@ -4065,6 +4167,16 @@ export default function App() {
 
   useEffect(() => { init(); }, []);
 
+  function handleLogout() {
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+    setCurrentUser(null);
+    setView({ type: "home" });
+  }
+
+  if (!currentUser) {
+    return <LoginScreen onLogin={setCurrentUser} />;
+  }
+
   if (appState === "setup") {
     return <SetupScreen onVerify={init} />;
   }
@@ -4100,6 +4212,8 @@ export default function App() {
     <>
       {view.type === "home" && (
         <CustomerSearch
+          currentUser={currentUser}
+          onLogout={handleLogout}
           onSelect={(c) => setView({ type: "customer", customer: c })}
           allProducts={allProducts}
           pricingSettings={pricingSettings}
@@ -4111,6 +4225,10 @@ export default function App() {
                 getBudgetWithItems(budgetId),
                 supabase.from("customers").select("*").eq("id", customerId).single(),
               ]);
+              if (!canAccessBudget(currentUser, full.createdBy)) {
+                toast.error("Você não tem permissão para acessar este orçamento.");
+                return;
+              }
               if (cData) setView({ type: "budget", budget: full, customer: mapCustomer(cData) });
             } catch (e: any) { toast.error("Erro ao abrir orçamento: " + e.message); }
           }}
@@ -4121,6 +4239,7 @@ export default function App() {
           customer={view.customer}
           allProducts={allProducts}
           pricingSettings={pricingSettings}
+          currentUser={currentUser}
           onBack={() => setView({ type: "home" })}
           onOpenBudget={(b, c) => setView({ type: "budget", budget: b, customer: c })}
         />
@@ -4131,6 +4250,7 @@ export default function App() {
           allProducts={allProducts}
           pricingSettings={pricingSettings}
           customer={view.customer}
+          currentUser={currentUser}
           onBack={() => setView({ type: "customer", customer: view.customer })}
           onGoHome={() => setView({ type: "home" })}
           onBudgetChange={(b) => setView({ type: "budget", budget: b, customer: view.customer })}

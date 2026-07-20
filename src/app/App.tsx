@@ -4314,9 +4314,6 @@ function LoginScreen({ users, onLogin }: { users: AppUser[]; onLogin: (user: App
           </button>
         </form>
 
-        <div className="mt-5 rounded-2xl bg-muted/70 p-3 text-xs text-muted-foreground leading-relaxed">
-          <strong>Perfis iniciais:</strong> admin vê e edita todos os orçamentos; vendas vê e edita apenas os orçamentos criados por vendas.
-        </div>
       </div>
       <Toaster position="bottom-right" richColors />
     </div>

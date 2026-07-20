@@ -51,6 +51,7 @@ interface Product {
 }
 
 type UserRole = "admin" | "vendas";
+type PriceTableOption = 1 | 2 | 3 | 4 | "TE";
 
 interface AppUser {
   username: UserRole;
@@ -1155,7 +1156,7 @@ function ProductModal({
   allProducts: Product[];
   tabelaPreco: 1 | 2 | 3 | 4;
   pricingSettings?: PricingSettings;
-  onSelect: (product: Product, areaM2: number, tabelaPreco: 1 | 2 | 3 | 4) => void;
+  onSelect: (product: Product, areaM2: number, tabelaPreco: PriceTableOption, specialPrice?: number) => void;
   onClose: () => void;
 }) {
   const [q, setQ] = useState("");
@@ -1166,8 +1167,9 @@ function ProductModal({
   const [localUso, setLocalUso] = useState("");
   const [selected, setSelected] = useState<Product | null>(null);
   const [areaInput, setAreaInput] = useState("");
-  const [selectedTabela, setSelectedTabela] = useState<1 | 2 | 3 | 4>(tabelaPreco);
-  const pk = priceKey(selectedTabela);
+  const [selectedTabela, setSelectedTabela] = useState<PriceTableOption>(tabelaPreco);
+  const [specialPriceInput, setSpecialPriceInput] = useState("");
+  const pk = selectedTabela === "TE" ? null : priceKey(selectedTabela);
   const safeProducts = Array.isArray(allProducts) ? allProducts : [];
   const effectivePricingSettings = pricingSettings || { impostoPercentual: 0, taxaCartaoPercentual: 0, fretePor100Kg: 4 };
 
@@ -1188,15 +1190,18 @@ function ProductModal({
     if (!selected) return;
     const area = parseFloat(areaInput.replace(",", "."));
     if (!area || area <= 0) { toast.error(isVillacolProduct(selected) ? "Informe a quantidade" : "Informe a área em m²"); return; }
-    onSelect(selected, area, selectedTabela);
+    const specialPrice = selectedTabela === "TE" ? parseDecimalInput(specialPriceInput) : undefined;
+    if (selectedTabela === "TE" && (!specialPrice || specialPrice <= 0)) { toast.error("Informe um valor válido para a Tabela Especial."); return; }
+    onSelect(selected, area, selectedTabela, specialPrice);
   }
 
   const superficies = [...new Set(safeProducts.map((p) => p.superficie).filter(Boolean))].sort();
   const formatos = [...new Set(safeProducts.map((p) => p.formato).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true }));
 
   if (selected) {
-    const priceBase = selected[pk] as number | null;
-    const price = priceBase != null ? calculateFinalPrice(priceBase, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
+    const priceBase = pk ? selected[pk] as number | null : null;
+    const specialPrice = parseDecimalInput(specialPriceInput);
+    const price = selectedTabela === "TE" ? (specialPrice > 0 ? specialPrice : null) : priceBase != null ? calculateFinalPrice(priceBase, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
     const area = parseFloat(areaInput.replace(",", ".")) || 0;
     const caixas = selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : 0;
     const selectedIsVillacol = isVillacolProduct(selected);
@@ -1229,25 +1234,37 @@ function ProductModal({
           </div>
           <div className="mb-4">
             <p className="text-xs font-medium text-muted-foreground mb-1.5">Tabela de preço deste produto</p>
-            <div className="grid grid-cols-4 gap-1.5">
+            <div className="grid grid-cols-5 gap-1.5">
               {([1, 2, 3, 4] as const).map((t) => (
                 <button key={t} type="button" onClick={() => setSelectedTabela(t)}
                   className={`rounded-lg py-1.5 text-xs font-semibold border transition-colors ${selectedTabela === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
                   Tabela {t}
                 </button>
               ))}
+              <button type="button" onClick={() => setSelectedTabela("TE")}
+                className={`rounded-lg py-1.5 text-xs font-semibold border transition-colors ${selectedTabela === "TE" ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                TE
+              </button>
             </div>
+            {selectedTabela === "TE" && (
+              <div className="mt-2">
+                <label className="block text-xs font-medium text-muted-foreground mb-1">Valor especial {selectedIsVillacol ? "por unidade" : "por m²"}</label>
+                <input type="text" value={specialPriceInput} onChange={(e) => setSpecialPriceInput(e.target.value)}
+                  placeholder="Ex: 129,90"
+                  className="w-full border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono" />
+              </div>
+            )}
           </div>
           {price ? (
             <div className="bg-primary/8 rounded-xl p-3 mb-4 flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Tabela {selectedTabela}</span>
+              <span className="text-sm text-muted-foreground">{selectedTabela === "TE" ? "Tabela Especial" : `Tabela ${selectedTabela}`}</span>
               <span className="text-xl font-semibold text-primary font-mono">
                 {fmtBRL(price)}<span className="text-sm font-normal text-muted-foreground">{selectedIsVillacol ? "/un." : "/m²"}</span>
               </span>
             </div>
           ) : (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 flex items-center gap-2 text-sm text-amber-700">
-              <AlertTriangle size={14} /> Preço não disponível para tabela {selectedTabela}
+              <AlertTriangle size={14} /> {selectedTabela === "TE" ? "Informe o valor da Tabela Especial" : `Preço não disponível para tabela ${selectedTabela}`}
             </div>
           )}
           <label className="block text-xs font-medium text-muted-foreground mb-1">{selectedIsVillacol ? `Quantidade de ${getComplementaryUnitLabel(selected, true)}` : "Área necessária (m²)"}</label>
@@ -1312,6 +1329,10 @@ function ProductModal({
                 {t}
               </button>
             ))}
+            <button type="button" onClick={() => setSelectedTabela("TE")}
+              className={`w-8 h-6 rounded text-xs font-semibold transition-all ${selectedTabela === "TE" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>
+              TE
+            </button>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
             <select value={marcaFiltro} onChange={(e) => setMarcaFiltro(e.target.value)}
@@ -1355,8 +1376,8 @@ function ProductModal({
           ) : (
             <div className="divide-y divide-border">
               {results.map((p) => {
-                const price = p[pk] as number | null;
-                const finalPrice = price != null ? calculateFinalPrice(price, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
+                const price = pk ? p[pk] as number | null : null;
+                const finalPrice = selectedTabela === "TE" ? null : price != null ? calculateFinalPrice(price, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
                 return (
                   <button key={p.id} onClick={() => setSelected(p)}
                     className="w-full text-left px-5 py-3 hover:bg-muted/50 transition-colors group">
@@ -1411,7 +1432,8 @@ function BudgetEditor({
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [editAreaInput, setEditAreaInput] = useState("");
-  const [editTabela, setEditTabela] = useState<1 | 2 | 3 | 4>(initBudget.tabelaPreco);
+  const [editTabela, setEditTabela] = useState<PriceTableOption>(initBudget.tabelaPreco);
+  const [editSpecialPriceInput, setEditSpecialPriceInput] = useState("");
   const [showSaveDialog, setShowSaveDialog] = useState(false); // unused but kept for type safety
   const [isDirty, setIsDirty] = useState(false);
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
@@ -1542,23 +1564,27 @@ function BudgetEditor({
     });
   }
 
-  async function handleAddProduct(product: Product, areaM2: number, itemTabelaPreco: 1 | 2 | 3 | 4) {
+  async function handleAddProduct(product: Product, areaM2: number, itemTabelaPreco: PriceTableOption, specialPrice?: number) {
     const already = budget.items.find((i) => i.productId === product.id);
     if (already) {
       setShowModal(false);
       toast.warning(`"${product.linha}" já está no orçamento — edite a metragem diretamente na tabela.`);
       return;
     }
-    const precoBase = product[priceKey(itemTabelaPreco)] as number | null;
-    if (precoBase == null || !Number.isFinite(Number(precoBase)) || Number(precoBase) <= 0) {
+    const precoBase = itemTabelaPreco === "TE" ? null : product[priceKey(itemTabelaPreco)] as number | null;
+    if (itemTabelaPreco !== "TE" && (precoBase == null || !Number.isFinite(Number(precoBase)) || Number(precoBase) <= 0)) {
       toast.error(`Preço não disponível para a tabela ${itemTabelaPreco}.`);
+      return;
+    }
+    if (itemTabelaPreco === "TE" && (!specialPrice || specialPrice <= 0)) {
+      toast.error("Informe um valor válido para a Tabela Especial.");
       return;
     }
     if (!product.m2PorCaixa || product.m2PorCaixa <= 0) {
       toast.error("Produto sem m²/caixa válido. Corrija o cadastro antes de adicionar.");
       return;
     }
-    const precoM2 = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
+    const precoM2 = itemTabelaPreco === "TE" ? round2(specialPrice || 0) : calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
     if (!Number.isFinite(precoM2) || precoM2 <= 0) {
       toast.error("Não foi possível calcular o preço final do produto.");
       return;
@@ -1591,20 +1617,22 @@ function BudgetEditor({
     finally { setRemovingId(null); }
   }
 
-  function inferItemTabela(item: BudgetItem): 1 | 2 | 3 | 4 {
+  function inferItemTabela(item: BudgetItem): PriceTableOption {
     for (const t of [1, 2, 3, 4] as const) {
       const precoBase = item.product[priceKey(t)] as number | null;
       if (precoBase == null) continue;
       const precoTabela = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
       if (Math.abs(precoTabela - item.precoM2) < 0.01) return t;
     }
-    return budget.tabelaPreco;
+    return "TE";
   }
 
   function startEditItem(item: BudgetItem) {
     setEditingItemId(item.id);
     setEditAreaInput(String(item.areaM2).replace(".", ","));
-    setEditTabela(inferItemTabela(item));
+    const inferredTabela = inferItemTabela(item);
+    setEditTabela(inferredTabela);
+    setEditSpecialPriceInput(inferredTabela === "TE" ? String(item.precoM2).replace(".", ",") : "");
   }
 
   async function confirmEditItem(itemId: string) {
@@ -1612,12 +1640,17 @@ function BudgetEditor({
     if (!item) return;
     const newArea = parseFloat(editAreaInput.replace(",", "."));
     if (!newArea || newArea <= 0) { toast.error("Área inválida"); return; }
-    const precoBase = item.product[priceKey(editTabela)] as number | null;
-    if (precoBase == null || !Number.isFinite(Number(precoBase)) || Number(precoBase) <= 0) {
+    const precoBase = editTabela === "TE" ? null : item.product[priceKey(editTabela)] as number | null;
+    if (editTabela !== "TE" && (precoBase == null || !Number.isFinite(Number(precoBase)) || Number(precoBase) <= 0)) {
       toast.error(`Preço não disponível para a tabela ${editTabela}.`);
       return;
     }
-    const newPrecoM2 = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
+    const specialPrice = parseDecimalInput(editSpecialPriceInput);
+    if (editTabela === "TE" && (!specialPrice || specialPrice <= 0)) {
+      toast.error("Informe um valor válido para a Tabela Especial.");
+      return;
+    }
+    const newPrecoM2 = editTabela === "TE" ? round2(specialPrice) : calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
     if (!Number.isFinite(newPrecoM2) || newPrecoM2 <= 0) {
       toast.error("Não foi possível calcular o preço final do produto.");
       return;
@@ -2034,8 +2067,9 @@ ${budget.observacoes ? `
                     const previewCx = item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : 0;
                     const previewRealArea = round2(previewCx * (item.product.m2PorCaixa || 0));
                     const previewWeight = round2(previewCx * (item.product.pesoBrutoCx || 0));
-                    const editPrecoBase = item.product[priceKey(editTabela)] as number | null;
-                    const editPrecoM2 = editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
+                    const editPrecoBase = editTabela === "TE" ? null : item.product[priceKey(editTabela)] as number | null;
+                    const editSpecialPrice = parseDecimalInput(editSpecialPriceInput);
+                    const editPrecoM2 = editTabela === "TE" ? editSpecialPrice : editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
                     return (
                       <tr key={item.id} className={`transition-colors ${isEditing ? "bg-primary/4" : "hover:bg-muted/20"}`}>
                         <td className="px-5 py-3">
@@ -2076,14 +2110,23 @@ ${budget.observacoes ? `
                         <td className="px-3 py-3 text-right text-sm hidden sm:table-cell">
                           {isEditing ? (
                             <div className="space-y-1">
-                              <div className="grid grid-cols-4 gap-1">
+                              <div className="grid grid-cols-5 gap-1">
                                 {([1, 2, 3, 4] as const).map((t) => (
                                   <button key={t} type="button" onClick={() => setEditTabela(t)}
                                     className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
                                     T{t}
                                   </button>
                                 ))}
+                                <button type="button" onClick={() => setEditTabela("TE")}
+                                  className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === "TE" ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                                  TE
+                                </button>
                               </div>
+                              {editTabela === "TE" && (
+                                <input type="text" value={editSpecialPriceInput} onChange={(e) => setEditSpecialPriceInput(e.target.value)}
+                                  placeholder="Valor especial"
+                                  className="w-24 border border-primary rounded-lg px-2 py-1 text-xs text-right font-mono bg-card focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                              )}
                               <p className="font-mono text-primary font-semibold">{fmtBRL(editPrecoM2)}</p>
                             </div>
                           ) : <span className="font-mono">{fmtBRL(item.precoM2)}</span>}
@@ -2148,8 +2191,9 @@ ${budget.observacoes ? `
                         const previewQty = parseFloat(editAreaInput.replace(",", ".")) || 0;
                         const previewCx = item.product.m2PorCaixa > 0 ? Math.ceil(previewQty / item.product.m2PorCaixa) : Math.ceil(previewQty);
                         const previewWeight = round2(previewCx * (item.product.pesoBrutoCx || 0));
-                        const editPrecoBase = item.product[priceKey(editTabela)] as number | null;
-                        const editPrecoM2 = editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
+                        const editPrecoBase = editTabela === "TE" ? null : item.product[priceKey(editTabela)] as number | null;
+                        const editSpecialPrice = parseDecimalInput(editSpecialPriceInput);
+                        const editPrecoM2 = editTabela === "TE" ? editSpecialPrice : editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
                         const embalagem = item.product.tipoEmbalagem || item.product.tipoRejunte || item.product.categoriaComplementar || "—";
                         const unitLabel = getComplementaryUnitLabel(item.product, item.caixas !== 1);
                         const previewUnitLabel = getComplementaryUnitLabel(item.product, previewCx !== 1);
@@ -2183,14 +2227,23 @@ ${budget.observacoes ? `
                             <td className="px-3 py-3 text-right text-sm hidden md:table-cell">
                               {isEditing ? (
                                 <div className="space-y-1">
-                                  <div className="grid grid-cols-4 gap-1">
+                                  <div className="grid grid-cols-5 gap-1">
                                     {([1, 2, 3, 4] as const).map((t) => (
                                       <button key={t} type="button" onClick={() => setEditTabela(t)}
                                         className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
                                         T{t}
                                       </button>
                                     ))}
+                                    <button type="button" onClick={() => setEditTabela("TE")}
+                                      className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === "TE" ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                                      TE
+                                    </button>
                                   </div>
+                                  {editTabela === "TE" && (
+                                    <input type="text" value={editSpecialPriceInput} onChange={(e) => setEditSpecialPriceInput(e.target.value)}
+                                      placeholder="Valor especial"
+                                      className="w-24 border border-primary rounded-lg px-2 py-1 text-xs text-right font-mono bg-card focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                                  )}
                                   <p className="font-mono text-primary font-semibold">{fmtBRL(editPrecoM2)}</p>
                                 </div>
                               ) : <span className="font-mono">{fmtBRL(item.precoM2)}</span>}

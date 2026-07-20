@@ -53,44 +53,21 @@ interface Product {
 type PriceTableOption = 1 | 2 | 3 | 4 | "TE";
 
 interface AppUser {
+  id?: string;
   username: string;
-  password: string;
   label: string;
+  isAdmin: boolean;
+  active: boolean;
 }
-
-const DEFAULT_APP_USERS: AppUser[] = [
-  { username: "admin", password: "123456", label: "Administrador" },
-  { username: "vendas", password: "123456", label: "Vendas" },
-];
 
 const AUTH_STORAGE_KEY = "paviment.currentUser";
-const USERS_STORAGE_KEY = "paviment.users";
-
-function loadStoredUsers(): AppUser[] {
-  try {
-    const raw = localStorage.getItem(USERS_STORAGE_KEY);
-    if (!raw) return DEFAULT_APP_USERS;
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return DEFAULT_APP_USERS;
-    const users = parsed
-      .filter((user: Partial<AppUser>) => user?.username && user?.password)
-      .map((user: AppUser) => ({
-        username: String(user.username).trim().toLowerCase(),
-        password: String(user.password),
-        label: String(user.label || user.username).trim(),
-      }));
-    return users.some((user) => user.username === "admin") ? users : DEFAULT_APP_USERS;
-  } catch {
-    return DEFAULT_APP_USERS;
-  }
-}
-
-function saveStoredUsers(users: AppUser[]): void {
-  localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
-}
+const DEFAULT_PASSWORD_HASHES = {
+  admin: "79416c9685c6baf019b311c43844d8d13e1b1c05c8bfcd814048b8719ddf2ee1",
+  vendas: "e95677a8dc1e007ad2de15c4a87042c39592c8d358a26b5d0130b9e6440297f4",
+};
 
 function canAccessBudget(user: AppUser, budgetOwner: string): boolean {
-  return user.username === "admin" || budgetOwner === user.username;
+  return user.isAdmin || budgetOwner === user.username;
 }
 
 interface PricingSettings {
@@ -294,6 +271,23 @@ CREATE TABLE IF NOT EXISTS pricing_settings (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ALTER TABLE pricing_settings DISABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS app_users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  username TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE app_users DISABLE ROW LEVEL SECURITY;
+INSERT INTO app_users (username, display_name, password_hash, is_admin, active)
+VALUES
+  ('admin', 'Administrador', '79416c9685c6baf019b311c43844d8d13e1b1c05c8bfcd814048b8719ddf2ee1', TRUE, TRUE),
+  ('vendas', 'Vendas', 'e95677a8dc1e007ad2de15c4a87042c39592c8d358a26b5d0130b9e6440297f4', FALSE, TRUE)
+ON CONFLICT (username) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS customers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -586,6 +580,76 @@ async function savePricingSettings(settings: PricingSettings): Promise<PricingSe
   };
 }
 
+
+function mapAppUser(r: any): AppUser {
+  return {
+    id: r.id,
+    username: r.username || "",
+    label: r.display_name || r.username || "",
+    isAdmin: r.is_admin === true,
+    active: r.active !== false,
+  };
+}
+
+async function hashUserPassword(username: string, password: string): Promise<string> {
+  const normalizedUsername = username.trim().toLowerCase();
+  const bytes = new TextEncoder().encode(`paviment:${normalizedUsername}:${password}`);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function fetchAppUsers(includeInactive = false): Promise<AppUser[]> {
+  let q = supabase
+    .from("app_users")
+    .select("id, username, display_name, is_admin, active")
+    .order("username");
+  if (!includeInactive) q = q.eq("active", true);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapAppUser);
+}
+
+async function authenticateAppUser(username: string, password: string): Promise<AppUser | null> {
+  const normalizedUsername = username.trim().toLowerCase();
+  const passwordHash = await hashUserPassword(normalizedUsername, password);
+  const { data, error } = await supabase
+    .from("app_users")
+    .select("id, username, display_name, is_admin, active")
+    .eq("username", normalizedUsername)
+    .eq("password_hash", passwordHash)
+    .eq("active", true)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? mapAppUser(data) : null;
+}
+
+async function createAppUser(user: { username: string; label: string; password: string }): Promise<void> {
+  const username = user.username.trim().toLowerCase();
+  const passwordHash = await hashUserPassword(username, user.password);
+  const { error } = await supabase
+    .from("app_users")
+    .insert({ username, display_name: user.label, password_hash: passwordHash, is_admin: false, active: true });
+  if (error) throw error;
+}
+
+async function updateAppUserPassword(username: string, password: string): Promise<void> {
+  const normalizedUsername = username.trim().toLowerCase();
+  const passwordHash = await hashUserPassword(normalizedUsername, password);
+  const { error } = await supabase
+    .from("app_users")
+    .update({ password_hash: passwordHash, updated_at: new Date().toISOString() })
+    .eq("username", normalizedUsername);
+  if (error) throw error;
+}
+
+async function deactivateAppUser(username: string): Promise<void> {
+  const { error } = await supabase
+    .from("app_users")
+    .update({ active: false, updated_at: new Date().toISOString() })
+    .eq("username", username);
+  if (error) throw error;
+}
+
 async function searchCustomers(q: string): Promise<Customer[]> {
   if (!q.trim()) return [];
   const { data, error } = await supabase
@@ -862,6 +926,22 @@ async function runMigrations(): Promise<void> {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
       ALTER TABLE pricing_settings ADD COLUMN IF NOT EXISTS frete_por_100kg NUMERIC(10,2) NOT NULL DEFAULT 4;
+      CREATE TABLE IF NOT EXISTS app_users (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        username TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+        active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      ALTER TABLE app_users DISABLE ROW LEVEL SECURITY;
+      INSERT INTO app_users (username, display_name, password_hash, is_admin, active)
+      VALUES
+        ('admin', 'Administrador', '${DEFAULT_PASSWORD_HASHES.admin}', TRUE, TRUE),
+        ('vendas', 'Vendas', '${DEFAULT_PASSWORD_HASHES.vendas}', FALSE, TRUE)
+      ON CONFLICT (username) DO NOTHING;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS logradouro TEXT;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS numero_end TEXT;
@@ -3710,19 +3790,20 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
 
 // ── Users Management ──────────────────────────────────────────────
 
-function UsersTab({ users, currentUser, onUsersChange }: {
+function UsersTab({ users, currentUser, onUsersReload }: {
   users: AppUser[];
   currentUser: AppUser;
-  onUsersChange: (users: AppUser[]) => void;
+  onUsersReload: () => Promise<void>;
 }) {
   const [newUser, setNewUser] = useState({ username: "", label: "", password: "" });
   const [editingPasswords, setEditingPasswords] = useState<Record<string, string>>({});
+  const [savingUser, setSavingUser] = useState<string | null>(null);
 
   function normalizeUsername(value: string): string {
     return value.trim().toLowerCase().replace(/\s+/g, "_");
   }
 
-  function handleCreateUser() {
+  async function handleCreateUser() {
     const username = normalizeUsername(newUser.username);
     const label = newUser.label.trim() || username;
     const password = newUser.password.trim();
@@ -3732,28 +3813,42 @@ function UsersTab({ users, currentUser, onUsersChange }: {
     if (!password) { toast.error("Informe uma senha."); return; }
     if (users.some((user) => user.username === username)) { toast.error("Já existe um usuário com este nome."); return; }
 
-    const nextUsers = [...users, { username, label, password }];
-    onUsersChange(nextUsers);
-    setNewUser({ username: "", label: "", password: "" });
-    toast.success(`Usuário ${username} criado.`);
+    setSavingUser("new");
+    try {
+      await createAppUser({ username, label, password });
+      await onUsersReload();
+      setNewUser({ username: "", label: "", password: "" });
+      toast.success(`Usuário ${username} criado.`);
+    } catch (e: any) { toast.error("Erro ao criar usuário: " + e.message); }
+    finally { setSavingUser(null); }
   }
 
-  function handleSavePassword(username: string) {
+  async function handleSavePassword(username: string) {
     const password = editingPasswords[username]?.trim();
     if (!password) { toast.error("Informe uma senha válida."); return; }
 
-    onUsersChange(users.map((user) => user.username === username ? { ...user, password } : user));
-    setEditingPasswords((prev) => ({ ...prev, [username]: "" }));
-    toast.success(`Senha de ${username} atualizada.`);
+    setSavingUser(username);
+    try {
+      await updateAppUserPassword(username, password);
+      await onUsersReload();
+      setEditingPasswords((prev) => ({ ...prev, [username]: "" }));
+      toast.success(`Senha de ${username} atualizada.`);
+    } catch (e: any) { toast.error("Erro ao alterar senha: " + e.message); }
+    finally { setSavingUser(null); }
   }
 
-  function handleRemoveUser(username: string) {
+  async function handleRemoveUser(username: string) {
     if (username === "admin") { toast.error("O usuário admin não pode ser removido."); return; }
     if (username === currentUser.username) { toast.error("Você não pode remover o usuário logado."); return; }
     if (!confirm(`Remover o usuário "${username}"? Os orçamentos criados por ele continuarão salvos, mas ficarão visíveis apenas para o admin.`)) return;
 
-    onUsersChange(users.filter((user) => user.username !== username));
-    toast.success(`Usuário ${username} removido.`);
+    setSavingUser(username);
+    try {
+      await deactivateAppUser(username);
+      await onUsersReload();
+      toast.success(`Usuário ${username} removido.`);
+    } catch (e: any) { toast.error("Erro ao remover usuário: " + e.message); }
+    finally { setSavingUser(null); }
   }
 
   return (
@@ -3785,9 +3880,9 @@ function UsersTab({ users, currentUser, onUsersChange }: {
               className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
           </div>
         </div>
-        <button onClick={handleCreateUser}
+        <button onClick={handleCreateUser} disabled={savingUser === "new"}
           className="mt-4 bg-primary text-primary-foreground px-4 py-2.5 rounded-xl text-sm font-medium hover:opacity-90 transition-opacity flex items-center gap-2">
-          <Plus size={14} /> Criar usuário
+          {savingUser === "new" ? <Spinner size={14} /> : <Plus size={14} />} Criar usuário
         </button>
       </div>
 
@@ -3808,11 +3903,11 @@ function UsersTab({ users, currentUser, onUsersChange }: {
                   onKeyDown={(e) => e.key === "Enter" && handleSavePassword(user.username)}
                   placeholder="Nova senha"
                   className="border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
-                <button onClick={() => handleSavePassword(user.username)}
+                <button onClick={() => handleSavePassword(user.username)} disabled={savingUser === user.username}
                   className="border border-border rounded-xl px-3 py-2 text-sm hover:bg-muted transition-colors flex items-center justify-center gap-1.5">
-                  <Save size={13} /> Salvar senha
+                  {savingUser === user.username ? <Spinner size={13} /> : <Save size={13} />} Salvar senha
                 </button>
-                <button onClick={() => handleRemoveUser(user.username)} disabled={user.username === "admin" || user.username === currentUser.username}
+                <button onClick={() => handleRemoveUser(user.username)} disabled={savingUser === user.username || user.username === "admin" || user.username === currentUser.username}
                   className="border border-border rounded-xl px-3 py-2 text-sm text-muted-foreground hover:text-destructive hover:bg-red-50 transition-colors disabled:opacity-40 disabled:hover:text-muted-foreground disabled:hover:bg-transparent flex items-center justify-center gap-1.5">
                   <Trash2 size={13} /> Remover
                 </button>
@@ -3827,10 +3922,10 @@ function UsersTab({ users, currentUser, onUsersChange }: {
 
 // ── Customer Search (Home) ────────────────────────────────────────
 
-function CustomerSearch({ currentUser, users, onUsersChange, onSelect, allProducts, pricingSettings, onPricingSettingsChange, onProductsChange, onOpenBudgetById }: {
+function CustomerSearch({ currentUser, users, onUsersReload, onSelect, allProducts, pricingSettings, onPricingSettingsChange, onProductsChange, onOpenBudgetById }: {
   currentUser: AppUser;
   users: AppUser[];
-  onUsersChange: (users: AppUser[]) => void;
+  onUsersReload: () => Promise<void>;
   onSelect: (c: Customer) => void;
   allProducts: Product[];
   pricingSettings: PricingSettings;
@@ -4253,7 +4348,7 @@ function CustomerSearch({ currentUser, users, onUsersChange, onSelect, allProduc
 
         {tab === "clientes" && <AllCustomersTab onSelect={onSelect} />}
         {tab === "produtos" && <AllProductsTab allProducts={allProducts} pricingSettings={pricingSettings} onPricingSettingsChange={onPricingSettingsChange} onProductsChange={onProductsChange} />}
-        {tab === "usuarios" && currentUser.username === "admin" && <UsersTab users={users} currentUser={currentUser} onUsersChange={onUsersChange} />}
+        {tab === "usuarios" && currentUser.username === "admin" && <UsersTab users={users} currentUser={currentUser} onUsersReload={onUsersReload} />}
       </div>
     </div>
   );
@@ -4278,20 +4373,13 @@ function SystemLogoutButton({ currentUser, onLogout }: { currentUser: AppUser; o
 
 // ── Login Screen ─────────────────────────────────────────────────
 
-function LoginScreen({ users, onLogin }: { users: AppUser[]; onLogin: (user: AppUser) => void }) {
+function LoginScreen({ users, onLogin }: { users: AppUser[]; onLogin: (username: string, password: string) => Promise<void> }) {
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
-    const user = users.find((candidate) => candidate.username === username && candidate.password === password);
-    if (!user) {
-      toast.error("Usuário ou senha inválidos.");
-      return;
-    }
-    localStorage.setItem(AUTH_STORAGE_KEY, user.username);
-    onLogin(user);
-    toast.success(`Bem-vindo, ${user.label}!`);
+    await onLogin(username, password);
   }
 
   return (
@@ -4338,12 +4426,8 @@ type View =
   | { type: "budget"; budget: Budget; customer: Customer };
 
 export default function App() {
-  const [appUsers, setAppUsers] = useState<AppUser[]>(() => loadStoredUsers());
-  const [currentUser, setCurrentUser] = useState<AppUser | null>(() => {
-    const users = loadStoredUsers();
-    const saved = localStorage.getItem(AUTH_STORAGE_KEY);
-    return users.find((user) => user.username === saved) || null;
-  });
+  const [appUsers, setAppUsers] = useState<AppUser[]>([]);
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const [view, setView] = useState<View>({ type: "home" });
   const [appState, setAppState] = useState<"loading" | "setup" | "seeding" | "ready" | "error">("loading");
   const [initMsg, setInitMsg] = useState("Verificando banco de dados...");
@@ -4359,6 +4443,12 @@ export default function App() {
       await runMigrations();
       const tablesOk = await checkTablesExist();
       if (!tablesOk) { setAppState("setup"); return; }
+
+      setInitMsg("Carregando usuários...");
+      const users = await fetchAppUsers();
+      setAppUsers(users);
+      const savedUsername = localStorage.getItem(AUTH_STORAGE_KEY);
+      if (savedUsername) setCurrentUser(users.find((user) => user.username === savedUsername) || null);
 
       setInitMsg("Carregando composição interna do preço...");
       setPricingSettings(await loadPricingSettings());
@@ -4393,14 +4483,20 @@ export default function App() {
     setView({ type: "home" });
   }
 
-  function handleUsersChange(users: AppUser[]) {
+  async function reloadUsers() {
+    const users = await fetchAppUsers();
     setAppUsers(users);
-    saveStoredUsers(users);
     setCurrentUser((user) => user ? users.find((candidate) => candidate.username === user.username) || null : null);
   }
 
-  if (!currentUser) {
-    return <LoginScreen users={appUsers} onLogin={setCurrentUser} />;
+  async function handleLogin(username: string, password: string) {
+    try {
+      const user = await authenticateAppUser(username, password);
+      if (!user) { toast.error("Usuário ou senha inválidos."); return; }
+      localStorage.setItem(AUTH_STORAGE_KEY, user.username);
+      setCurrentUser(user);
+      toast.success(`Bem-vindo, ${user.label}!`);
+    } catch (e: any) { toast.error("Erro ao entrar: " + e.message); }
   }
 
   if (appState === "setup") {
@@ -4434,13 +4530,17 @@ export default function App() {
     );
   }
 
+  if (!currentUser) {
+    return <LoginScreen users={appUsers} onLogin={handleLogin} />;
+  }
+
   return (
     <>
       {view.type === "home" && (
         <CustomerSearch
           currentUser={currentUser}
           users={appUsers}
-          onUsersChange={handleUsersChange}
+          onUsersReload={reloadUsers}
           onSelect={(c) => setView({ type: "customer", customer: c })}
           allProducts={allProducts}
           pricingSettings={pricingSettings}

@@ -1113,6 +1113,14 @@ function StatusPill({ status }: { status: BudgetStatus }) {
   );
 }
 
+function BudgetOwnerPill({ createdBy }: { createdBy: string }) {
+  return (
+    <span className="text-[10px] text-muted-foreground border border-border rounded px-1">
+      {createdBy || "admin"}
+    </span>
+  );
+}
+
 // ── Setup Screen ─────────────────────────────────────────────────
 
 function SetupScreen({ onVerify }: { onVerify: () => void }) {
@@ -2014,6 +2022,7 @@ ${budget.observacoes ? `
           </div>
           <div className="flex items-center gap-2">
             <StatusPill status={budget.status} />
+            <BudgetOwnerPill createdBy={budget.createdBy} />
             {saving && <Spinner size={14} />}
           </div>
         </div>
@@ -2822,6 +2831,7 @@ function CustomerView({
                     <div className="flex items-center gap-2 mb-1">
                       <span className="font-semibold text-sm">Orçamento #{b.numero}</span>
                       <StatusPill status={b.status} />
+                      <BudgetOwnerPill createdBy={b.createdBy} />
                     </div>
                     <p className="text-xs text-muted-foreground">
                       {fmtDate(b.createdAt)} · Tabela {b.tabelaPreco}
@@ -4194,7 +4204,7 @@ function CustomerSearch({ currentUser, users, onUsersChange, onSelect, allProduc
                                       <div className="flex items-center gap-2 flex-wrap">
                                         <span className="font-semibold text-sm">#{b.numero}</span>
                                         <StatusPill status={b.status} />
-                                        <span className="text-[10px] text-muted-foreground border border-border rounded px-1">{b.createdBy === "admin" ? "admin" : "vendas"}</span>
+                                        <BudgetOwnerPill createdBy={b.createdBy} />
                                         {locked && <span className="text-[10px] text-muted-foreground border border-border rounded px-1">bloqueado</span>}
                                       </div>
                                       <p className="text-sm font-medium mt-0.5 truncate">{b.customerNome}</p>

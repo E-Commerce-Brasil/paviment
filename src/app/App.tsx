@@ -3167,6 +3167,179 @@ function createEmptyProduct(marca: "Villagres" | "Villacol" = "Villagres"): Prod
   };
 }
 
+
+type ProductTemplateKind = "villagres" | "argamassas" | "rejuntes" | "niveladores";
+
+const PRODUCT_TEMPLATE_LABELS: Record<ProductTemplateKind, string> = {
+  villagres: "Produtos Villagres",
+  argamassas: "Argamassas",
+  rejuntes: "Rejuntes",
+  niveladores: "Niveladores",
+};
+
+const PRODUCT_TEMPLATE_HEADERS: Record<ProductTemplateKind, string[]> = {
+  villagres: ["Formato", "Referencia", "Linha", "Colecao", "Cor", "Superficie", "Faces", "Variacao", "LocalUso", "Derivacao", "M2PorCaixa", "PecasPorCaixa", "M2PorPallet", "CxPorPallet", "PesoBrutoM2", "PesoBrutoCx", "EspessuraMm", "Preco1", "Preco2", "Preco3", "Preco4", "Descontinuado"],
+  argamassas: ["Referencia", "NomeComercial", "TipoEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Descontinuado"],
+  rejuntes: ["Referencia", "NomeComercial", "Cor", "TipoRejunte", "TipoEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Descontinuado"],
+  niveladores: ["Referencia", "NomeComercial", "EspessuraMm", "TipoEmbalagem", "QuantidadePorEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Descontinuado"],
+};
+
+const PRODUCT_TEMPLATE_EXAMPLES: Record<ProductTemplateKind, string[]> = {
+  villagres: ["60x60", "REF-001", "Nome da Linha", "Nome Coleção", "Bege", "Polido", "1", "-", "3", "-", "1,44", "6", "43,20", "30", "18,50", "26,65", "9,00", "45,90", "49,90", "54,90", "59,90", "FALSE"],
+  argamassas: ["ARG-001", "Argamassa ACIII", "Saco 20 kg", "20", "29,90", "32,90", "35,90", "39,90", "FALSE"],
+  rejuntes: ["REJ-001", "Rejunte Acrílico", "Branco", "Acrílico", "Pote 1 kg", "1", "18,90", "20,90", "22,90", "24,90", "FALSE"],
+  niveladores: ["NIV-001", "Nivelador 1,5 mm", "1,5", "Pacote 100 un", "100", "0,50", "35,90", "39,90", "44,90", "49,90", "FALSE"],
+};
+
+function normalizeCSVHeader(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+}
+
+function parseBool(value: string): boolean {
+  return ["true", "sim", "s", "1", "yes"].includes(value.trim().toLowerCase());
+}
+
+function getRowValue(row: string[], headerMap: Record<string, number>, ...keys: string[]): string {
+  for (const key of keys) {
+    const index = headerMap[normalizeCSVHeader(key)];
+    if (index != null) return row[index] || "";
+  }
+  return "";
+}
+
+function buildProductTemplateCSV(kind: ProductTemplateKind): string {
+  return `${PRODUCT_TEMPLATE_HEADERS[kind].join(";")}\n${PRODUCT_TEMPLATE_EXAMPLES[kind].join(";")}`;
+}
+
+function chooseProductTemplateKind(): ProductTemplateKind | null {
+  const answer = window.prompt("Exportar template de qual linha?\n1 - Produtos Villagres\n2 - Argamassas\n3 - Rejuntes\n4 - Niveladores", "1");
+  if (answer == null) return null;
+  const normalized = answer.trim().toLowerCase();
+  if (["1", "villagres", "produto", "produtos"].includes(normalized)) return "villagres";
+  if (["2", "argamassa", "argamassas"].includes(normalized)) return "argamassas";
+  if (["3", "rejunte", "rejuntes"].includes(normalized)) return "rejuntes";
+  if (["4", "nivelador", "niveladores"].includes(normalized)) return "niveladores";
+  toast.error("Opção de template inválida.");
+  return null;
+}
+
+function inferTemplateKindFromHeaders(headerMap: Record<string, number>): ProductTemplateKind {
+  if (headerMap[normalizeCSVHeader("Superficie")] != null || headerMap[normalizeCSVHeader("Formato")] != null) return "villagres";
+  if (headerMap[normalizeCSVHeader("TipoRejunte")] != null || headerMap[normalizeCSVHeader("Cor")] != null) return "rejuntes";
+  if (headerMap[normalizeCSVHeader("QuantidadePorEmbalagem")] != null || headerMap[normalizeCSVHeader("EspessuraMm")] != null) return "niveladores";
+  return "argamassas";
+}
+
+function buildProductsFromTemplateCSV(csvText: string): Omit<Product, "id">[] {
+  const rows = parseCSVFull(csvText);
+  if (rows.length < 2) return [];
+  const headerMap = rows[0].reduce<Record<string, number>>((acc, header, index) => {
+    acc[normalizeCSVHeader(header)] = index;
+    return acc;
+  }, {});
+  if (headerMap[normalizeCSVHeader("Referencia")] == null && headerMap[normalizeCSVHeader("Ref")] == null) {
+    return buildProductsFromCSV(csvText);
+  }
+
+  const kind = inferTemplateKindFromHeaders(headerMap);
+  return rows.slice(1).map((row) => {
+    const referencia = getRowValue(row, headerMap, "Referencia", "Ref").trim();
+    const nome = getRowValue(row, headerMap, "NomeComercial", "Linha", "Nome").trim();
+    if (!referencia && !nome) return null;
+
+    if (kind === "villagres") {
+      return {
+        formato: getRowValue(row, headerMap, "Formato"),
+        referencia,
+        linha: nome,
+        colecao: getRowValue(row, headerMap, "Colecao", "Coleção"),
+        cor: getRowValue(row, headerMap, "Cor"),
+        superficie: getRowValue(row, headerMap, "Superficie", "Superfície"),
+        faces: parseInt(getRowValue(row, headerMap, "Faces")) || 0,
+        variacao: getRowValue(row, headerMap, "Variacao", "Variação"),
+        localUso: parseInt(getRowValue(row, headerMap, "LocalUso")) || 3,
+        derivacao: getRowValue(row, headerMap, "Derivacao", "Derivação"),
+        m2PorCaixa: parseNum(getRowValue(row, headerMap, "M2PorCaixa")),
+        pecasPorCaixa: parseInt(getRowValue(row, headerMap, "PecasPorCaixa", "PeçasPorCaixa")) || 0,
+        m2PorPallet: parseNum(getRowValue(row, headerMap, "M2PorPallet")),
+        cxPorPallet: parseInt(getRowValue(row, headerMap, "CxPorPallet")) || 0,
+        pesoBrutoM2: parseNum(getRowValue(row, headerMap, "PesoBrutoM2")),
+        pesoBrutoCx: parseNum(getRowValue(row, headerMap, "PesoBrutoCx", "PesoKg")),
+        espessuraMm: parseNum(getRowValue(row, headerMap, "EspessuraMm")),
+        preco1: parsePrice(getRowValue(row, headerMap, "Preco1", "Preço1")),
+        preco2: parsePrice(getRowValue(row, headerMap, "Preco2", "Preço2")),
+        preco3: parsePrice(getRowValue(row, headerMap, "Preco3", "Preço3")),
+        preco4: parsePrice(getRowValue(row, headerMap, "Preco4", "Preço4")),
+        descontinuado: parseBool(getRowValue(row, headerMap, "Descontinuado")),
+        marca: "Villagres",
+        categoriaComplementar: "",
+        tipoRejunte: "",
+        tipoEmbalagem: "",
+      };
+    }
+
+    const categoriaComplementar = kind === "argamassas" ? "Argamassa" : kind === "rejuntes" ? "Rejunte" : "Niveladores/Cunhas";
+    const quantidadePorEmbalagem = parseInt(getRowValue(row, headerMap, "QuantidadePorEmbalagem")) || 1;
+    const pesoKg = parseNum(getRowValue(row, headerMap, "PesoKg", "PesoBrutoCx"));
+    return {
+      formato: "",
+      referencia,
+      linha: nome || categoriaComplementar,
+      colecao: "",
+      cor: getRowValue(row, headerMap, "Cor"),
+      superficie: "",
+      faces: 0,
+      variacao: "",
+      localUso: 3,
+      derivacao: "",
+      m2PorCaixa: 1,
+      pecasPorCaixa: kind === "niveladores" ? quantidadePorEmbalagem : 1,
+      m2PorPallet: 0,
+      cxPorPallet: 0,
+      pesoBrutoM2: 0,
+      pesoBrutoCx: pesoKg,
+      espessuraMm: parseNum(getRowValue(row, headerMap, "EspessuraMm")),
+      preco1: parsePrice(getRowValue(row, headerMap, "Preco1", "Preço1")),
+      preco2: parsePrice(getRowValue(row, headerMap, "Preco2", "Preço2")),
+      preco3: parsePrice(getRowValue(row, headerMap, "Preco3", "Preço3")),
+      preco4: parsePrice(getRowValue(row, headerMap, "Preco4", "Preço4")),
+      descontinuado: parseBool(getRowValue(row, headerMap, "Descontinuado")),
+      marca: "Villacol",
+      categoriaComplementar,
+      tipoRejunte: kind === "rejuntes" ? getRowValue(row, headerMap, "TipoRejunte") : "",
+      tipoEmbalagem: getRowValue(row, headerMap, "TipoEmbalagem"),
+    };
+  }).filter(Boolean) as Omit<Product, "id">[];
+}
+
+async function importProducts(products: Omit<Product, "id">[]): Promise<{ created: number; updated: number; total: number }> {
+  const existing = await fetchAllProducts();
+  const byRef = new Map(existing.filter((p) => p.referencia).map((p) => [p.referencia.trim().toLowerCase(), p]));
+  const byName = new Map(existing.filter((p) => p.linha).map((p) => [p.linha.trim().toLowerCase(), p]));
+  let created = 0;
+  let updated = 0;
+
+  for (const product of products) {
+    const refKey = product.referencia.trim().toLowerCase();
+    const nameKey = product.linha.trim().toLowerCase();
+    const match = (refKey && byRef.get(refKey)) || (nameKey && byName.get(nameKey));
+    if (match) {
+      await updateProduct(match.id, product);
+      updated++;
+      byRef.set(refKey, { ...match, ...product });
+      byName.set(nameKey, { ...match, ...product });
+    } else {
+      if (!refKey) throw new Error(`Produto novo "${product.linha}" sem referência. Informe uma referência para criar novos produtos.`);
+      const createdProduct = await createProduct(product);
+      created++;
+      if (createdProduct.referencia) byRef.set(createdProduct.referencia.trim().toLowerCase(), createdProduct);
+      if (createdProduct.linha) byName.set(createdProduct.linha.trim().toLowerCase(), createdProduct);
+    }
+  }
+
+  return { created, updated, total: products.length };
+}
+
 // ── Product Edit Modal ────────────────────────────────────────────
 
 function ProductEditModal({ product, onSave, onClose }: {
@@ -3477,7 +3650,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
   const [tabela, setTabela] = useState<1 | 2 | 3 | 4>(1);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState<{ ok: number; total: number } | null>(null);
+  const [importResult, setImportResult] = useState<{ created: number; updated: number; total: number } | null>(null);
   const [showDescontinuados, setShowDescontinuados] = useState(false);
   const [pricingForm, setPricingForm] = useState({
     imposto: String(pricingSettings.impostoPercentual || ""),
@@ -3559,14 +3732,14 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
     setImportResult(null);
     try {
       const text = await file.text();
-      const parsed = buildProductsFromCSV(text);
+      const parsed = buildProductsFromTemplateCSV(text);
       if (parsed.length === 0) { toast.error("Nenhum produto encontrado no arquivo."); return; }
-      await seedProducts(parsed);
+      const result = await importProducts(parsed);
       const refreshed = await fetchAllProducts();
       setProducts(refreshed);
       onProductsChange(refreshed);
-      setImportResult({ ok: parsed.length, total: parsed.length });
-      toast.success(`${parsed.length} produtos importados com sucesso!`);
+      setImportResult(result);
+      toast.success(`${result.created} produtos criados e ${result.updated} atualizados.`);
     } catch (e: any) { toast.error("Erro ao importar: " + e.message); }
     finally { setImporting(false); }
   }
@@ -3631,13 +3804,13 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
 
         {/* Export template */}
         <button onClick={() => {
-          const headers = "Formato;Referencia;Linha;Colecao;Cor;Superficie;Faces;Variacao;LocalUso;Derivacao;M2PorCaixa;PecasPorCaixa;M2PorPallet;CxPorPallet;PesoBrutoM2;PesoBrutoCx;EspessuraMm;Preco1;Preco2;Preco3;Preco4";
-          const example = "60x60;REF-001;Nome da Linha;Nome Coleção;Bege;Polido;1;-;3;-;1,44;6;43,20;30;18,50;26,65;9,00;45,90;49,90;54,90;59,90";
-          const csv = headers + "\n" + example;
+          const kind = chooseProductTemplateKind();
+          if (!kind) return;
+          const csv = buildProductTemplateCSV(kind);
           const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
           const url = URL.createObjectURL(blob);
           const a = document.createElement("a");
-          a.href = url; a.download = "template_produtos_villagres.csv"; a.click();
+          a.href = url; a.download = `template_produtos_${kind}.csv`; a.click();
           URL.revokeObjectURL(url);
         }}
           className="flex items-center gap-1.5 border border-border rounded-xl px-3 py-2 text-xs hover:bg-muted transition-colors text-muted-foreground">
@@ -3655,7 +3828,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
       {importResult && (
         <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-xl px-4 py-2.5 text-sm text-green-800">
           <Check size={14} className="text-green-600 shrink-0" />
-          <span><strong>{importResult.ok}</strong> produtos importados/atualizados com sucesso.</span>
+          <span><strong>{importResult.created}</strong> criados e <strong>{importResult.updated}</strong> atualizados ({importResult.total} no arquivo).</span>
           <button onClick={() => setImportResult(null)} className="ml-auto text-green-600 hover:text-green-800"><X size={13} /></button>
         </div>
       )}

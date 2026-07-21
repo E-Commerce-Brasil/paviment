@@ -3211,18 +3211,6 @@ function buildProductTemplateCSV(kind: ProductTemplateKind): string {
   return `${PRODUCT_TEMPLATE_HEADERS[kind].join(";")}\n${PRODUCT_TEMPLATE_EXAMPLES[kind].join(";")}`;
 }
 
-function chooseProductTemplateKind(): ProductTemplateKind | null {
-  const answer = window.prompt("Exportar template de qual linha?\n1 - Produtos Villagres\n2 - Argamassas\n3 - Rejuntes\n4 - Niveladores", "1");
-  if (answer == null) return null;
-  const normalized = answer.trim().toLowerCase();
-  if (["1", "villagres", "produto", "produtos"].includes(normalized)) return "villagres";
-  if (["2", "argamassa", "argamassas"].includes(normalized)) return "argamassas";
-  if (["3", "rejunte", "rejuntes"].includes(normalized)) return "rejuntes";
-  if (["4", "nivelador", "niveladores"].includes(normalized)) return "niveladores";
-  toast.error("Opção de template inválida.");
-  return null;
-}
-
 function inferTemplateKindFromHeaders(headerMap: Record<string, number>): ProductTemplateKind {
   if (headerMap[normalizeCSVHeader("Superficie")] != null || headerMap[normalizeCSVHeader("Formato")] != null) return "villagres";
   if (headerMap[normalizeCSVHeader("TipoRejunte")] != null || headerMap[normalizeCSVHeader("Cor")] != null) return "rejuntes";
@@ -3652,6 +3640,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ created: number; updated: number; total: number } | null>(null);
   const [showDescontinuados, setShowDescontinuados] = useState(false);
+  const [showTemplateExportModal, setShowTemplateExportModal] = useState(false);
   const [pricingForm, setPricingForm] = useState({
     imposto: String(pricingSettings.impostoPercentual || ""),
     taxa: String(pricingSettings.taxaCartaoPercentual || ""),
@@ -3722,6 +3711,16 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
     } finally {
       setSavingPricing(false);
     }
+  }
+
+  function exportProductTemplate(kind: ProductTemplateKind) {
+    const csv = buildProductTemplateCSV(kind);
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `template_produtos_${kind}.csv`; a.click();
+    URL.revokeObjectURL(url);
+    setShowTemplateExportModal(false);
   }
 
   async function handleImportCSV(e: React.ChangeEvent<HTMLInputElement>) {
@@ -3803,16 +3802,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
         </button>
 
         {/* Export template */}
-        <button onClick={() => {
-          const kind = chooseProductTemplateKind();
-          if (!kind) return;
-          const csv = buildProductTemplateCSV(kind);
-          const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url; a.download = `template_produtos_${kind}.csv`; a.click();
-          URL.revokeObjectURL(url);
-        }}
+        <button onClick={() => setShowTemplateExportModal(true)}
           className="flex items-center gap-1.5 border border-border rounded-xl px-3 py-2 text-xs hover:bg-muted transition-colors text-muted-foreground">
           <Copy size={12} /> Exportar Template
         </button>
@@ -3830,6 +3820,29 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
           <Check size={14} className="text-green-600 shrink-0" />
           <span><strong>{importResult.created}</strong> criados e <strong>{importResult.updated}</strong> atualizados ({importResult.total} no arquivo).</span>
           <button onClick={() => setImportResult(null)} className="ml-auto text-green-600 hover:text-green-800"><X size={13} /></button>
+        </div>
+      )}
+
+      {showTemplateExportModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-card rounded-2xl shadow-2xl w-full max-w-md p-6 border border-border">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-semibold">Exportar template</h3>
+                <p className="text-xs text-muted-foreground mt-1">Escolha a linha de produtos para gerar o arquivo com os campos corretos.</p>
+              </div>
+              <button onClick={() => setShowTemplateExportModal(false)} className="text-muted-foreground hover:text-foreground"><X size={16} /></button>
+            </div>
+            <div className="grid gap-2">
+              {(Object.keys(PRODUCT_TEMPLATE_LABELS) as ProductTemplateKind[]).map((kind) => (
+                <button key={kind} type="button" onClick={() => exportProductTemplate(kind)}
+                  className="w-full border border-border rounded-xl px-4 py-3 text-left hover:bg-muted transition-colors">
+                  <span className="text-sm font-medium">{PRODUCT_TEMPLATE_LABELS[kind]}</span>
+                  <span className="block text-xs text-muted-foreground mt-0.5">Template CSV específico para {PRODUCT_TEMPLATE_LABELS[kind].toLowerCase()}.</span>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 

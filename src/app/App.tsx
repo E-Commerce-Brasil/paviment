@@ -346,7 +346,7 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS preco5 DECIMAL(12,4);
 ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS marca TEXT DEFAULT 'Villagres';
 UPDATE products
-SET marca = 'Villa Vinílicos', m2_por_caixa = CASE WHEN COALESCE(m2_por_caixa, 0) <= 0 THEN 1 ELSE m2_por_caixa END
+SET marca = 'Villa Vinílicos'
 WHERE marca IS DISTINCT FROM 'Villa Vinílicos'
   AND (
     referencia ~* '^(SPC|LVT|RP)([[:space:]._/-]|$)'
@@ -935,7 +935,7 @@ async function runMigrations(): Promise<void> {
 ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS marca TEXT DEFAULT 'Villagres';
       UPDATE products
-      SET marca = 'Villa Vinílicos', m2_por_caixa = CASE WHEN COALESCE(m2_por_caixa, 0) <= 0 THEN 1 ELSE m2_por_caixa END
+      SET marca = 'Villa Vinílicos'
       WHERE marca IS DISTINCT FROM 'Villa Vinílicos'
         AND (
           referencia ~* '^(SPC|LVT|RP)([[:space:]._/-]|$)'
@@ -1141,8 +1141,19 @@ function hasVillaVinilicosSignature(product: Pick<Product, "referencia" | "linha
   return /^(SPC|LVT|RP)[\s._/-]?/.test(refUpper) || refUpper === "SPC" || refUpper === "LVT" || refUpper === "RP" || normalizedText.includes("vinilico");
 }
 
+function hasVillaVinilicosRodapeSignature(product: Pick<Product, "referencia" | "linha" | "colecao" | "cor" | "formato" | "superficie" | "marca">): boolean {
+  const referencia = (product.referencia || "").trim().toUpperCase();
+  const normalizedText = [product.referencia, product.linha, product.colecao, product.cor, product.formato, product.superficie, product.marca]
+    .filter(Boolean)
+    .join(" ")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  return /^(RP)[\s._/-]?/.test(referencia) || referencia === "RP" || normalizedText.includes("rodape");
+}
+
 function normalizeProductBrand<T extends Product | Omit<Product, "id">>(product: T): T {
-  return hasVillaVinilicosSignature(product) ? { ...product, marca: "Villa Vinílicos", m2PorCaixa: 1 } : product;
+  return hasVillaVinilicosSignature(product) ? { ...product, marca: "Villa Vinílicos" } : product;
 }
 
 function isVillaVinilicosProduct(product?: Product | null): boolean {
@@ -1150,7 +1161,7 @@ function isVillaVinilicosProduct(product?: Product | null): boolean {
 }
 
 function isLinearMeterProduct(product?: Product | null): boolean {
-  return isVillaVinilicosProduct(product);
+  return product ? isVillaVinilicosProduct(product) && hasVillaVinilicosRodapeSignature(product) : false;
 }
 
 function getProductQuantityLabel(product?: Product | null, plural = false): string {
@@ -1570,9 +1581,9 @@ function ProductModal({
                       </div>
                       <div className="text-right shrink-0">
                         {finalPrice != null
-                          ? <p className="text-sm font-semibold text-primary font-mono">{fmtBRL(finalPrice)}/{isVillaVinilicosProduct(p) ? "m linear" : "m²"}</p>
+                          ? <p className="text-sm font-semibold text-primary font-mono">{fmtBRL(finalPrice)}/{isLinearMeterProduct(p) ? "m linear" : "m²"}</p>
                           : <p className="text-xs text-amber-600">Consultar</p>}
-                        <p className="text-xs text-muted-foreground">{isVillaVinilicosProduct(p) ? "Venda por metro linear" : `${p.m2PorCaixa} m²/cx`}</p>
+                        <p className="text-xs text-muted-foreground">{isLinearMeterProduct(p) ? "Venda por metro linear" : `${p.m2PorCaixa} m²/cx`}</p>
                       </div>
                     </div>
                   </button>
@@ -2011,11 +2022,12 @@ function BudgetEditor({
     const rows = villagresItems.map((item) => {
       const p = item.product;
       const cor = p?.cor && p.cor !== "única" && p.cor !== "-" ? p.cor : "";
-      const isLinear = isVillaVinilicosProduct(p);
+      const isVinilico = isVillaVinilicosProduct(p);
+      const isLinear = isLinearMeterProduct(p);
       return `<tr>
         <td>${p?.referencia ?? ""}</td>
         <td>${p?.linha ?? ""}</td>
-        <td>${isLinear ? "Villa Vinílicos" : p?.colecao ?? ""}${!isLinear && cor ? " / " + cor : ""}</td>
+        <td>${isVinilico ? "Villa Vinílicos" : p?.colecao ?? ""}${!isVinilico && cor ? " / " + cor : ""}</td>
         <td>${isLinear ? "Metro linear" : p?.formato ?? ""}</td>
         <td style="text-align:right">${fmtBRLStr(item.precoM2)}</td>
         <td style="text-align:right">${item.areaM2.toFixed(2)}${isLinear ? " ml" : ""}</td>
@@ -3250,8 +3262,8 @@ function createEmptyProduct(marca: "Villagres" | "Villacol" | "Villa Vinílicos"
     variacao: "",
     localUso: 3,
     derivacao: "",
-    m2PorCaixa: marca === "Villacol" || marca === "Villa Vinílicos" ? 1 : 0,
-    pecasPorCaixa: marca === "Villacol" || marca === "Villa Vinílicos" ? 1 : 0,
+    m2PorCaixa: marca === "Villacol" ? 1 : 0,
+    pecasPorCaixa: marca === "Villacol" ? 1 : 0,
     m2PorPallet: 0,
     cxPorPallet: 0,
     pesoBrutoM2: 0,
@@ -3444,6 +3456,7 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
   const isNew = !product.id;
   const isVillacol = form.marca === "Villacol";
   const isVillaVinilicos = form.marca === "Villa Vinílicos";
+  const isVillaVinilicosLinear = isVillaVinilicos && hasVillaVinilicosRodapeSignature(form);
   const isRejunte = isVillacol && form.categoriaComplementar === "Rejunte";
   const isArgamassa = isVillacol && form.categoriaComplementar === "Argamassa";
   const isNiveladorCunha = isVillacol && form.categoriaComplementar === "Niveladores/Cunhas";
@@ -3462,8 +3475,8 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
       marca,
       categoriaComplementar: marca === "Villacol" ? f.categoriaComplementar || "Argamassa" : "",
       linha: marca === "Villacol" ? f.categoriaComplementar || "Argamassa" : f.linha,
-      m2PorCaixa: (marca === "Villacol" || marca === "Villa Vinílicos") && !f.m2PorCaixa ? 1 : f.m2PorCaixa,
-      pecasPorCaixa: (marca === "Villacol" || marca === "Villa Vinílicos") && !f.pecasPorCaixa ? 1 : f.pecasPorCaixa,
+      m2PorCaixa: marca === "Villacol" && !f.m2PorCaixa ? 1 : f.m2PorCaixa,
+      pecasPorCaixa: marca === "Villacol" && !f.pecasPorCaixa ? 1 : f.pecasPorCaixa,
     }));
   }
 
@@ -3496,8 +3509,8 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
         preco5: form.preco5 != null && form.preco5 !== "" ? parseFloat(String(form.preco5).replace(",", ".")) : null,
         faces: parseInt(String(form.faces)) || 0,
         localUso: parseInt(String(form.localUso)) || 3,
-        m2PorCaixa: parseFloat(String(form.m2PorCaixa).replace(",", ".")) || (form.marca === "Villacol" || form.marca === "Villa Vinílicos" ? 1 : 0),
-        pecasPorCaixa: parseInt(String(form.pecasPorCaixa)) || (form.marca === "Villacol" || form.marca === "Villa Vinílicos" ? 1 : 0),
+        m2PorCaixa: parseFloat(String(form.m2PorCaixa).replace(",", ".")) || (form.marca === "Villacol" ? 1 : 0),
+        pecasPorCaixa: parseInt(String(form.pecasPorCaixa)) || (form.marca === "Villacol" ? 1 : 0),
         m2PorPallet: parseFloat(String(form.m2PorPallet).replace(",", ".")) || 0,
         cxPorPallet: parseInt(String(form.cxPorPallet)) || 0,
         pesoBrutoCx: parseFloat(String(form.pesoBrutoCx).replace(",", ".")) || 0,
@@ -3704,12 +3717,12 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
           )}
           {isVillaVinilicos && (
             <p className="text-xs text-muted-foreground rounded-xl bg-blue-50 border border-blue-100 px-3 py-2">
-              Produtos Villa Vinílicos, incluindo referências SPC, LVT e RP, são vendidos e calculados por metro linear.
+              Produtos Villa Vinílicos são classificados pela marca; somente rodapés (RP/rodapé) são vendidos e calculados por metro linear.
             </p>
           )}
 
           <div>
-            <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Tabelas de Preço {isVillaVinilicos ? "(R$/metro linear)" : isVillacol ? "(R$/unidade ou embalagem)" : "(R$/m²)"}</p>
+            <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Tabelas de Preço {isVillaVinilicosLinear ? "(R$/metro linear)" : isVillacol ? "(R$/unidade ou embalagem)" : "(R$/m²)"}</p>
             <div className="grid grid-cols-5 gap-2">
               {([1, 2, 3, 4, 5] as const).map((t) => (
                 <div key={t}>
@@ -4105,14 +4118,14 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
                         {p.marca === "Villacol"
                           ? [p.categoriaComplementar, p.tipoRejunte || p.tipoEmbalagem, p.cor].filter(Boolean).join(" · ")
                           : isVillaVinilicosProduct(p)
-                            ? ["Venda por metro linear", p.colecao].filter(Boolean).join(" · ")
+                            ? [isLinearMeterProduct(p) ? "Venda por metro linear" : "Venda por m²", p.colecao].filter(Boolean).join(" · ")
                             : `${p.cor && p.cor !== "única" && p.cor !== "-" ? `${p.cor} · ` : ""}${p.colecao}`}
                       </p>
                       <p className="text-xs text-muted-foreground font-mono">Ref: {p.referencia}</p>
                     </td>
-                    <td className="px-3 py-2.5 text-xs text-muted-foreground hidden md:table-cell">{isVillaVinilicosProduct(p) ? "Metro linear" : p.formato}</td>
-                    <td className="px-3 py-2.5 text-xs text-muted-foreground hidden lg:table-cell">{isVillaVinilicosProduct(p) ? "Villa Vinílicos" : `${p.superficie} · ${LOCAL_USO[p.localUso]}`}</td>
-                    <td className="px-3 py-2.5 text-right text-xs font-mono hidden sm:table-cell">{isVillaVinilicosProduct(p) ? "m linear" : p.m2PorCaixa}</td>
+                    <td className="px-3 py-2.5 text-xs text-muted-foreground hidden md:table-cell">{isLinearMeterProduct(p) ? "Metro linear" : p.formato}</td>
+                    <td className="px-3 py-2.5 text-xs text-muted-foreground hidden lg:table-cell">{isVillaVinilicosProduct(p) ? `Villa Vinílicos · ${isLinearMeterProduct(p) ? "metro linear" : "m²"}` : `${p.superficie} · ${LOCAL_USO[p.localUso]}`}</td>
+                    <td className="px-3 py-2.5 text-right text-xs font-mono hidden sm:table-cell">{isLinearMeterProduct(p) ? "m linear" : p.m2PorCaixa}</td>
                     <td className="px-3 py-2.5 text-right">
                       {price
                         ? <span className="font-mono text-muted-foreground">{fmtBRL(price)}</span>

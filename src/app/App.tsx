@@ -1619,7 +1619,7 @@ function BudgetEditor({
     ? `${budget.parcelasCartao} x ${fmtBRL(round2(topTotal / budget.parcelasCartao))}`
     : "";
   const cardInstallmentLabelPrint = budget.formaPagamento === "cartao" && budget.parcelasCartao > 1
-    ? `${budget.parcelasCartao} x ${fmtBRLStr(round2(topTotal / budget.parcelasCartao))}`
+    ? `${budget.parcelasCartao} x ${fmtBRL(round2(topTotal / budget.parcelasCartao))}`
     : "";
   const pixOnlyProductsSubtotal = round2(pixOnlyItems.reduce((sum, item) => sum + item.subtotal * noTaxOrCardFactor, 0));
   const pixOnlySubtotal = round2(pixOnlyProductsSubtotal + budget.frete);

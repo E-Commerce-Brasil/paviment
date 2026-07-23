@@ -1029,10 +1029,10 @@ async function addBudgetItem(budgetId: string, item: {
   };
 }
 
-async function updateBudgetItem(id: string, areaM2: number, caixas: number, precoM2: number): Promise<void> {
+async function updateBudgetItem(id: string, areaM2: number, caixas: number, precoM2: number, subtotal: number): Promise<void> {
   const { error } = await supabase
     .from("budget_items")
-    .update({ area_m2: areaM2, caixas, subtotal: round2(areaM2 * precoM2) })
+    .update({ area_m2: areaM2, caixas, subtotal })
     .eq("id", id);
   if (error) throw error;
 }
@@ -1121,6 +1121,11 @@ function calculateItemRealAreaM2(item: BudgetItem): number {
   const caixas = Number.isFinite(item.caixas) ? item.caixas : 0;
   const m2PorCaixa = Number.isFinite(item.product?.m2PorCaixa) ? item.product.m2PorCaixa : 0;
   return round2(caixas * m2PorCaixa);
+}
+
+function calculateItemSubtotal(product: Product, areaM2: number, caixas: number, precoM2: number): number {
+  const quantityBase = isVillacolProduct(product) ? areaM2 : caixas * (product.m2PorCaixa || 0);
+  return round2(quantityBase * precoM2);
 }
 
 function calculateItemWeightKg(item: BudgetItem): number {
@@ -1407,7 +1412,7 @@ function ProductModal({
               {price && (
                 <div className="flex justify-between pt-1.5 border-t border-border font-medium">
                   <span>Subtotal estimado</span>
-                  <span className="font-mono text-primary">{fmtBRL(area * price)}</span>
+                  <span className="font-mono text-primary">{fmtBRL(calculateItemSubtotal(selected, area, caixas, price))}</span>
                 </div>
               )}
             </div>
@@ -1713,7 +1718,7 @@ function BudgetEditor({
     setSaving(true);
     try {
       const newItem = await addBudgetItem(budget.id, {
-        productId: product.id, product, areaM2, caixas, precoM2, subtotal: round2(areaM2 * precoM2),
+        productId: product.id, product, areaM2, caixas, precoM2, subtotal: calculateItemSubtotal(product, areaM2, caixas, precoM2),
       });
       const nextItems = [...budget.items, newItem];
       const b = updateLocal({ ...getSentBudgetDraftPatch(), items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
@@ -1778,8 +1783,9 @@ function BudgetEditor({
     const caixas = item.product.m2PorCaixa > 0 ? Math.ceil(newArea / item.product.m2PorCaixa) : item.caixas;
     setSaving(true);
     try {
-      await updateBudgetItem(itemId, newArea, caixas, newPrecoM2);
-      const updatedItem = { ...item, areaM2: newArea, caixas, precoM2: newPrecoM2, subtotal: round2(newArea * newPrecoM2) };
+      const newSubtotal = calculateItemSubtotal(item.product, newArea, caixas, newPrecoM2);
+      await updateBudgetItem(itemId, newArea, caixas, newPrecoM2, newSubtotal);
+      const updatedItem = { ...item, areaM2: newArea, caixas, precoM2: newPrecoM2, subtotal: newSubtotal };
       const nextItems = budget.items.map((i) => i.id === itemId ? updatedItem : i);
       const b = updateLocal({ ...getSentBudgetDraftPatch(), items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
       await persistTotals(b);
@@ -2257,7 +2263,7 @@ ${budget.observacoes ? `
                         </td>
                         <td className="px-3 py-3 text-right font-mono font-semibold text-sm">
                           {isEditing && previewArea > 0
-                            ? <span className="text-primary">{fmtBRL(previewArea * editPrecoM2)}</span>
+                            ? <span className="text-primary">{fmtBRL(calculateItemSubtotal(item.product, previewArea, previewCx, editPrecoM2))}</span>
                             : fmtBRL(item.subtotal)}
                         </td>
                         <td className="px-3 py-3">
@@ -2371,7 +2377,7 @@ ${budget.observacoes ? `
                             </td>
                             <td className="px-3 py-3 text-right font-mono font-semibold text-sm">
                               {isEditing && previewQty > 0
-                                ? <span className="text-primary">{fmtBRL(previewQty * editPrecoM2)}</span>
+                                ? <span className="text-primary">{fmtBRL(calculateItemSubtotal(item.product, previewQty, previewCx, editPrecoM2))}</span>
                                 : fmtBRL(item.subtotal)}
                             </td>
                             <td className="px-3 py-3">

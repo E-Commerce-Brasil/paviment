@@ -3142,6 +3142,11 @@ async function createProduct(product: Omit<Product, "id">): Promise<Product> {
   return mapProduct(data);
 }
 
+async function deleteProduct(id: string): Promise<void> {
+  const { error } = await supabase.from("products").delete().eq("id", id);
+  if (error) throw error;
+}
+
 function createEmptyProduct(marca: "Villagres" | "Villacol" = "Villagres"): Product {
   return {
     id: "",
@@ -3340,13 +3345,15 @@ async function importProducts(products: Omit<Product, "id">[]): Promise<{ create
 
 // ── Product Edit Modal ────────────────────────────────────────────
 
-function ProductEditModal({ product, onSave, onClose }: {
+function ProductEditModal({ product, onSave, onDelete, onClose }: {
   product: Product;
   onSave: (updated: Product) => void;
+  onDelete: (productId: string) => void;
   onClose: () => void;
 }) {
   const [form, setForm] = useState({ ...product });
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const isNew = !product.id;
   const isVillacol = form.marca === "Villacol";
   const isRejunte = isVillacol && form.categoriaComplementar === "Rejunte";
@@ -3420,6 +3427,22 @@ function ProductEditModal({ product, onSave, onClose }: {
       }
     } catch (e: any) { toast.error("Erro: " + e.message); }
     finally { setSaving(false); }
+  }
+
+
+  async function handleDelete() {
+    if (isNew) return;
+    if (!confirm(`Excluir o produto "${form.linha}"? Esta ação não pode ser desfeita.`)) return;
+    setDeleting(true);
+    try {
+      await deleteProduct(form.id);
+      onDelete(form.id);
+      toast.success("Produto excluído!");
+    } catch (e: any) {
+      toast.error("Erro ao excluir: " + e.message);
+    } finally {
+      setDeleting(false);
+    }
   }
 
   const inputCls = "w-full border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25";
@@ -3626,8 +3649,14 @@ function ProductEditModal({ product, onSave, onClose }: {
         </div>
 
         <div className="px-6 py-4 border-t border-border flex gap-2">
+          {!isNew && (
+            <button onClick={handleDelete} disabled={deleting || saving}
+              className="border border-destructive/30 text-destructive rounded-xl px-4 py-2.5 text-sm hover:bg-red-50 transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
+              {deleting ? <Spinner size={14} /> : <Trash2 size={14} />} Excluir
+            </button>
+          )}
           <button onClick={onClose} className="flex-1 border border-border rounded-xl py-2.5 text-sm hover:bg-muted transition-colors">Cancelar</button>
-          <button onClick={handleSave} disabled={saving}
+          <button onClick={handleSave} disabled={saving || deleting}
             className="flex-1 bg-primary text-primary-foreground rounded-xl py-2.5 text-sm font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2">
             {saving ? <Spinner size={14} /> : <Check size={14} />} {isNew ? "Criar Produto" : "Salvar Alterações"}
           </button>
@@ -3690,6 +3719,16 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
       const next = ps.some((p) => p.id === updated.id)
         ? ps.map((p) => p.id === updated.id ? updated : p)
         : [updated, ...ps];
+      onProductsChange(next);
+      return next;
+    });
+    setEditingProduct(null);
+  }
+
+
+  function handleProductDeleted(productId: string) {
+    setProducts((ps) => {
+      const next = ps.filter((p) => p.id !== productId);
       onProductsChange(next);
       return next;
     });
@@ -3977,6 +4016,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
         <ProductEditModal
           product={editingProduct}
           onSave={handleProductSaved}
+          onDelete={handleProductDeleted}
           onClose={() => setEditingProduct(null)}
         />
       )}

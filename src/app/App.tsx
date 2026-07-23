@@ -1965,6 +1965,7 @@ function BudgetEditor({
         <td>${p?.formato ?? ""}</td>
         <td style="text-align:right">${fmtBRLStr(item.precoM2)}</td>
         <td style="text-align:right">${item.areaM2.toFixed(2)}</td>
+        <td style="text-align:right">${item.caixas} cx</td>
         <td style="text-align:right">${calculateItemRealAreaM2(item).toFixed(2)}</td>
         <td style="text-align:right">${p?.m2PorCaixa ?? ""}</td>
         <td style="text-align:right">${fmtKg(calculateItemWeightKg(item))}</td>
@@ -2047,7 +2048,7 @@ ${rows ? `<div class="section-header">PRODUTOS / ESPECIFICAÇÕES</div>
   <thead>
     <tr>
       <th>Ref</th><th>Linha</th><th>Cor</th><th>Formato</th>
-      <th>Valor m²</th><th>Qnt m²</th><th>M² real</th><th>M²/cx</th><th>Peso total</th><th>Valor R$</th>
+      <th>Valor m²</th><th>Qnt m²</th><th>Caixas</th><th>M² real</th><th>M²/cx</th><th>Peso total</th><th>Valor R$</th>
     </tr>
   </thead>
   <tbody>

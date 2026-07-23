@@ -51,7 +51,7 @@ interface Product {
   tipoEmbalagem: string;
 }
 
-type PriceTableOption = 1 | 2 | 3 | 4 | "TE";
+type PriceTableOption = 1 | 2 | 3 | 4 | 5 | "TE";
 
 interface AppUser {
   id?: string;
@@ -113,7 +113,7 @@ interface Budget {
   numero: number;
   customerId: string;
   status: BudgetStatus;
-  tabelaPreco: 1 | 2 | 3 | 4;
+  tabelaPreco: 1 | 2 | 3 | 4 | 5;
   frete: number;
   percentualImposto: number;
   formaPagamento: FormaPagamento;
@@ -142,7 +142,7 @@ interface Budget {
 // ── Mappers (DB snake_case → JS camelCase) ────────────────────────
 
 function mapProduct(r: any): Product {
-  return {
+  return normalizeProductBrand({
     id: r.id,
     referencia: r.referencia || "",
     formato: r.formato || "",
@@ -171,7 +171,7 @@ function mapProduct(r: any): Product {
     categoriaComplementar: r.categoria_complementar || "",
     tipoRejunte: r.tipo_rejunte || "",
     tipoEmbalagem: r.tipo_embalagem || "",
-  };
+  });
 }
 
 function mapCustomer(r: any): Customer {
@@ -344,6 +344,14 @@ UPDATE budgets SET created_by = 'admin' WHERE created_by IS NULL;
 ALTER TABLE budgets DROP CONSTRAINT IF EXISTS budgets_created_by_check;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS preco5 DECIMAL(12,4);
 ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS marca TEXT DEFAULT 'Villagres';
+UPDATE products
+SET marca = 'Villa Vinílicos', m2_por_caixa = CASE WHEN COALESCE(m2_por_caixa, 0) <= 0 THEN 1 ELSE m2_por_caixa END
+WHERE marca IS DISTINCT FROM 'Villa Vinílicos'
+  AND (
+    referencia ~* '^(SPC|LVT|RP)([[:space:]._/-]|$)'
+    OR (COALESCE(referencia, '') || ' ' || COALESCE(linha, '') || ' ' || COALESCE(colecao, '') || ' ' || COALESCE(cor, '') || ' ' || COALESCE(formato, '') || ' ' || COALESCE(superficie, '')) ~* 'vin[ií]lic'
+  );
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS logradouro TEXT;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS numero_end TEXT;
@@ -436,7 +444,9 @@ async function getProductCount(): Promise<number> {
 }
 
 async function seedProducts(products: Omit<Product, "id">[]): Promise<void> {
-  const rows = products.map((p) => ({
+  const rows = products.map((product) => {
+    const p = normalizeProductBrand(product);
+    return ({
     referencia: p.referencia,
     formato: p.formato,
     linha: p.linha,
@@ -459,7 +469,9 @@ async function seedProducts(products: Omit<Product, "id">[]): Promise<void> {
     preco3: p.preco3,
     preco4: p.preco4,
     preco5: p.preco5,
-  }));
+    marca: p.marca || "Villagres",
+  });
+  });
   // Insert in batches of 50
   for (let i = 0; i < rows.length; i += 50) {
     const batch = rows.slice(i, i + 50);
@@ -922,6 +934,13 @@ async function runMigrations(): Promise<void> {
       ALTER TABLE products ADD COLUMN IF NOT EXISTS preco5 DECIMAL(12,4);
 ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS marca TEXT DEFAULT 'Villagres';
+      UPDATE products
+      SET marca = 'Villa Vinílicos', m2_por_caixa = CASE WHEN COALESCE(m2_por_caixa, 0) <= 0 THEN 1 ELSE m2_por_caixa END
+      WHERE marca IS DISTINCT FROM 'Villa Vinílicos'
+        AND (
+          referencia ~* '^(SPC|LVT|RP)([[:space:]._/-]|$)'
+          OR (COALESCE(referencia, '') || ' ' || COALESCE(linha, '') || ' ' || COALESCE(colecao, '') || ' ' || COALESCE(cor, '') || ' ' || COALESCE(formato, '') || ' ' || COALESCE(superficie, '')) ~* 'vin[ií]lic'
+        );
       ALTER TABLE products ADD COLUMN IF NOT EXISTS categoria_complementar TEXT;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS tipo_rejunte TEXT;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS tipo_embalagem TEXT;
@@ -1110,6 +1129,36 @@ function isVillacolProduct(product?: Product | null): boolean {
   return product?.marca === "Villacol";
 }
 
+function hasVillaVinilicosSignature(product: Pick<Product, "referencia" | "linha" | "colecao" | "cor" | "formato" | "superficie" | "marca">): boolean {
+  const referencia = (product.referencia || "").trim();
+  const refUpper = referencia.toUpperCase();
+  const normalizedText = [product.referencia, product.linha, product.colecao, product.cor, product.formato, product.superficie, product.marca]
+    .filter(Boolean)
+    .join(" ")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  return /^(SPC|LVT|RP)[\s._/-]?/.test(refUpper) || refUpper === "SPC" || refUpper === "LVT" || refUpper === "RP" || normalizedText.includes("vinilico");
+}
+
+function normalizeProductBrand<T extends Product | Omit<Product, "id">>(product: T): T {
+  return hasVillaVinilicosSignature(product) ? { ...product, marca: "Villa Vinílicos", m2PorCaixa: 1 } : product;
+}
+
+function isVillaVinilicosProduct(product?: Product | null): boolean {
+  return product?.marca === "Villa Vinílicos" || (product ? hasVillaVinilicosSignature(product) : false);
+}
+
+function isLinearMeterProduct(product?: Product | null): boolean {
+  return isVillaVinilicosProduct(product);
+}
+
+function getProductQuantityLabel(product?: Product | null, plural = false): string {
+  if (isVillaVinilicosProduct(product)) return plural ? "metros lineares" : "metro linear";
+  if (isVillacolProduct(product)) return getComplementaryUnitLabel(product, plural);
+  return plural ? "m²" : "m²";
+}
+
 function getComplementaryUnitLabel(product?: Product | null, plural = false): string {
   if (product?.categoriaComplementar === "Rejunte") return plural ? "potes" : "pote";
   if (product?.categoriaComplementar === "Argamassa") return plural ? "sacos" : "saco";
@@ -1124,7 +1173,7 @@ function calculateItemRealAreaM2(item: BudgetItem): number {
 }
 
 function calculateItemSubtotal(product: Product, areaM2: number, caixas: number, precoM2: number): number {
-  const quantityBase = isVillacolProduct(product) ? areaM2 : caixas * (product.m2PorCaixa || 0);
+  const quantityBase = isVillacolProduct(product) || isLinearMeterProduct(product) ? areaM2 : caixas * (product.m2PorCaixa || 0);
   return round2(quantityBase * precoM2);
 }
 
@@ -1279,7 +1328,7 @@ function ProductModal({
   allProducts, tabelaPreco, pricingSettings, onSelect, onClose,
 }: {
   allProducts: Product[];
-  tabelaPreco: 1 | 2 | 3 | 4;
+  tabelaPreco: 1 | 2 | 3 | 4 | 5;
   pricingSettings?: PricingSettings;
   onSelect: (product: Product, areaM2: number, tabelaPreco: PriceTableOption, specialPrice?: number) => void;
   onClose: () => void;
@@ -1314,7 +1363,7 @@ function ProductModal({
   function confirmAdd() {
     if (!selected) return;
     const area = parseFloat(areaInput.replace(",", "."));
-    if (!area || area <= 0) { toast.error(isVillacolProduct(selected) ? "Informe a quantidade" : "Informe a área em m²"); return; }
+    if (!area || area <= 0) { toast.error(isVillacolProduct(selected) || isLinearMeterProduct(selected) ? "Informe a quantidade" : "Informe a área em m²"); return; }
     const specialPrice = selectedTabela === "TE" ? parseDecimalInput(specialPriceInput) : undefined;
     if (selectedTabela === "TE" && (!specialPrice || specialPrice <= 0)) { toast.error("Informe um valor válido para a Tabela Especial."); return; }
     onSelect(selected, area, selectedTabela, specialPrice);
@@ -1328,9 +1377,10 @@ function ProductModal({
     const specialPrice = parseDecimalInput(specialPriceInput);
     const price = selectedTabela === "TE" ? (specialPrice > 0 ? specialPrice : null) : priceBase != null ? calculateFinalPrice(priceBase, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
     const area = parseFloat(areaInput.replace(",", ".")) || 0;
-    const caixas = selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : 0;
     const selectedIsVillacol = isVillacolProduct(selected);
-    const selectedUnitLabel = getComplementaryUnitLabel(selected, caixas !== 1);
+    const selectedIsLinearMeter = isLinearMeterProduct(selected);
+    const caixas = selectedIsLinearMeter ? Math.ceil(area) : selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : 0;
+    const selectedUnitLabel = selectedIsLinearMeter ? getProductQuantityLabel(selected, area !== 1) : getComplementaryUnitLabel(selected, caixas !== 1);
 
     return (
       <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
@@ -1353,14 +1403,14 @@ function ProductModal({
               <>
                 <p className="text-sm text-muted-foreground mt-0.5">{selected.colecao} · {selected.superficie}</p>
                 <p className="text-xs text-muted-foreground mt-0.5 font-mono">{selected.formato} · Ref: {selected.referencia}</p>
-                <p className="text-xs text-muted-foreground">{LOCAL_USO[selected.localUso]} · {selected.m2PorCaixa} m²/cx · {selected.espessuraMm}mm</p>
+                <p className="text-xs text-muted-foreground">{selectedIsLinearMeter ? "Venda por metro linear" : `${LOCAL_USO[selected.localUso]} · ${selected.m2PorCaixa} m²/cx · ${selected.espessuraMm}mm`}</p>
               </>
             )}
           </div>
           <div className="mb-4">
             <p className="text-xs font-medium text-muted-foreground mb-1.5">Tabela de preço deste produto</p>
-            <div className="grid grid-cols-5 gap-1.5">
-              {([1, 2, 3, 4] as const).map((t) => (
+            <div className="grid grid-cols-6 gap-1.5">
+              {([1, 2, 3, 4, 5] as const).map((t) => (
                 <button key={t} type="button" onClick={() => setSelectedTabela(t)}
                   className={`rounded-lg py-1.5 text-xs font-semibold border transition-colors ${selectedTabela === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
                   Tabela {t}
@@ -1373,7 +1423,7 @@ function ProductModal({
             </div>
             {selectedTabela === "TE" && (
               <div className="mt-2">
-                <label className="block text-xs font-medium text-muted-foreground mb-1">Valor especial {selectedIsVillacol ? "por unidade" : "por m²"}</label>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">Valor especial {selectedIsLinearMeter ? "por metro linear" : selectedIsVillacol ? "por unidade" : "por m²"}</label>
                 <input type="text" value={specialPriceInput} onChange={(e) => setSpecialPriceInput(e.target.value)}
                   placeholder="Ex: 129,90"
                   className="w-full border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono" />
@@ -1384,7 +1434,7 @@ function ProductModal({
             <div className="bg-primary/8 rounded-xl p-3 mb-4 flex items-center justify-between">
               <span className="text-sm text-muted-foreground">{selectedTabela === "TE" ? "Tabela Especial" : `Tabela ${selectedTabela}`}</span>
               <span className="text-xl font-semibold text-primary font-mono">
-                {fmtBRL(price)}<span className="text-sm font-normal text-muted-foreground">{selectedIsVillacol ? "/un." : "/m²"}</span>
+                {fmtBRL(price)}<span className="text-sm font-normal text-muted-foreground">{selectedIsLinearMeter ? "/m linear" : selectedIsVillacol ? "/un." : "/m²"}</span>
               </span>
             </div>
           ) : (
@@ -1392,18 +1442,18 @@ function ProductModal({
               <AlertTriangle size={14} /> {selectedTabela === "TE" ? "Informe o valor da Tabela Especial" : `Preço não disponível para tabela ${selectedTabela}`}
             </div>
           )}
-          <label className="block text-xs font-medium text-muted-foreground mb-1">{selectedIsVillacol ? `Quantidade de ${getComplementaryUnitLabel(selected, true)}` : "Área necessária (m²)"}</label>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">{selectedIsLinearMeter ? "Quantidade em metros lineares" : selectedIsVillacol ? `Quantidade de ${getComplementaryUnitLabel(selected, true)}` : "Área necessária (m²)"}</label>
           <input type="text" value={areaInput} onChange={(e) => setAreaInput(e.target.value)}
-            placeholder={selectedIsVillacol ? "Ex: 10" : "Ex: 45,50"} autoFocus
+            placeholder={selectedIsVillacol || selectedIsLinearMeter ? "Ex: 10" : "Ex: 45,50"} autoFocus
             onKeyDown={(e) => e.key === "Enter" && confirmAdd()}
             className="w-full border border-border rounded-xl px-4 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 mb-3 font-mono" />
           {area > 0 && selected.m2PorCaixa > 0 && (
             <div className="bg-muted rounded-xl p-3 mb-4 text-sm space-y-1.5">
               <div className="flex justify-between text-muted-foreground">
-                <span>{selectedIsVillacol ? "Quantidade calculada" : "Caixas necessárias"}</span>
-                <span className="font-mono font-medium text-foreground">{caixas} {selectedIsVillacol ? selectedUnitLabel : "cx"}</span>
+                <span>{selectedIsVillacol || selectedIsLinearMeter ? "Quantidade" : "Caixas necessárias"}</span>
+                <span className="font-mono font-medium text-foreground">{selectedIsLinearMeter ? `${area.toFixed(2)} ${selectedUnitLabel}` : `${caixas} ${selectedIsVillacol ? selectedUnitLabel : "cx"}`}</span>
               </div>
-              {!selectedIsVillacol && (
+              {!selectedIsVillacol && !selectedIsLinearMeter && (
                 <div className="flex justify-between text-muted-foreground">
                   <span>m² real (arredondado)</span>
                   <span className="font-mono text-foreground">{(caixas * selected.m2PorCaixa).toFixed(2)} m²</span>
@@ -1448,7 +1498,7 @@ function ProductModal({
           </div>
           <div className="flex items-center gap-1.5 border border-border rounded-xl px-3 py-2 bg-muted/30">
             <span className="text-xs text-muted-foreground mr-1">Tabela do produto:</span>
-            {([1, 2, 3, 4] as const).map((t) => (
+            {([1, 2, 3, 4, 5] as const).map((t) => (
               <button key={t} type="button" onClick={() => setSelectedTabela(t)}
                 className={`w-7 h-6 rounded text-xs font-semibold transition-all ${selectedTabela === t ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>
                 {t}
@@ -1465,6 +1515,7 @@ function ProductModal({
               <option value="">Todas as marcas</option>
               <option value="Villagres">Villagres</option>
               <option value="Villacol">Villacol</option>
+              <option value="Villa Vinílicos">Villa Vinílicos</option>
             </select>
             <select value={categoriaFiltro} onChange={(e) => setCategoriaFiltro(e.target.value)}
               className="border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
@@ -1514,14 +1565,14 @@ function ProductModal({
                           {p.cor && p.cor !== "única" && p.cor !== "-"
                             ? <span className="text-muted-foreground font-normal"> · {p.cor}</span> : null}
                         </p>
-                        <p className="text-xs text-muted-foreground mt-0.5">{p.marca === "Villacol" ? [p.categoriaComplementar, p.tipoRejunte || p.tipoEmbalagem].filter(Boolean).join(" · ") : `${p.formato} · ${p.superficie} · ${LOCAL_USO[p.localUso]}`}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">{p.marca === "Villacol" ? [p.categoriaComplementar, p.tipoRejunte || p.tipoEmbalagem].filter(Boolean).join(" · ") : isVillaVinilicosProduct(p) ? [p.colecao, p.formato || "Metro linear"].filter(Boolean).join(" · ") : `${p.formato} · ${p.superficie} · ${LOCAL_USO[p.localUso]}`}</p>
                         <p className="text-xs text-muted-foreground font-mono">{p.referencia} · {p.colecao}</p>
                       </div>
                       <div className="text-right shrink-0">
                         {finalPrice != null
-                          ? <p className="text-sm font-semibold text-primary font-mono">{fmtBRL(finalPrice)}/m²</p>
+                          ? <p className="text-sm font-semibold text-primary font-mono">{fmtBRL(finalPrice)}/{isVillaVinilicosProduct(p) ? "m linear" : "m²"}</p>
                           : <p className="text-xs text-amber-600">Consultar</p>}
-                        <p className="text-xs text-muted-foreground">{p.m2PorCaixa} m²/cx</p>
+                        <p className="text-xs text-muted-foreground">{isVillaVinilicosProduct(p) ? "Venda por metro linear" : `${p.m2PorCaixa} m²/cx`}</p>
                       </div>
                     </div>
                   </button>
@@ -1594,6 +1645,7 @@ function BudgetEditor({
 
   const isLocked = budget.status === "fechado";
   const villagresItems = budget.items.filter((item) => !isVillacolProduct(item.product));
+  const villaVinilicosItems = budget.items.filter((item) => isVillaVinilicosProduct(item.product));
   const villacolItems = budget.items.filter((item) => isVillacolProduct(item.product));
   const pixOnlyCategories = ["Rejunte", "Niveladores/Cunhas"];
   const topFinancialItems = budget.items.filter((item) => !pixOnlyCategories.includes(item.product?.categoriaComplementar || ""));
@@ -1711,7 +1763,8 @@ function BudgetEditor({
       toast.error("Informe um valor válido para a Tabela Especial.");
       return;
     }
-    if (!product.m2PorCaixa || product.m2PorCaixa <= 0) {
+    const isLinearProduct = isLinearMeterProduct(product);
+    if (!isLinearProduct && (!product.m2PorCaixa || product.m2PorCaixa <= 0)) {
       toast.error("Produto sem m²/caixa válido. Corrija o cadastro antes de adicionar.");
       return;
     }
@@ -1720,7 +1773,7 @@ function BudgetEditor({
       toast.error("Não foi possível calcular o preço final do produto.");
       return;
     }
-    const caixas = Math.ceil(areaM2 / product.m2PorCaixa);
+    const caixas = isLinearProduct ? Math.ceil(areaM2) : Math.ceil(areaM2 / product.m2PorCaixa);
     setSaving(true);
     try {
       const newItem = await addBudgetItem(budget.id, {
@@ -1749,7 +1802,7 @@ function BudgetEditor({
   }
 
   function inferItemTabela(item: BudgetItem): PriceTableOption {
-    for (const t of [1, 2, 3, 4] as const) {
+    for (const t of [1, 2, 3, 4, 5] as const) {
       const precoBase = item.product[priceKey(t)] as number | null;
       if (precoBase == null) continue;
       const precoTabela = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
@@ -1786,7 +1839,7 @@ function BudgetEditor({
       toast.error("Não foi possível calcular o preço final do produto.");
       return;
     }
-    const caixas = item.product.m2PorCaixa > 0 ? Math.ceil(newArea / item.product.m2PorCaixa) : item.caixas;
+    const caixas = isLinearMeterProduct(item.product) ? Math.ceil(newArea) : item.product.m2PorCaixa > 0 ? Math.ceil(newArea / item.product.m2PorCaixa) : item.caixas;
     setSaving(true);
     try {
       const newSubtotal = calculateItemSubtotal(item.product, newArea, caixas, newPrecoM2);
@@ -1958,16 +2011,17 @@ function BudgetEditor({
     const rows = villagresItems.map((item) => {
       const p = item.product;
       const cor = p?.cor && p.cor !== "única" && p.cor !== "-" ? p.cor : "";
+      const isLinear = isVillaVinilicosProduct(p);
       return `<tr>
         <td>${p?.referencia ?? ""}</td>
         <td>${p?.linha ?? ""}</td>
-        <td>${p?.colecao ?? ""}${cor ? " / " + cor : ""}</td>
-        <td>${p?.formato ?? ""}</td>
+        <td>${isLinear ? "Villa Vinílicos" : p?.colecao ?? ""}${!isLinear && cor ? " / " + cor : ""}</td>
+        <td>${isLinear ? "Metro linear" : p?.formato ?? ""}</td>
         <td style="text-align:right">${fmtBRLStr(item.precoM2)}</td>
-        <td style="text-align:right">${item.areaM2.toFixed(2)}</td>
-        <td style="text-align:right">${item.caixas} cx</td>
-        <td style="text-align:right">${calculateItemRealAreaM2(item).toFixed(2)}</td>
-        <td style="text-align:right">${p?.m2PorCaixa ?? ""}</td>
+        <td style="text-align:right">${item.areaM2.toFixed(2)}${isLinear ? " ml" : ""}</td>
+        <td style="text-align:right">${isLinear ? "—" : `${item.caixas} cx`}</td>
+        <td style="text-align:right">${isLinear ? "—" : calculateItemRealAreaM2(item).toFixed(2)}</td>
+        <td style="text-align:right">${isLinear ? "—" : (p?.m2PorCaixa ?? "")}</td>
         <td style="text-align:right">${fmtKg(calculateItemWeightKg(item))}</td>
         <td style="text-align:right">${fmtBRLStr(item.subtotal)}</td>
       </tr>`;
@@ -2048,7 +2102,7 @@ ${rows ? `<div class="section-header">PRODUTOS / ESPECIFICAÇÕES</div>
   <thead>
     <tr>
       <th>Ref</th><th>Linha</th><th>Cor</th><th>Formato</th>
-      <th>Valor m²</th><th>Qnt m²</th><th>Caixas</th><th>M² real</th><th>M²/cx</th><th>Peso total</th><th>Valor R$</th>
+      <th>Valor m²/ml</th><th>Qnt m²/ml</th><th>Caixas</th><th>M² real</th><th>M²/cx</th><th>Peso total</th><th>Valor R$</th>
     </tr>
   </thead>
   <tbody>
@@ -2071,7 +2125,7 @@ ${complementaryRows ? `<div class="section-header">PRODUTOS COMPLEMENTARES</div>
 
 <div class="clearfix">
   <table class="totals-box">
-    <tr><td>Produtos Villagres</td><td>${fmtBRLStr(villagresSubtotal)}</td></tr>
+    <tr><td>Produtos Villagres / Villa Vinílicos</td><td>${fmtBRLStr(villagresSubtotal)}</td></tr>
     <tr><td>Argamassas</td><td>${fmtBRLStr(argamassaSubtotal)}</td></tr>
     ${topPixDiscount > 0 ? `<tr><td>Desconto PIX (${budget.descontoPixPercentual}%)</td><td>- ${fmtBRLStr(topPixDiscount)}</td></tr>` : ""}
     <tr><td>${topSubtotalLabel}${cardInstallmentLabelPrint ? ` (${cardInstallmentLabelPrint})` : ""}</td><td>${fmtBRLStr(topTotal)}</td></tr>
@@ -2185,10 +2239,10 @@ ${budget.observacoes ? `
                   <tr className="text-xs text-muted-foreground bg-muted/30 border-b border-border">
                     <th className="text-left px-5 py-2.5 font-medium">Produto</th>
                     <th className="text-left px-3 py-2.5 font-medium hidden md:table-cell">Formato</th>
-                    <th className="text-right px-3 py-2.5 font-medium">m²</th>
+                    <th className="text-right px-3 py-2.5 font-medium">Qtd.</th>
                     <th className="text-right px-3 py-2.5 font-medium">Cx</th>
                     <th className="text-right px-3 py-2.5 font-medium hidden md:table-cell">m² real</th>
-                    <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">R$/m²</th>
+                    <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">R$/m² ou ml</th>
                     <th className="text-right px-3 py-2.5 font-medium hidden lg:table-cell">Peso</th>
                     <th className="text-right px-3 py-2.5 font-medium">Subtotal</th>
                     <th className="px-3 py-2.5 w-16"></th>
@@ -2198,8 +2252,9 @@ ${budget.observacoes ? `
                   {villagresItems.map((item) => {
                     const isEditing = editingItemId === item.id;
                     const previewArea = parseFloat(editAreaInput.replace(",", ".")) || 0;
-                    const previewCx = item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : 0;
-                    const previewRealArea = round2(previewCx * (item.product.m2PorCaixa || 0));
+                    const itemIsLinear = isVillaVinilicosProduct(item.product);
+                    const previewCx = itemIsLinear ? Math.ceil(previewArea) : item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : 0;
+                    const previewRealArea = itemIsLinear ? previewArea : round2(previewCx * (item.product.m2PorCaixa || 0));
                     const previewWeight = round2(previewCx * (item.product.pesoBrutoCx || 0));
                     const editPrecoBase = editTabela === "TE" ? null : item.product[priceKey(editTabela)] as number | null;
                     const editSpecialPrice = parseDecimalInput(editSpecialPriceInput);
@@ -2211,11 +2266,11 @@ ${budget.observacoes ? `
                           <p className="text-xs text-muted-foreground">
                             {item.product?.cor && item.product.cor !== "única" && item.product.cor !== "-"
                               ? `${item.product.cor} · ` : ""}
-                            {item.product?.superficie}
+                            {itemIsLinear ? "Venda por metro linear" : item.product?.superficie}
                           </p>
                           <p className="text-xs text-muted-foreground font-mono">Ref: {item.product?.referencia}</p>
                         </td>
-                        <td className="px-3 py-3 text-xs text-muted-foreground hidden md:table-cell">{item.product?.formato}</td>
+                        <td className="px-3 py-3 text-xs text-muted-foreground hidden md:table-cell">{itemIsLinear ? "Metro linear" : item.product?.formato}</td>
                         <td className="px-3 py-3 text-right">
                           {isEditing ? (
                             <input type="text" value={editAreaInput} onChange={(e) => setEditAreaInput(e.target.value)}
@@ -2226,26 +2281,26 @@ ${budget.observacoes ? `
                             <button onClick={() => !isLocked && startEditItem(item)}
                               className={`font-mono text-sm group flex items-center gap-1 ml-auto transition-colors ${isLocked ? "cursor-default" : "hover:text-primary"}`}
                               title={isLocked ? "Orçamento bloqueado" : "Clique para editar"}>
-                              {item.areaM2.toFixed(2)}
+                              {item.areaM2.toFixed(2)} {itemIsLinear ? "ml" : ""}
                               {!isLocked && <Pencil size={10} className="opacity-0 group-hover:opacity-40 transition-opacity" />}
                             </button>
                           )}
                         </td>
                         <td className="px-3 py-3 text-right font-mono text-sm">
                           {isEditing && previewArea > 0
-                            ? <span className="text-primary font-semibold">{previewCx}</span>
-                            : item.caixas}
+                            ? <span className="text-primary font-semibold">{itemIsLinear ? "—" : previewCx}</span>
+                            : itemIsLinear ? "—" : item.caixas}
                         </td>
                         <td className="px-3 py-3 text-right font-mono text-sm hidden md:table-cell">
                           {isEditing && previewArea > 0
-                            ? <span className="text-primary font-semibold">{previewRealArea.toFixed(2)}</span>
-                            : calculateItemRealAreaM2(item).toFixed(2)}
+                            ? <span className="text-primary font-semibold">{itemIsLinear ? "—" : previewRealArea.toFixed(2)}</span>
+                            : itemIsLinear ? "—" : calculateItemRealAreaM2(item).toFixed(2)}
                         </td>
                         <td className="px-3 py-3 text-right text-sm hidden sm:table-cell">
                           {isEditing ? (
                             <div className="space-y-1">
-                              <div className="grid grid-cols-5 gap-1">
-                                {([1, 2, 3, 4] as const).map((t) => (
+                              <div className="grid grid-cols-6 gap-1">
+                                {([1, 2, 3, 4, 5] as const).map((t) => (
                                   <button key={t} type="button" onClick={() => setEditTabela(t)}
                                     className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
                                     T{t}
@@ -2361,8 +2416,8 @@ ${budget.observacoes ? `
                             <td className="px-3 py-3 text-right text-sm hidden md:table-cell">
                               {isEditing ? (
                                 <div className="space-y-1">
-                                  <div className="grid grid-cols-5 gap-1">
-                                    {([1, 2, 3, 4] as const).map((t) => (
+                                  <div className="grid grid-cols-6 gap-1">
+                                    {([1, 2, 3, 4, 5] as const).map((t) => (
                                       <button key={t} type="button" onClick={() => setEditTabela(t)}
                                         className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
                                         T{t}
@@ -3120,36 +3175,38 @@ function AllCustomersTab({ onSelect }: { onSelect: (c: Customer) => void }) {
 }
 
 async function updateProduct(id: string, patch: Partial<Omit<Product, "id">>): Promise<void> {
+  const normalized = normalizeProductBrand({ ...createEmptyProduct(), ...patch });
   const { error } = await supabase.from("products").update({
-    referencia: patch.referencia, formato: patch.formato, linha: patch.linha,
-    colecao: patch.colecao, cor: patch.cor, superficie: patch.superficie,
-    m2_por_caixa: patch.m2PorCaixa, pecas_por_caixa: patch.pecasPorCaixa,
-    m2_por_pallet: patch.m2PorPallet, cx_por_pallet: patch.cxPorPallet,
-    peso_bruto_m2: patch.pesoBrutoM2, peso_bruto_cx: patch.pesoBrutoCx, espessura_mm: patch.espessuraMm,
-    preco1: patch.preco1, preco2: patch.preco2, preco3: patch.preco3, preco4: patch.preco4, preco5: patch.preco5,
-    descontinuado: patch.descontinuado ?? false,
-    marca: patch.marca || "Villagres",
-    categoria_complementar: patch.categoriaComplementar || null,
-    tipo_rejunte: patch.tipoRejunte || null,
-    tipo_embalagem: patch.tipoEmbalagem || null,
+    referencia: normalized.referencia, formato: normalized.formato, linha: normalized.linha,
+    colecao: normalized.colecao, cor: normalized.cor, superficie: normalized.superficie,
+    m2_por_caixa: normalized.m2PorCaixa, pecas_por_caixa: normalized.pecasPorCaixa,
+    m2_por_pallet: normalized.m2PorPallet, cx_por_pallet: normalized.cxPorPallet,
+    peso_bruto_m2: normalized.pesoBrutoM2, peso_bruto_cx: normalized.pesoBrutoCx, espessura_mm: normalized.espessuraMm,
+    preco1: normalized.preco1, preco2: normalized.preco2, preco3: normalized.preco3, preco4: normalized.preco4, preco5: normalized.preco5,
+    descontinuado: normalized.descontinuado ?? false,
+    marca: normalized.marca || "Villagres",
+    categoria_complementar: normalized.categoriaComplementar || null,
+    tipo_rejunte: normalized.tipoRejunte || null,
+    tipo_embalagem: normalized.tipoEmbalagem || null,
   }).eq("id", id);
   if (error) throw error;
 }
 
 async function createProduct(product: Omit<Product, "id">): Promise<Product> {
+  const normalized = normalizeProductBrand(product);
   const { data, error } = await supabase.from("products").insert({
-    referencia: product.referencia, formato: product.formato, linha: product.linha,
-    colecao: product.colecao, cor: product.cor, superficie: product.superficie,
-    faces: product.faces, variacao: product.variacao, local_uso: product.localUso, derivacao: product.derivacao,
-    m2_por_caixa: product.m2PorCaixa, pecas_por_caixa: product.pecasPorCaixa,
-    m2_por_pallet: product.m2PorPallet, cx_por_pallet: product.cxPorPallet,
-    peso_bruto_m2: product.pesoBrutoM2, peso_bruto_cx: product.pesoBrutoCx, espessura_mm: product.espessuraMm,
-    preco1: product.preco1, preco2: product.preco2, preco3: product.preco3, preco4: product.preco4, preco5: product.preco5,
-    descontinuado: product.descontinuado ?? false,
-    marca: product.marca || "Villagres",
-    categoria_complementar: product.categoriaComplementar || null,
-    tipo_rejunte: product.tipoRejunte || null,
-    tipo_embalagem: product.tipoEmbalagem || null,
+    referencia: normalized.referencia, formato: normalized.formato, linha: normalized.linha,
+    colecao: normalized.colecao, cor: normalized.cor, superficie: normalized.superficie,
+    faces: normalized.faces, variacao: normalized.variacao, local_uso: normalized.localUso, derivacao: normalized.derivacao,
+    m2_por_caixa: normalized.m2PorCaixa, pecas_por_caixa: normalized.pecasPorCaixa,
+    m2_por_pallet: normalized.m2PorPallet, cx_por_pallet: normalized.cxPorPallet,
+    peso_bruto_m2: normalized.pesoBrutoM2, peso_bruto_cx: normalized.pesoBrutoCx, espessura_mm: normalized.espessuraMm,
+    preco1: normalized.preco1, preco2: normalized.preco2, preco3: normalized.preco3, preco4: normalized.preco4, preco5: normalized.preco5,
+    descontinuado: normalized.descontinuado ?? false,
+    marca: normalized.marca || "Villagres",
+    categoria_complementar: normalized.categoriaComplementar || null,
+    tipo_rejunte: normalized.tipoRejunte || null,
+    tipo_embalagem: normalized.tipoEmbalagem || null,
   }).select().single();
   if (error) throw error;
   return mapProduct(data);
@@ -3176,7 +3233,7 @@ async function deleteProduct(id: string): Promise<{ deleted: boolean; archived: 
   return { deleted: true, archived: false };
 }
 
-function createEmptyProduct(marca: "Villagres" | "Villacol" = "Villagres"): Product {
+function createEmptyProduct(marca: "Villagres" | "Villacol" | "Villa Vinílicos" = "Villagres"): Product {
   return {
     id: "",
     marca,
@@ -3193,8 +3250,8 @@ function createEmptyProduct(marca: "Villagres" | "Villacol" = "Villagres"): Prod
     variacao: "",
     localUso: 3,
     derivacao: "",
-    m2PorCaixa: marca === "Villacol" ? 1 : 0,
-    pecasPorCaixa: marca === "Villacol" ? 1 : 0,
+    m2PorCaixa: marca === "Villacol" || marca === "Villa Vinílicos" ? 1 : 0,
+    pecasPorCaixa: marca === "Villacol" || marca === "Villa Vinílicos" ? 1 : 0,
     m2PorPallet: 0,
     cxPorPallet: 0,
     pesoBrutoM2: 0,
@@ -3386,6 +3443,7 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const isNew = !product.id;
   const isVillacol = form.marca === "Villacol";
+  const isVillaVinilicos = form.marca === "Villa Vinílicos";
   const isRejunte = isVillacol && form.categoriaComplementar === "Rejunte";
   const isArgamassa = isVillacol && form.categoriaComplementar === "Argamassa";
   const isNiveladorCunha = isVillacol && form.categoriaComplementar === "Niveladores/Cunhas";
@@ -3404,8 +3462,8 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
       marca,
       categoriaComplementar: marca === "Villacol" ? f.categoriaComplementar || "Argamassa" : "",
       linha: marca === "Villacol" ? f.categoriaComplementar || "Argamassa" : f.linha,
-      m2PorCaixa: marca === "Villacol" && !f.m2PorCaixa ? 1 : f.m2PorCaixa,
-      pecasPorCaixa: marca === "Villacol" && !f.pecasPorCaixa ? 1 : f.pecasPorCaixa,
+      m2PorCaixa: (marca === "Villacol" || marca === "Villa Vinílicos") && !f.m2PorCaixa ? 1 : f.m2PorCaixa,
+      pecasPorCaixa: (marca === "Villacol" || marca === "Villa Vinílicos") && !f.pecasPorCaixa ? 1 : f.pecasPorCaixa,
     }));
   }
 
@@ -3425,7 +3483,7 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
     if (!form.linha.trim()) { toast.error("Informe o nome do produto."); return; }
     setSaving(true);
     try {
-      const normalizedProduct: Product = {
+      const normalizedProduct: Product = normalizeProductBrand({
         ...form,
         marca: form.marca || "Villagres",
         categoriaComplementar: form.marca === "Villacol" ? form.categoriaComplementar || "Argamassa" : "",
@@ -3438,14 +3496,14 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
         preco5: form.preco5 != null && form.preco5 !== "" ? parseFloat(String(form.preco5).replace(",", ".")) : null,
         faces: parseInt(String(form.faces)) || 0,
         localUso: parseInt(String(form.localUso)) || 3,
-        m2PorCaixa: parseFloat(String(form.m2PorCaixa).replace(",", ".")) || (form.marca === "Villacol" ? 1 : 0),
-        pecasPorCaixa: parseInt(String(form.pecasPorCaixa)) || (form.marca === "Villacol" ? 1 : 0),
+        m2PorCaixa: parseFloat(String(form.m2PorCaixa).replace(",", ".")) || (form.marca === "Villacol" || form.marca === "Villa Vinílicos" ? 1 : 0),
+        pecasPorCaixa: parseInt(String(form.pecasPorCaixa)) || (form.marca === "Villacol" || form.marca === "Villa Vinílicos" ? 1 : 0),
         m2PorPallet: parseFloat(String(form.m2PorPallet).replace(",", ".")) || 0,
         cxPorPallet: parseInt(String(form.cxPorPallet)) || 0,
         pesoBrutoCx: parseFloat(String(form.pesoBrutoCx).replace(",", ".")) || 0,
         pesoBrutoM2: parseFloat(String(form.pesoBrutoM2).replace(",", ".")) || 0,
         espessuraMm: parseFloat(String(form.espessuraMm).replace(",", ".")) || 0,
-      };
+      });
       if (isNew) {
         const created = await createProduct(normalizedProduct);
         onSave(created);
@@ -3484,7 +3542,7 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <div>
             <h3 className="font-semibold">{isNew ? "Novo Produto" : "Editar Produto"}</h3>
-            <p className="text-xs text-muted-foreground font-mono">{isNew ? "Cadastre Villagres ou Villacol" : `Ref: ${product.referencia}`}</p>
+            <p className="text-xs text-muted-foreground font-mono">{isNew ? "Cadastre Villagres, Villacol ou Villa Vinílicos" : `Ref: ${product.referencia}`}</p>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X size={18} /></button>
         </div>
@@ -3496,6 +3554,7 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
               <select value={form.marca} onChange={(e) => handleMarcaChange(e.target.value)} className={inputCls}>
                 <option value="Villagres">Villagres</option>
                 <option value="Villacol">Villacol</option>
+                <option value="Villa Vinílicos">Villa Vinílicos</option>
               </select>
             </div>
             <div>
@@ -3643,9 +3702,14 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
               Produtos Villacol entram como itens complementares. Use m²/caixa = 1 para controlar por unidade/embalagem no orçamento.
             </p>
           )}
+          {isVillaVinilicos && (
+            <p className="text-xs text-muted-foreground rounded-xl bg-blue-50 border border-blue-100 px-3 py-2">
+              Produtos Villa Vinílicos, incluindo referências SPC, LVT e RP, são vendidos e calculados por metro linear.
+            </p>
+          )}
 
           <div>
-            <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Tabelas de Preço {isVillacol ? "(R$/unidade ou embalagem)" : "(R$/m²)"}</p>
+            <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Tabelas de Preço {isVillaVinilicos ? "(R$/metro linear)" : isVillacol ? "(R$/unidade ou embalagem)" : "(R$/m²)"}</p>
             <div className="grid grid-cols-5 gap-2">
               {([1, 2, 3, 4, 5] as const).map((t) => (
                 <div key={t}>
@@ -3862,6 +3926,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
           <option value="">Todas as marcas</option>
           <option value="Villagres">Villagres</option>
           <option value="Villacol">Villacol</option>
+          <option value="Villa Vinílicos">Villa Vinílicos</option>
         </select>
         <select value={categoriaFiltro} onChange={(e) => setCategoriaFiltro(e.target.value)}
           className="border border-border rounded-xl px-3 py-2.5 text-xs bg-card focus:outline-none">
@@ -4018,7 +4083,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
                 <th className="text-left px-5 py-2.5 font-medium">Produto</th>
                 <th className="text-left px-3 py-2.5 font-medium hidden md:table-cell">Formato</th>
                 <th className="text-left px-3 py-2.5 font-medium hidden lg:table-cell">Superfície</th>
-                <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">m²/cx</th>
+                <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">Unidade</th>
                 <th className="text-right px-3 py-2.5 font-medium">Preço-base</th>
                 <th className="w-10 px-3 py-2.5"></th>
               </tr>
@@ -4039,13 +4104,15 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
                       <p className="text-xs text-muted-foreground">
                         {p.marca === "Villacol"
                           ? [p.categoriaComplementar, p.tipoRejunte || p.tipoEmbalagem, p.cor].filter(Boolean).join(" · ")
-                          : `${p.cor && p.cor !== "única" && p.cor !== "-" ? `${p.cor} · ` : ""}${p.colecao}`}
+                          : isVillaVinilicosProduct(p)
+                            ? ["Venda por metro linear", p.colecao].filter(Boolean).join(" · ")
+                            : `${p.cor && p.cor !== "única" && p.cor !== "-" ? `${p.cor} · ` : ""}${p.colecao}`}
                       </p>
                       <p className="text-xs text-muted-foreground font-mono">Ref: {p.referencia}</p>
                     </td>
-                    <td className="px-3 py-2.5 text-xs text-muted-foreground hidden md:table-cell">{p.formato}</td>
-                    <td className="px-3 py-2.5 text-xs text-muted-foreground hidden lg:table-cell">{p.superficie} · {LOCAL_USO[p.localUso]}</td>
-                    <td className="px-3 py-2.5 text-right text-xs font-mono hidden sm:table-cell">{p.m2PorCaixa}</td>
+                    <td className="px-3 py-2.5 text-xs text-muted-foreground hidden md:table-cell">{isVillaVinilicosProduct(p) ? "Metro linear" : p.formato}</td>
+                    <td className="px-3 py-2.5 text-xs text-muted-foreground hidden lg:table-cell">{isVillaVinilicosProduct(p) ? "Villa Vinílicos" : `${p.superficie} · ${LOCAL_USO[p.localUso]}`}</td>
+                    <td className="px-3 py-2.5 text-right text-xs font-mono hidden sm:table-cell">{isVillaVinilicosProduct(p) ? "m linear" : p.m2PorCaixa}</td>
                     <td className="px-3 py-2.5 text-right">
                       {price
                         ? <span className="font-mono text-muted-foreground">{fmtBRL(price)}</span>

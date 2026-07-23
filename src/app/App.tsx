@@ -3341,7 +3341,7 @@ async function importProducts(products: Omit<Product, "id">[]): Promise<{ create
   for (const product of products) {
     const refKey = product.referencia.trim().toLowerCase();
     const nameKey = product.linha.trim().toLowerCase();
-    const match = (refKey && byRef.get(refKey)) || (nameKey && byName.get(nameKey));
+    const match = refKey ? byRef.get(refKey) : nameKey ? byName.get(nameKey) : undefined;
     if (match) {
       await updateProduct(match.id, product);
       updated++;

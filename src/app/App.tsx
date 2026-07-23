@@ -1615,6 +1615,12 @@ function BudgetEditor({
       : "Subtotal Débito";
   const topPixDiscount = budget.formaPagamento === "avista_pix" ? round2(topSubtotalBeforeDiscount * Math.min(budget.descontoPixPercentual, 3) / 100) : 0;
   const topTotal = round2(topSubtotalBeforeDiscount - topPixDiscount);
+  const cardInstallmentLabel = budget.formaPagamento === "cartao" && budget.parcelasCartao > 1
+    ? `${budget.parcelasCartao} x ${fmtBRL(round2(topTotal / budget.parcelasCartao))}`
+    : "";
+  const cardInstallmentLabelPrint = budget.formaPagamento === "cartao" && budget.parcelasCartao > 1
+    ? `${budget.parcelasCartao} x ${fmtBRLStr(round2(topTotal / budget.parcelasCartao))}`
+    : "";
   const pixOnlyProductsSubtotal = round2(pixOnlyItems.reduce((sum, item) => sum + item.subtotal * noTaxOrCardFactor, 0));
   const pixOnlySubtotal = round2(pixOnlyProductsSubtotal + budget.frete);
   const generalTotal = round2(topTotal + pixOnlySubtotal);
@@ -2067,7 +2073,7 @@ ${complementaryRows ? `<div class="section-header">PRODUTOS COMPLEMENTARES</div>
     <tr><td>Produtos Villagres</td><td>${fmtBRLStr(villagresSubtotal)}</td></tr>
     <tr><td>Argamassas</td><td>${fmtBRLStr(argamassaSubtotal)}</td></tr>
     ${topPixDiscount > 0 ? `<tr><td>Desconto PIX (${budget.descontoPixPercentual}%)</td><td>- ${fmtBRLStr(topPixDiscount)}</td></tr>` : ""}
-    <tr><td>${topSubtotalLabel}</td><td>${fmtBRLStr(topTotal)}</td></tr>
+    <tr><td>${topSubtotalLabel}${cardInstallmentLabelPrint ? ` (${cardInstallmentLabelPrint})` : ""}</td><td>${fmtBRLStr(topTotal)}</td></tr>
     <tr><td>Rejuntes/Niveladores Villacol (PIX)</td><td>${fmtBRLStr(pixOnlyProductsSubtotal)}</td></tr>
     ${budget.frete > 0 ? `<tr><td>Frete (PIX)</td><td>${fmtBRLStr(budget.frete)}</td></tr>` : ""}
     <tr><td>Subtotal PIX</td><td>${fmtBRLStr(pixOnlySubtotal)}</td></tr>
@@ -2657,7 +2663,7 @@ ${budget.observacoes ? `
                   </div>
                 )}
                 <div className="flex justify-between text-sm font-semibold pt-2 border-t border-border">
-                  <span>{topSubtotalLabel}</span>
+                  <span>{topSubtotalLabel}{cardInstallmentLabel && <span className="ml-1 text-xs text-muted-foreground">({cardInstallmentLabel})</span>}</span>
                   <span className="font-mono">{fmtBRL(topTotal)}</span>
                 </div>
               </div>

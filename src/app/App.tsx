@@ -3142,9 +3142,25 @@ async function createProduct(product: Omit<Product, "id">): Promise<Product> {
   return mapProduct(data);
 }
 
-async function deleteProduct(id: string): Promise<void> {
+async function deleteProduct(id: string): Promise<{ deleted: boolean; archived: boolean }> {
+  const { count, error: countError } = await supabase
+    .from("budget_items")
+    .select("id", { count: "exact", head: true })
+    .eq("product_id", id);
+  if (countError) throw countError;
+
+  if ((count || 0) > 0) {
+    const { error: archiveError } = await supabase
+      .from("products")
+      .update({ descontinuado: true })
+      .eq("id", id);
+    if (archiveError) throw archiveError;
+    return { deleted: false, archived: true };
+  }
+
   const { error } = await supabase.from("products").delete().eq("id", id);
   if (error) throw error;
+  return { deleted: true, archived: false };
 }
 
 function createEmptyProduct(marca: "Villagres" | "Villacol" = "Villagres"): Product {
@@ -3354,6 +3370,7 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
   const [form, setForm] = useState({ ...product });
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const isNew = !product.id;
   const isVillacol = form.marca === "Villacol";
   const isRejunte = isVillacol && form.categoriaComplementar === "Rejunte";
@@ -3432,12 +3449,14 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
 
   async function handleDelete() {
     if (isNew) return;
-    if (!confirm(`Excluir o produto "${form.linha}"? Esta ação não pode ser desfeita.`)) return;
     setDeleting(true);
     try {
-      await deleteProduct(form.id);
+      const result = await deleteProduct(form.id);
       onDelete(form.id);
-      toast.success("Produto excluído!");
+      setShowDeleteConfirm(false);
+      toast.success(result.archived
+        ? "Produto usado em orçamentos: foi marcado como descontinuado e removido da lista ativa."
+        : "Produto excluído!");
     } catch (e: any) {
       toast.error("Erro ao excluir: " + e.message);
     } finally {
@@ -3650,7 +3669,7 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
 
         <div className="px-6 py-4 border-t border-border flex gap-2">
           {!isNew && (
-            <button onClick={handleDelete} disabled={deleting || saving}
+            <button onClick={() => setShowDeleteConfirm(true)} disabled={deleting || saving}
               className="border border-destructive/30 text-destructive rounded-xl px-4 py-2.5 text-sm hover:bg-red-50 transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
               {deleting ? <Spinner size={14} /> : <Trash2 size={14} />} Excluir
             </button>
@@ -3661,6 +3680,28 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
             {saving ? <Spinner size={14} /> : <Check size={14} />} {isNew ? "Criar Produto" : "Salvar Alterações"}
           </button>
         </div>
+
+        {showDeleteConfirm && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
+            <div className="bg-card rounded-2xl shadow-2xl w-full max-w-sm p-6 border border-border">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold">Excluir produto</h3>
+                <button onClick={() => setShowDeleteConfirm(false)} className="text-muted-foreground hover:text-foreground"><X size={16} /></button>
+              </div>
+              <p className="text-sm text-muted-foreground leading-relaxed mb-4">
+                Deseja excluir o produto <strong className="text-foreground">{form.linha}</strong>?
+                Se ele já estiver em algum orçamento, o sistema irá apenas marcá-lo como descontinuado para preservar o histórico.
+              </p>
+              <div className="flex gap-2">
+                <button onClick={() => setShowDeleteConfirm(false)} className="flex-1 border border-border rounded-xl py-2.5 text-sm hover:bg-muted transition-colors">Cancelar</button>
+                <button onClick={handleDelete} disabled={deleting}
+                  className="flex-1 bg-destructive text-destructive-foreground rounded-xl py-2.5 text-sm font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2">
+                  {deleting ? <Spinner size={14} /> : <Trash2 size={14} />} Excluir
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -43,6 +43,7 @@ interface Product {
   preco2: number | null;
   preco3: number | null;
   preco4: number | null;
+  preco5: number | null;
   descontinuado: boolean;
   marca: string;
   categoriaComplementar: string;
@@ -164,6 +165,7 @@ function mapProduct(r: any): Product {
     preco2: r.preco2 != null ? parseFloat(r.preco2) : null,
     preco3: r.preco3 != null ? parseFloat(r.preco3) : null,
     preco4: r.preco4 != null ? parseFloat(r.preco4) : null,
+    preco5: r.preco5 != null ? parseFloat(r.preco5) : null,
     descontinuado: r.descontinuado ?? false,
     marca: r.marca || "Villagres",
     categoriaComplementar: r.categoria_complementar || "",
@@ -255,6 +257,7 @@ CREATE TABLE IF NOT EXISTS products (
   espessura_mm DECIMAL(10,2) DEFAULT 0,
   preco1 DECIMAL(12,4), preco2 DECIMAL(12,4),
   preco3 DECIMAL(12,4), preco4 DECIMAL(12,4),
+  preco5 DECIMAL(12,4),
   marca TEXT DEFAULT 'Villagres',
   categoria_complementar TEXT,
   tipo_rejunte TEXT,
@@ -339,6 +342,7 @@ ALTER TABLE budgets ADD COLUMN IF NOT EXISTS endereco_entrega TEXT;
 ALTER TABLE budgets ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT 'admin';
 UPDATE budgets SET created_by = 'admin' WHERE created_by IS NULL;
 ALTER TABLE budgets DROP CONSTRAINT IF EXISTS budgets_created_by_check;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS preco5 DECIMAL(12,4);
 ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS logradouro TEXT;
@@ -413,6 +417,7 @@ function buildProductsFromCSV(csvText: string): Omit<Product, "id">[] {
       preco2: parsePrice(row[18]),
       preco3: parsePrice(row[19]),
       preco4: parsePrice(row[20]),
+      preco5: parsePrice(row[21]),
     });
   }
   return products;
@@ -453,6 +458,7 @@ async function seedProducts(products: Omit<Product, "id">[]): Promise<void> {
     preco2: p.preco2,
     preco3: p.preco3,
     preco4: p.preco4,
+    preco5: p.preco5,
   }));
   // Insert in batches of 50
   for (let i = 0; i < rows.length; i += 50) {
@@ -913,7 +919,8 @@ async function runMigrations(): Promise<void> {
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS parcelas_cartao INTEGER DEFAULT 1;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS desconto_pix_percentual NUMERIC(5,2) DEFAULT 0;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS desconto_pix_inclui_frete BOOLEAN DEFAULT FALSE;
-      ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS preco5 DECIMAL(12,4);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS marca TEXT DEFAULT 'Villagres';
       ALTER TABLE products ADD COLUMN IF NOT EXISTS categoria_complementar TEXT;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS tipo_rejunte TEXT;
@@ -1156,7 +1163,7 @@ const LOCAL_USO: Record<number, string> = {
   1: "Parede/Piso", 2: "Parede", 3: "Piso Interno", 4: "Piso Externo",
 };
 
-function priceKey(t: 1 | 2 | 3 | 4): keyof Product {
+function priceKey(t: 1 | 2 | 3 | 4 | 5): keyof Product {
   return `preco${t}` as keyof Product;
 }
 
@@ -3106,7 +3113,7 @@ async function updateProduct(id: string, patch: Partial<Omit<Product, "id">>): P
     m2_por_caixa: patch.m2PorCaixa, pecas_por_caixa: patch.pecasPorCaixa,
     m2_por_pallet: patch.m2PorPallet, cx_por_pallet: patch.cxPorPallet,
     peso_bruto_m2: patch.pesoBrutoM2, peso_bruto_cx: patch.pesoBrutoCx, espessura_mm: patch.espessuraMm,
-    preco1: patch.preco1, preco2: patch.preco2, preco3: patch.preco3, preco4: patch.preco4,
+    preco1: patch.preco1, preco2: patch.preco2, preco3: patch.preco3, preco4: patch.preco4, preco5: patch.preco5,
     descontinuado: patch.descontinuado ?? false,
     marca: patch.marca || "Villagres",
     categoria_complementar: patch.categoriaComplementar || null,
@@ -3124,7 +3131,7 @@ async function createProduct(product: Omit<Product, "id">): Promise<Product> {
     m2_por_caixa: product.m2PorCaixa, pecas_por_caixa: product.pecasPorCaixa,
     m2_por_pallet: product.m2PorPallet, cx_por_pallet: product.cxPorPallet,
     peso_bruto_m2: product.pesoBrutoM2, peso_bruto_cx: product.pesoBrutoCx, espessura_mm: product.espessuraMm,
-    preco1: product.preco1, preco2: product.preco2, preco3: product.preco3, preco4: product.preco4,
+    preco1: product.preco1, preco2: product.preco2, preco3: product.preco3, preco4: product.preco4, preco5: product.preco5,
     descontinuado: product.descontinuado ?? false,
     marca: product.marca || "Villagres",
     categoria_complementar: product.categoriaComplementar || null,
@@ -3163,6 +3170,7 @@ function createEmptyProduct(marca: "Villagres" | "Villacol" = "Villagres"): Prod
     preco2: null,
     preco3: null,
     preco4: null,
+    preco5: null,
     descontinuado: false,
   };
 }
@@ -3178,17 +3186,17 @@ const PRODUCT_TEMPLATE_LABELS: Record<ProductTemplateKind, string> = {
 };
 
 const PRODUCT_TEMPLATE_HEADERS: Record<ProductTemplateKind, string[]> = {
-  villagres: ["Formato", "Referencia", "Linha", "Colecao", "Cor", "Superficie", "Faces", "Variacao", "LocalUso", "Derivacao", "M2PorCaixa", "PecasPorCaixa", "M2PorPallet", "CxPorPallet", "PesoBrutoM2", "PesoBrutoCx", "EspessuraMm", "Preco1", "Preco2", "Preco3", "Preco4", "Descontinuado"],
-  argamassas: ["Referencia", "NomeComercial", "TipoEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Descontinuado"],
-  rejuntes: ["Referencia", "NomeComercial", "Cor", "TipoRejunte", "TipoEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Descontinuado"],
-  niveladores: ["Referencia", "NomeComercial", "EspessuraMm", "TipoEmbalagem", "QuantidadePorEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Descontinuado"],
+  villagres: ["Formato", "Referencia", "Linha", "Colecao", "Cor", "Superficie", "Faces", "Variacao", "LocalUso", "Derivacao", "M2PorCaixa", "PecasPorCaixa", "M2PorPallet", "CxPorPallet", "PesoBrutoM2", "PesoBrutoCx", "EspessuraMm", "Preco1", "Preco2", "Preco3", "Preco4", "Preco5", "Descontinuado"],
+  argamassas: ["Referencia", "NomeComercial", "TipoEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Preco5", "Descontinuado"],
+  rejuntes: ["Referencia", "NomeComercial", "Cor", "TipoRejunte", "TipoEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Preco5", "Descontinuado"],
+  niveladores: ["Referencia", "NomeComercial", "EspessuraMm", "TipoEmbalagem", "QuantidadePorEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Preco5", "Descontinuado"],
 };
 
 const PRODUCT_TEMPLATE_EXAMPLES: Record<ProductTemplateKind, string[]> = {
-  villagres: ["60x60", "REF-001", "Nome da Linha", "Nome Coleção", "Bege", "Polido", "1", "-", "3", "-", "1,44", "6", "43,20", "30", "18,50", "26,65", "9,00", "45,90", "49,90", "54,90", "59,90", "FALSE"],
-  argamassas: ["ARG-001", "Argamassa ACIII", "Saco 20 kg", "20", "29,90", "32,90", "35,90", "39,90", "FALSE"],
-  rejuntes: ["REJ-001", "Rejunte Acrílico", "Branco", "Acrílico", "Pote 1 kg", "1", "18,90", "20,90", "22,90", "24,90", "FALSE"],
-  niveladores: ["NIV-001", "Nivelador 1,5 mm", "1,5", "Pacote 100 un", "100", "0,50", "35,90", "39,90", "44,90", "49,90", "FALSE"],
+  villagres: ["60x60", "REF-001", "Nome da Linha", "Nome Coleção", "Bege", "Polido", "1", "-", "3", "-", "1,44", "6", "43,20", "30", "18,50", "26,65", "9,00", "45,90", "49,90", "54,90", "59,90", "64,90", "FALSE"],
+  argamassas: ["ARG-001", "Argamassa ACIII", "Saco 20 kg", "20", "29,90", "32,90", "35,90", "39,90", "44,90", "FALSE"],
+  rejuntes: ["REJ-001", "Rejunte Acrílico", "Branco", "Acrílico", "Pote 1 kg", "1", "18,90", "20,90", "22,90", "24,90", "26,90", "FALSE"],
+  niveladores: ["NIV-001", "Nivelador 1,5 mm", "1,5", "Pacote 100 un", "100", "0,50", "35,90", "39,90", "44,90", "49,90", "54,90", "FALSE"],
 };
 
 function normalizeCSVHeader(value: string): string {
@@ -3258,6 +3266,7 @@ function buildProductsFromTemplateCSV(csvText: string): Omit<Product, "id">[] {
         preco2: parsePrice(getRowValue(row, headerMap, "Preco2", "Preço2")),
         preco3: parsePrice(getRowValue(row, headerMap, "Preco3", "Preço3")),
         preco4: parsePrice(getRowValue(row, headerMap, "Preco4", "Preço4")),
+        preco5: parsePrice(getRowValue(row, headerMap, "Preco5", "Preço5")),
         descontinuado: parseBool(getRowValue(row, headerMap, "Descontinuado")),
         marca: "Villagres",
         categoriaComplementar: "",
@@ -3291,6 +3300,7 @@ function buildProductsFromTemplateCSV(csvText: string): Omit<Product, "id">[] {
       preco2: parsePrice(getRowValue(row, headerMap, "Preco2", "Preço2")),
       preco3: parsePrice(getRowValue(row, headerMap, "Preco3", "Preço3")),
       preco4: parsePrice(getRowValue(row, headerMap, "Preco4", "Preço4")),
+      preco5: parsePrice(getRowValue(row, headerMap, "Preco5", "Preço5")),
       descontinuado: parseBool(getRowValue(row, headerMap, "Descontinuado")),
       marca: "Villacol",
       categoriaComplementar,
@@ -3388,6 +3398,7 @@ function ProductEditModal({ product, onSave, onClose }: {
         preco2: form.preco2 != null && form.preco2 !== "" ? parseFloat(String(form.preco2).replace(",", ".")) : null,
         preco3: form.preco3 != null && form.preco3 !== "" ? parseFloat(String(form.preco3).replace(",", ".")) : null,
         preco4: form.preco4 != null && form.preco4 !== "" ? parseFloat(String(form.preco4).replace(",", ".")) : null,
+        preco5: form.preco5 != null && form.preco5 !== "" ? parseFloat(String(form.preco5).replace(",", ".")) : null,
         faces: parseInt(String(form.faces)) || 0,
         localUso: parseInt(String(form.localUso)) || 3,
         m2PorCaixa: parseFloat(String(form.m2PorCaixa).replace(",", ".")) || (form.marca === "Villacol" ? 1 : 0),
@@ -3580,8 +3591,8 @@ function ProductEditModal({ product, onSave, onClose }: {
 
           <div>
             <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Tabelas de Preço {isVillacol ? "(R$/unidade ou embalagem)" : "(R$/m²)"}</p>
-            <div className="grid grid-cols-4 gap-2">
-              {([1, 2, 3, 4] as const).map((t) => (
+            <div className="grid grid-cols-5 gap-2">
+              {([1, 2, 3, 4, 5] as const).map((t) => (
                 <div key={t}>
                   <label className="text-xs text-muted-foreground mb-1 block text-center">Tab. {t}</label>
                   <input
@@ -3635,7 +3646,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
   const [localUso, setLocalUso] = useState("");
   const [marcaFiltro, setMarcaFiltro] = useState("");
   const [categoriaFiltro, setCategoriaFiltro] = useState("");
-  const [tabela, setTabela] = useState<1 | 2 | 3 | 4>(1);
+  const [tabela, setTabela] = useState<1 | 2 | 3 | 4 | 5>(1);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ created: number; updated: number; total: number } | null>(null);
@@ -3781,7 +3792,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
         </select>
         <div className="flex items-center gap-1 border border-border rounded-xl px-3 bg-card h-[38px]">
           <span className="text-xs text-muted-foreground">Tab.</span>
-          {([1, 2, 3, 4] as const).map((t) => (
+          {([1, 2, 3, 4, 5] as const).map((t) => (
             <button key={t} onClick={() => setTabela(t)}
               className={`w-6 h-6 rounded text-xs font-semibold transition-all ${tabela === t ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>
               {t}

@@ -3279,10 +3279,11 @@ function createEmptyProduct(marca: "Villagres" | "Villacol" | "Villa Vinílicos"
 }
 
 
-type ProductTemplateKind = "villagres" | "argamassas" | "rejuntes" | "niveladores";
+type ProductTemplateKind = "villagres" | "villa_vinilicos" | "argamassas" | "rejuntes" | "niveladores";
 
 const PRODUCT_TEMPLATE_LABELS: Record<ProductTemplateKind, string> = {
   villagres: "Produtos Villagres",
+  villa_vinilicos: "Villa Vinílicos",
   argamassas: "Argamassas",
   rejuntes: "Rejuntes",
   niveladores: "Niveladores",
@@ -3290,6 +3291,7 @@ const PRODUCT_TEMPLATE_LABELS: Record<ProductTemplateKind, string> = {
 
 const PRODUCT_TEMPLATE_HEADERS: Record<ProductTemplateKind, string[]> = {
   villagres: ["Formato", "Referencia", "Linha", "Colecao", "Cor", "Superficie", "Faces", "Variacao", "LocalUso", "Derivacao", "M2PorCaixa", "PecasPorCaixa", "M2PorPallet", "CxPorPallet", "PesoBrutoM2", "PesoBrutoCx", "EspessuraMm", "Preco1", "Preco2", "Preco3", "Preco4", "Preco5", "Descontinuado"],
+  villa_vinilicos: ["Formato", "Referência", "Linha", "Coleção", "Cor", "Superfície", "Faces", "Capa Desgaste", "Local de Uso", "Derivação", "m2/cx", "peças/cx", "m2/pallet", "cx/pallet", "peso bruto/m2", "peso bruto/cx", "Espessura mm", "Preço T1", "Preço T2", "Preço T3", "Preço T4", "Preço T5"],
   argamassas: ["Referencia", "NomeComercial", "TipoEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Preco5", "Descontinuado"],
   rejuntes: ["Referencia", "NomeComercial", "Cor", "TipoRejunte", "TipoEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Preco5", "Descontinuado"],
   niveladores: ["Referencia", "NomeComercial", "EspessuraMm", "TipoEmbalagem", "QuantidadePorEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Preco5", "Descontinuado"],
@@ -3297,6 +3299,7 @@ const PRODUCT_TEMPLATE_HEADERS: Record<ProductTemplateKind, string[]> = {
 
 const PRODUCT_TEMPLATE_EXAMPLES: Record<ProductTemplateKind, string[]> = {
   villagres: ["60x60", "REF-001", "Nome da Linha", "Nome Coleção", "Bege", "Polido", "1", "-", "3", "-", "1,44", "6", "43,20", "30", "18,50", "26,65", "9,00", "45,90", "49,90", "54,90", "59,90", "64,90", "FALSE"],
+  villa_vinilicos: ["18x122", "SPC-001", "Piso Vinílico Carvalho", "Coleção Vinílicos", "Carvalho", "Texturizado", "8", "0,30", "3", "Classe 32", "2,20", "10", "88,00", "40", "8,50", "18,70", "4,00", "89,90", "94,90", "99,90", "104,90", "109,90"],
   argamassas: ["ARG-001", "Argamassa ACIII", "Saco 20 kg", "20", "29,90", "32,90", "35,90", "39,90", "44,90", "FALSE"],
   rejuntes: ["REJ-001", "Rejunte Acrílico", "Branco", "Acrílico", "Pote 1 kg", "1", "18,90", "20,90", "22,90", "24,90", "26,90", "FALSE"],
   niveladores: ["NIV-001", "Nivelador 1,5 mm", "1,5", "Pacote 100 un", "100", "0,50", "35,90", "39,90", "44,90", "49,90", "54,90", "FALSE"],
@@ -3323,6 +3326,7 @@ function buildProductTemplateCSV(kind: ProductTemplateKind): string {
 }
 
 function inferTemplateKindFromHeaders(headerMap: Record<string, number>): ProductTemplateKind {
+  if (headerMap[normalizeCSVHeader("Capa Desgaste")] != null || headerMap[normalizeCSVHeader("peso bruto/m2")] != null || headerMap[normalizeCSVHeader("Preço T5")] != null) return "villa_vinilicos";
   if (headerMap[normalizeCSVHeader("Superficie")] != null || headerMap[normalizeCSVHeader("Formato")] != null) return "villagres";
   if (headerMap[normalizeCSVHeader("TipoRejunte")] != null || headerMap[normalizeCSVHeader("Cor")] != null) return "rejuntes";
   if (headerMap[normalizeCSVHeader("QuantidadePorEmbalagem")] != null || headerMap[normalizeCSVHeader("EspessuraMm")] != null) return "niveladores";
@@ -3346,7 +3350,7 @@ function buildProductsFromTemplateCSV(csvText: string): Omit<Product, "id">[] {
     const nome = getRowValue(row, headerMap, "NomeComercial", "Linha", "Nome").trim();
     if (!referencia && !nome) return null;
 
-    if (kind === "villagres") {
+    if (kind === "villagres" || kind === "villa_vinilicos") {
       return {
         formato: getRowValue(row, headerMap, "Formato"),
         referencia,
@@ -3355,23 +3359,23 @@ function buildProductsFromTemplateCSV(csvText: string): Omit<Product, "id">[] {
         cor: getRowValue(row, headerMap, "Cor"),
         superficie: getRowValue(row, headerMap, "Superficie", "Superfície"),
         faces: parseInt(getRowValue(row, headerMap, "Faces")) || 0,
-        variacao: getRowValue(row, headerMap, "Variacao", "Variação"),
-        localUso: parseInt(getRowValue(row, headerMap, "LocalUso")) || 3,
+        variacao: getRowValue(row, headerMap, "Variacao", "Variação", "Capa Desgaste"),
+        localUso: parseInt(getRowValue(row, headerMap, "LocalUso", "Local de Uso")) || 3,
         derivacao: getRowValue(row, headerMap, "Derivacao", "Derivação"),
-        m2PorCaixa: parseNum(getRowValue(row, headerMap, "M2PorCaixa")),
-        pecasPorCaixa: parseInt(getRowValue(row, headerMap, "PecasPorCaixa", "PeçasPorCaixa")) || 0,
-        m2PorPallet: parseNum(getRowValue(row, headerMap, "M2PorPallet")),
-        cxPorPallet: parseInt(getRowValue(row, headerMap, "CxPorPallet")) || 0,
-        pesoBrutoM2: parseNum(getRowValue(row, headerMap, "PesoBrutoM2")),
-        pesoBrutoCx: parseNum(getRowValue(row, headerMap, "PesoBrutoCx", "PesoKg")),
-        espessuraMm: parseNum(getRowValue(row, headerMap, "EspessuraMm")),
-        preco1: parsePrice(getRowValue(row, headerMap, "Preco1", "Preço1")),
-        preco2: parsePrice(getRowValue(row, headerMap, "Preco2", "Preço2")),
-        preco3: parsePrice(getRowValue(row, headerMap, "Preco3", "Preço3")),
-        preco4: parsePrice(getRowValue(row, headerMap, "Preco4", "Preço4")),
-        preco5: parsePrice(getRowValue(row, headerMap, "Preco5", "Preço5")),
+        m2PorCaixa: parseNum(getRowValue(row, headerMap, "M2PorCaixa", "m2/cx", "m²/cx")),
+        pecasPorCaixa: parseInt(getRowValue(row, headerMap, "PecasPorCaixa", "PeçasPorCaixa", "peças/cx", "pecas/cx")) || 0,
+        m2PorPallet: parseNum(getRowValue(row, headerMap, "M2PorPallet", "m2/pallet", "m²/pallet")),
+        cxPorPallet: parseInt(getRowValue(row, headerMap, "CxPorPallet", "cx/pallet")) || 0,
+        pesoBrutoM2: parseNum(getRowValue(row, headerMap, "PesoBrutoM2", "peso bruto/m2", "peso bruto/m²")),
+        pesoBrutoCx: parseNum(getRowValue(row, headerMap, "PesoBrutoCx", "PesoKg", "peso bruto/cx")),
+        espessuraMm: parseNum(getRowValue(row, headerMap, "EspessuraMm", "Espessura mm")),
+        preco1: parsePrice(getRowValue(row, headerMap, "Preco1", "Preço1", "Preço T1")),
+        preco2: parsePrice(getRowValue(row, headerMap, "Preco2", "Preço2", "Preço T2")),
+        preco3: parsePrice(getRowValue(row, headerMap, "Preco3", "Preço3", "Preço T3")),
+        preco4: parsePrice(getRowValue(row, headerMap, "Preco4", "Preço4", "Preço T4")),
+        preco5: parsePrice(getRowValue(row, headerMap, "Preco5", "Preço5", "Preço T5")),
         descontinuado: parseBool(getRowValue(row, headerMap, "Descontinuado")),
-        marca: "Villagres",
+        marca: kind === "villa_vinilicos" ? "Villa Vinílicos" : "Villagres",
         categoriaComplementar: "",
         tipoRejunte: "",
         tipoEmbalagem: "",
@@ -3657,8 +3661,8 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
                   <input {...field("faces")} inputMode="numeric" className={inputCls} />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Variação</label>
-                  <input {...field("variacao")} placeholder="Ex.: V1, V2, V3" className={inputCls} />
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{isVillaVinilicos ? "Capa Desgaste" : "Variação"}</label>
+                  <input {...field("variacao")} placeholder={isVillaVinilicos ? "Ex.: 0,30" : "Ex.: V1, V2, V3"} className={inputCls} />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-muted-foreground mb-1 block">Local de uso</label>

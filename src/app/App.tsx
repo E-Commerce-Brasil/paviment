@@ -968,13 +968,21 @@ function normalizeText(value?: string | null): string {
   return (value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
 
+function getSearchableProductText(product?: Product | null): string {
+  if (!product) return "";
+  return normalizeText([product.marca, product.linha, product.colecao, product.superficie, product.derivacao, product.tipoEmbalagem, product.referencia, product.formato].filter(Boolean).join(" "));
+}
+
+function isVillaVinilicosProduct(product?: Product | null): boolean {
+  const productText = getSearchableProductText(product);
+  return productText.includes("villa vinil") || productText.includes("vinilico");
+}
+
 function isVillaVinilicosBaseboard(product?: Product | null): boolean {
   if (!product || isVillacolProduct(product)) return false;
-  const brand = normalizeText(product.marca);
-  const productText = normalizeText([product.linha, product.colecao, product.superficie, product.derivacao, product.tipoEmbalagem, product.referencia].filter(Boolean).join(" "));
-  const isVillaVinilicos = brand.includes("villa vinil") || productText.includes("vinilico");
-  const isBaseboard = productText.includes("rodape") || normalizeText(product.formato).includes("rodape");
-  return isVillaVinilicos && isBaseboard;
+  const productText = getSearchableProductText(product);
+  const isBaseboard = productText.includes("rodape");
+  return isVillaVinilicosProduct(product) && isBaseboard;
 }
 
 function getProductQuantityLabel(product?: Product | null): string {
@@ -1341,6 +1349,7 @@ function ProductModal({
               className="border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
               <option value="">Todas as marcas</option>
               <option value="Villagres">Villagres</option>
+              <option value="Villa Vinílicos">Villa Vinílicos</option>
               <option value="Villacol">Villacol</option>
             </select>
             <select value={categoriaFiltro} onChange={(e) => setCategoriaFiltro(e.target.value)}
@@ -2994,7 +3003,7 @@ async function createProduct(product: Omit<Product, "id">): Promise<Product> {
   return mapProduct(data);
 }
 
-function createEmptyProduct(marca: "Villagres" | "Villacol" = "Villagres"): Product {
+function createEmptyProduct(marca: string = "Villagres"): Product {
   return {
     id: "",
     marca,
@@ -3116,7 +3125,7 @@ function ProductEditModal({ product, onSave, onClose }: {
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <div>
             <h3 className="font-semibold">{isNew ? "Novo Produto" : "Editar Produto"}</h3>
-            <p className="text-xs text-muted-foreground font-mono">{isNew ? "Cadastre Villagres ou Villacol" : `Ref: ${product.referencia}`}</p>
+            <p className="text-xs text-muted-foreground font-mono">{isNew ? "Cadastre Villagres, Villa Vinílicos ou Villacol" : `Ref: ${product.referencia}`}</p>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X size={18} /></button>
         </div>
@@ -3127,6 +3136,7 @@ function ProductEditModal({ product, onSave, onClose }: {
               <label className="text-xs font-medium text-muted-foreground mb-1 block">Marca</label>
               <select value={form.marca} onChange={(e) => handleMarcaChange(e.target.value)} className={inputCls}>
                 <option value="Villagres">Villagres</option>
+                <option value="Villa Vinílicos">Villa Vinílicos</option>
                 <option value="Villacol">Villacol</option>
               </select>
             </div>
@@ -3368,8 +3378,48 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
   });
 
   const descontinuadosCount = products.filter((p) => p.descontinuado).length;
+  const villaVinilicosProducts = products.filter((p) => isVillaVinilicosProduct(p));
+  const villaVinilicosBaseboards = products.filter((p) => isVillaVinilicosBaseboard(p));
 
   const pk = priceKey(tabela);
+
+  function formatCSVValue(value: string | number | boolean | null | undefined): string {
+    const raw = value == null ? "" : String(value);
+    return /[";\n\r]/.test(raw) ? `"${raw.replace(/"/g, '""')}"` : raw;
+  }
+
+  function formatCSVNumber(value: number | null | undefined): string {
+    if (value == null || !Number.isFinite(Number(value))) return "";
+    return String(value).replace(".", ",");
+  }
+
+  function downloadProductsCSV(fileName: string, rows: Product[]) {
+    if (rows.length === 0) {
+      toast.error("Nenhum produto encontrado para exportar.");
+      return;
+    }
+    const headers = [
+      "Marca", "Formato", "Referencia", "Linha", "Colecao", "Cor", "Superficie", "Faces", "Variacao", "LocalUso", "Derivacao",
+      "M2PorCaixa", "PecasPorCaixa", "M2PorPallet", "CxPorPallet", "PesoBrutoM2", "PesoBrutoCx", "EspessuraMm",
+      "Preco1", "Preco2", "Preco3", "Preco4", "Descontinuado", "CategoriaComplementar", "TipoRejunte", "TipoEmbalagem",
+      "UnidadeCalculo", "MetrosPorPeca", "MetrosPorCaixa",
+    ];
+    const lines = rows.map((product) => [
+      product.marca, product.formato, product.referencia, product.linha, product.colecao, product.cor, product.superficie, product.faces, product.variacao, product.localUso, product.derivacao,
+      formatCSVNumber(product.m2PorCaixa), product.pecasPorCaixa, formatCSVNumber(product.m2PorPallet), product.cxPorPallet, formatCSVNumber(product.pesoBrutoM2), formatCSVNumber(product.pesoBrutoCx), formatCSVNumber(product.espessuraMm),
+      formatCSVNumber(product.preco1), formatCSVNumber(product.preco2), formatCSVNumber(product.preco3), formatCSVNumber(product.preco4), product.descontinuado ? "Sim" : "Não", product.categoriaComplementar, product.tipoRejunte, product.tipoEmbalagem,
+      getProductQuantityLabel(product), formatCSVNumber(calculateLinearMetersPerPiece(product)), formatCSVNumber(calculateLinearMetersPerBox(product)),
+    ].map(formatCSVValue).join(";"));
+    const csv = [headers.join(";"), ...lines].join("\n");
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`${rows.length} produtos exportados.`);
+  }
 
   function handleProductSaved(updated: Product) {
     setProducts((ps) => {
@@ -3444,6 +3494,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
           className="border border-border rounded-xl px-3 py-2.5 text-xs bg-card focus:outline-none">
           <option value="">Todas as marcas</option>
           <option value="Villagres">Villagres</option>
+          <option value="Villa Vinílicos">Villa Vinílicos</option>
           <option value="Villacol">Villacol</option>
         </select>
         <select value={categoriaFiltro} onChange={(e) => setCategoriaFiltro(e.target.value)}
@@ -3480,12 +3531,30 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
           className="flex items-center gap-1.5 bg-primary text-primary-foreground rounded-xl px-3 py-2 text-xs hover:opacity-90 transition-opacity">
           <Plus size={12} /> Novo Produto
         </button>
+        <button type="button" onClick={() => setEditingProduct({ ...createEmptyProduct("Villa Vinílicos"), colecao: "Vinílico", superficie: "Vinílico", linha: "Rodapé" })}
+          className="flex items-center gap-1.5 border border-primary text-primary rounded-xl px-3 py-2 text-xs hover:bg-primary/10 transition-colors">
+          <Plus size={12} /> Novo Rodapé
+        </button>
 
         {/* Toggle descontinuados */}
         <button onClick={() => setShowDescontinuados((v) => !v)}
           className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs border transition-colors ${showDescontinuados ? "bg-amber-100 border-amber-300 text-amber-800" : "border-border text-muted-foreground hover:bg-muted"}`}>
           {showDescontinuados ? <Check size={12} /> : <X size={12} />}
           Descontinuados {descontinuadosCount > 0 && `(${descontinuadosCount})`}
+        </button>
+
+        {/* Product exports */}
+        <button type="button" onClick={() => downloadProductsCSV("produtos_filtrados_paviment.csv", filtered)}
+          className="flex items-center gap-1.5 border border-border rounded-xl px-3 py-2 text-xs hover:bg-muted transition-colors text-muted-foreground">
+          <Copy size={12} /> Exportar Produtos
+        </button>
+        <button type="button" onClick={() => downloadProductsCSV("produtos_villa_vinilicos.csv", villaVinilicosProducts)}
+          className="flex items-center gap-1.5 border border-border rounded-xl px-3 py-2 text-xs hover:bg-muted transition-colors text-muted-foreground">
+          <Copy size={12} /> Villa Vinílicos ({villaVinilicosProducts.length})
+        </button>
+        <button type="button" onClick={() => downloadProductsCSV("rodapes_villa_vinilicos.csv", villaVinilicosBaseboards)}
+          className="flex items-center gap-1.5 border border-border rounded-xl px-3 py-2 text-xs hover:bg-muted transition-colors text-muted-foreground">
+          <Copy size={12} /> Rodapés ({villaVinilicosBaseboards.length})
         </button>
 
         {/* Export template */}

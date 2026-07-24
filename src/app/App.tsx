@@ -56,6 +56,14 @@ interface PricingSettings {
   fretePor100Kg: number;
 }
 
+interface AppUser {
+  id: string;
+  username: string;
+  label: string;
+  isAdmin: boolean;
+  active: boolean;
+}
+
 interface Customer {
   id: string;
   nome: string;
@@ -260,6 +268,18 @@ CREATE TABLE IF NOT EXISTS customers (
 );
 ALTER TABLE customers DISABLE ROW LEVEL SECURITY;
 
+CREATE TABLE IF NOT EXISTS app_users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  username TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE app_users DISABLE ROW LEVEL SECURITY;
+
 CREATE TABLE IF NOT EXISTS budgets (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   numero INTEGER GENERATED ALWAYS AS IDENTITY,
@@ -384,6 +404,39 @@ async function checkTablesExist(): Promise<boolean> {
 async function getProductCount(): Promise<number> {
   const { count } = await supabase.from("products").select("*", { count: "exact", head: true });
   return count || 0;
+}
+
+async function fetchAppUsers(): Promise<AppUser[]> {
+  const { data, error } = await supabase
+    .from("app_users")
+    .select("id, username, display_name, is_admin, active")
+    .order("username");
+  if (error) throw error;
+  return (data || []).map((user) => ({
+    id: user.id,
+    username: user.username || "",
+    label: user.display_name || user.username || "",
+    isAdmin: user.is_admin === true,
+    active: user.active !== false,
+  }));
+}
+
+async function updateUserAdminRole(user: AppUser, isAdmin: boolean): Promise<void> {
+  if (user.isAdmin && !isAdmin) {
+    const { count, error: countError } = await supabase
+      .from("app_users")
+      .select("id", { count: "exact", head: true })
+      .eq("is_admin", true)
+      .eq("active", true);
+    if (countError) throw countError;
+    if ((count ?? 0) <= 1) throw new Error("O sistema precisa manter pelo menos um administrador ativo.");
+  }
+
+  const { error } = await supabase
+    .from("app_users")
+    .update({ is_admin: isAdmin, updated_at: new Date().toISOString() })
+    .eq("id", user.id);
+  if (error) throw error;
 }
 
 async function seedProducts(products: Omit<Product, "id">[]): Promise<void> {
@@ -3586,6 +3639,83 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
   );
 }
 
+// ── Users ─────────────────────────────────────────────────────────
+
+function UsersTab() {
+  const [users, setUsers] = useState<AppUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [savingId, setSavingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchAppUsers()
+      .then(setUsers)
+      .catch((error) => toast.error("Erro ao carregar usuários: " + error.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function handleRoleChange(user: AppUser, isAdmin: boolean) {
+    if (user.isAdmin === isAdmin) return;
+    setSavingId(user.id);
+    try {
+      await updateUserAdminRole(user, isAdmin);
+      setUsers((current) => current.map((item) => item.id === user.id ? { ...item, isAdmin } : item));
+      toast.success(`${user.label} agora é ${isAdmin ? "administrador" : "usuário comum"}.`);
+    } catch (error: any) {
+      toast.error("Erro ao alterar perfil: " + error.message);
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="font-semibold mb-1">Usuários</h2>
+        <p className="text-sm text-muted-foreground">Defina o nível de acesso de cada usuário.</p>
+      </div>
+      <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-sm">
+        {loading ? (
+          <div className="flex justify-center py-10"><Spinner /></div>
+        ) : users.length === 0 ? (
+          <div className="py-10 text-center text-sm text-muted-foreground">Nenhum usuário cadastrado.</div>
+        ) : (
+          <div className="divide-y divide-border">
+            {users.map((user) => (
+              <div key={user.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 px-5 py-4">
+                <div>
+                  <p className="font-medium text-sm">{user.label}</p>
+                  <p className="text-xs text-muted-foreground font-mono">
+                    {user.username}{!user.active && " · inativo"}
+                  </p>
+                </div>
+                <fieldset className="flex items-center gap-4" disabled={savingId === user.id || !user.active}>
+                  <legend className="sr-only">Perfil de {user.label}</legend>
+                  {([
+                    { value: false, label: "Usuário" },
+                    { value: true, label: "Admin" },
+                  ] as const).map((role) => (
+                    <label key={String(role.value)} className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input
+                        type="radio"
+                        name={`role-${user.id}`}
+                        checked={user.isAdmin === role.value}
+                        onChange={() => handleRoleChange(user, role.value)}
+                        className="h-4 w-4 accent-primary"
+                      />
+                      {role.label}
+                    </label>
+                  ))}
+                  {savingId === user.id && <Spinner size={13} />}
+                </fieldset>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Customer Search (Home) ────────────────────────────────────────
 
 function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSettingsChange, onProductsChange, onOpenBudgetById }: {
@@ -3596,7 +3726,7 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
   onProductsChange: (products: Product[]) => void;
   onOpenBudgetById: (budgetId: string, customerId: string) => void;
 }) {
-  const [tab, setTab] = useState<"orcamentos" | "clientes" | "produtos">("orcamentos");
+  const [tab, setTab] = useState<"orcamentos" | "clientes" | "produtos" | "usuarios">("orcamentos");
   const [q, setQ] = useState("");
   const [results, setResults] = useState<Customer[]>([]);
   const [searching, setSearching] = useState(false);
@@ -3697,6 +3827,7 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
     { key: "orcamentos", label: "Orçamentos" },
     { key: "clientes", label: "Clientes" },
     { key: "produtos", label: "Produtos" },
+    { key: "usuarios", label: "Usuários" },
   ] as const;
 
   return (
@@ -4009,6 +4140,7 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
 
         {tab === "clientes" && <AllCustomersTab onSelect={onSelect} />}
         {tab === "produtos" && <AllProductsTab allProducts={allProducts} pricingSettings={pricingSettings} onPricingSettingsChange={onPricingSettingsChange} onProductsChange={onProductsChange} />}
+        {tab === "usuarios" && <UsersTab />}
       </div>
     </div>
   );

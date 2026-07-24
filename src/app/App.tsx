@@ -848,7 +848,7 @@ function calculateBudgetTotal(subtotal: number, frete: number, formaPagamento: F
 }
 
 async function recalcBudgetTotals(budget: Budget): Promise<void> {
-  const subtotal = budget.items.reduce((s, i) => s + i.subtotal, 0);
+  const subtotal = budget.items.reduce((s, i) => s + calculateItemSubtotal(i), 0);
   const totalFinal = calculateBudgetTotal(subtotal, budget.frete, budget.formaPagamento, budget.descontoPixPercentual, budget.descontoPixIncluiFrete);
   await saveBudgetFields(budget.id, { subtotal: round2(subtotal), total_final: round2(totalFinal) });
 }
@@ -884,10 +884,10 @@ async function addBudgetItem(budgetId: string, item: {
   };
 }
 
-async function updateBudgetItem(id: string, areaM2: number, caixas: number, precoM2: number): Promise<void> {
+async function updateBudgetItem(id: string, areaM2: number, caixas: number, precoM2: number, subtotal: number): Promise<void> {
   const { error } = await supabase
     .from("budget_items")
-    .update({ area_m2: areaM2, caixas, subtotal: round2(areaM2 * precoM2) })
+    .update({ area_m2: areaM2, caixas, preco_m2: precoM2, subtotal: round2(subtotal) })
     .eq("id", id);
   if (error) throw error;
 }
@@ -971,10 +971,43 @@ function getComplementaryUnitLabel(product?: Product | null, plural = false): st
   return plural ? "unidades" : "unidade";
 }
 
+function isBaseboardProduct(product?: Product | null): boolean {
+  const searchable = [product?.linha, product?.colecao, product?.formato, product?.derivacao, product?.categoriaComplementar]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return searchable.includes("rodap");
+}
+
+function getSalesUnitLabel(product?: Product | null, plural = false): string {
+  if (isBaseboardProduct(product)) return plural ? "metros lineares" : "metro linear";
+  return "m²";
+}
+
+function getSalesUnitAbbr(product?: Product | null): string {
+  if (isBaseboardProduct(product)) return "m linear";
+  return "m²";
+}
+
+function getBoxCoverageLabel(product?: Product | null): string {
+  if (isBaseboardProduct(product)) return "m linear/cx";
+  return "m²/cx";
+}
+
 function calculateItemRealAreaM2(item: BudgetItem): number {
   const caixas = Number.isFinite(item.caixas) ? item.caixas : 0;
   const m2PorCaixa = Number.isFinite(item.product?.m2PorCaixa) ? item.product.m2PorCaixa : 0;
   return round2(caixas * m2PorCaixa);
+}
+
+function calculateBudgetLineSubtotal(product: Product | null | undefined, requestedQuantity: number, caixas: number, unitPrice: number): number {
+  if (isVillacolProduct(product)) return round2(requestedQuantity * unitPrice);
+  const boxCoverage = Number.isFinite(product?.m2PorCaixa) ? product?.m2PorCaixa || 0 : 0;
+  return round2(caixas * boxCoverage * unitPrice);
+}
+
+function calculateItemSubtotal(item: BudgetItem): number {
+  return calculateBudgetLineSubtotal(item.product, item.areaM2, item.caixas, item.precoM2);
 }
 
 function calculateItemWeightKg(item: BudgetItem): number {
@@ -1190,7 +1223,7 @@ function ProductModal({
               <>
                 <p className="text-sm text-muted-foreground mt-0.5">{selected.colecao} · {selected.superficie}</p>
                 <p className="text-xs text-muted-foreground mt-0.5 font-mono">{selected.formato} · Ref: {selected.referencia}</p>
-                <p className="text-xs text-muted-foreground">{LOCAL_USO[selected.localUso]} · {selected.m2PorCaixa} m²/cx · {selected.espessuraMm}mm</p>
+                <p className="text-xs text-muted-foreground">{LOCAL_USO[selected.localUso]} · {selected.m2PorCaixa} {getBoxCoverageLabel(selected)} · {selected.espessuraMm}mm</p>
               </>
             )}
           </div>
@@ -1209,7 +1242,7 @@ function ProductModal({
             <div className="bg-primary/8 rounded-xl p-3 mb-4 flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Tabela {selectedTabela}</span>
               <span className="text-xl font-semibold text-primary font-mono">
-                {fmtBRL(price)}<span className="text-sm font-normal text-muted-foreground">{selectedIsVillacol ? "/un." : "/m²"}</span>
+                {fmtBRL(price)}<span className="text-sm font-normal text-muted-foreground">{selectedIsVillacol ? "/un." : `/${getSalesUnitAbbr(selected)}`}</span>
               </span>
             </div>
           ) : (
@@ -1217,9 +1250,9 @@ function ProductModal({
               <AlertTriangle size={14} /> Preço não disponível para tabela {selectedTabela}
             </div>
           )}
-          <label className="block text-xs font-medium text-muted-foreground mb-1">{selectedIsVillacol ? `Quantidade de ${getComplementaryUnitLabel(selected, true)}` : "Área necessária (m²)"}</label>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">{selectedIsVillacol ? `Quantidade de ${getComplementaryUnitLabel(selected, true)}` : `Quantidade necessária (${getSalesUnitAbbr(selected)})`}</label>
           <input type="text" value={areaInput} onChange={(e) => setAreaInput(e.target.value)}
-            placeholder={selectedIsVillacol ? "Ex: 10" : "Ex: 45,50"} autoFocus
+            placeholder={selectedIsVillacol ? "Ex: 10" : isBaseboardProduct(selected) ? "Ex: 30,00" : "Ex: 45,50"} autoFocus
             onKeyDown={(e) => e.key === "Enter" && confirmAdd()}
             className="w-full border border-border rounded-xl px-4 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 mb-3 font-mono" />
           {area > 0 && selected.m2PorCaixa > 0 && (
@@ -1230,14 +1263,14 @@ function ProductModal({
               </div>
               {!selectedIsVillacol && (
                 <div className="flex justify-between text-muted-foreground">
-                  <span>m² real (arredondado)</span>
-                  <span className="font-mono text-foreground">{(caixas * selected.m2PorCaixa).toFixed(2)} m²</span>
+                  <span>{getSalesUnitLabel(selected)} real (arredondado)</span>
+                  <span className="font-mono text-foreground">{(caixas * selected.m2PorCaixa).toFixed(2)} {getSalesUnitAbbr(selected)}</span>
                 </div>
               )}
               {price && (
                 <div className="flex justify-between pt-1.5 border-t border-border font-medium">
                   <span>Subtotal estimado</span>
-                  <span className="font-mono text-primary">{fmtBRL(area * price)}</span>
+                  <span className="font-mono text-primary">{fmtBRL(calculateBudgetLineSubtotal(selected, area, caixas, price))}</span>
                 </div>
               )}
             </div>
@@ -1342,7 +1375,7 @@ function ProductModal({
                         {finalPrice != null
                           ? <p className="text-sm font-semibold text-primary font-mono">{fmtBRL(finalPrice)}/m²</p>
                           : <p className="text-xs text-amber-600">Consultar</p>}
-                        <p className="text-xs text-muted-foreground">{p.m2PorCaixa} m²/cx</p>
+                        <p className="text-xs text-muted-foreground">{p.m2PorCaixa} {getBoxCoverageLabel(p)}</p>
                       </div>
                     </div>
                   </button>
@@ -1423,10 +1456,10 @@ function BudgetEditor({
   const pixPriceFactor = cardFactor > 0 ? taxOnlyFactor / cardFactor : 1;
   const noTaxOrCardFactor = cardFactor > 0 ? 1 / cardFactor : 1;
   const paymentPriceFactor = budget.formaPagamento === "avista_pix" ? pixPriceFactor : 1;
-  const villagresSubtotal = round2(villagresItems.reduce((sum, item) => sum + item.subtotal * paymentPriceFactor, 0));
+  const villagresSubtotal = round2(villagresItems.reduce((sum, item) => sum + calculateItemSubtotal(item) * paymentPriceFactor, 0));
   const argamassaSubtotal = round2(topFinancialItems
     .filter((item) => item.product?.categoriaComplementar === "Argamassa")
-    .reduce((sum, item) => sum + item.subtotal * paymentPriceFactor, 0));
+    .reduce((sum, item) => sum + calculateItemSubtotal(item) * paymentPriceFactor, 0));
   const topSubtotalBeforeDiscount = round2(villagresSubtotal + argamassaSubtotal);
   const topSubtotalLabel = budget.formaPagamento === "cartao"
     ? `Subtotal Cartão ${budget.parcelasCartao}x`
@@ -1482,7 +1515,7 @@ function BudgetEditor({
 
   function updateLocal(patch: Partial<Budget>) {
     const updated = { ...budget, ...patch };
-    const subtotal = updated.items.reduce((s, i) => s + i.subtotal, 0);
+    const subtotal = updated.items.reduce((s, i) => s + calculateItemSubtotal(i), 0);
     const totalFinal = calculateBudgetTotal(subtotal, updated.frete, updated.formaPagamento, updated.descontoPixPercentual, updated.descontoPixIncluiFrete);
     const final = { ...updated, subtotal: round2(subtotal), totalFinal: round2(totalFinal) };
     if (Object.prototype.hasOwnProperty.call(patch, "frete")) {
@@ -1522,7 +1555,7 @@ function BudgetEditor({
       return;
     }
     if (!product.m2PorCaixa || product.m2PorCaixa <= 0) {
-      toast.error("Produto sem m²/caixa válido. Corrija o cadastro antes de adicionar.");
+      toast.error(`Produto sem ${getBoxCoverageLabel(product)} válido. Corrija o cadastro antes de adicionar.`);
       return;
     }
     const precoM2 = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
@@ -1534,7 +1567,7 @@ function BudgetEditor({
     setSaving(true);
     try {
       const newItem = await addBudgetItem(budget.id, {
-        productId: product.id, product, areaM2, caixas, precoM2, subtotal: round2(areaM2 * precoM2),
+        productId: product.id, product, areaM2, caixas, precoM2, subtotal: calculateBudgetLineSubtotal(product, areaM2, caixas, precoM2),
       });
       const nextItems = [...budget.items, newItem];
       const b = updateLocal({ ...getSentBudgetDraftPatch(), items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
@@ -1592,8 +1625,9 @@ function BudgetEditor({
     const caixas = item.product.m2PorCaixa > 0 ? Math.ceil(newArea / item.product.m2PorCaixa) : item.caixas;
     setSaving(true);
     try {
-      await updateBudgetItem(itemId, newArea, caixas, newPrecoM2);
-      const updatedItem = { ...item, areaM2: newArea, caixas, precoM2: newPrecoM2, subtotal: round2(newArea * newPrecoM2) };
+      const subtotal = calculateBudgetLineSubtotal(item.product, newArea, caixas, newPrecoM2);
+      await updateBudgetItem(itemId, newArea, caixas, newPrecoM2, subtotal);
+      const updatedItem = { ...item, areaM2: newArea, caixas, precoM2: newPrecoM2, subtotal };
       const nextItems = budget.items.map((i) => i.id === itemId ? updatedItem : i);
       const b = updateLocal({ ...getSentBudgetDraftPatch(), items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
       await persistTotals(b);
@@ -1766,11 +1800,12 @@ function BudgetEditor({
         <td>${p?.colecao ?? ""}${cor ? " / " + cor : ""}</td>
         <td>${p?.formato ?? ""}</td>
         <td style="text-align:right">${fmtBRLStr(item.precoM2)}</td>
-        <td style="text-align:right">${item.areaM2.toFixed(2)}</td>
-        <td style="text-align:right">${calculateItemRealAreaM2(item).toFixed(2)}</td>
-        <td style="text-align:right">${p?.m2PorCaixa ?? ""}</td>
+        <td style="text-align:right">${item.areaM2.toFixed(2)} ${getSalesUnitAbbr(p)}</td>
+        <td style="text-align:right">${item.caixas} cx</td>
+        <td style="text-align:right">${calculateItemRealAreaM2(item).toFixed(2)} ${getSalesUnitAbbr(p)}</td>
+        <td style="text-align:right">${p?.m2PorCaixa ?? ""} ${getBoxCoverageLabel(p)}</td>
         <td style="text-align:right">${fmtKg(calculateItemWeightKg(item))}</td>
-        <td style="text-align:right">${fmtBRLStr(item.subtotal)}</td>
+        <td style="text-align:right">${fmtBRLStr(calculateItemSubtotal(item))}</td>
       </tr>`;
     }).join("");
 
@@ -1810,7 +1845,7 @@ function BudgetEditor({
   .section-header { background: #222; color: #fff; font-weight: 700; font-size: 11px; padding: 4px 8px; margin-bottom: 0; }
   .prod-table th { border: 1px solid #333; padding: 5px 7px; background: #e8e8e8; font-weight: 700; text-align: left; white-space: nowrap; }
   .prod-table td { border: 1px solid #333; padding: 5px 7px; vertical-align: top; }
-  .prod-table th:nth-child(5), .prod-table th:nth-child(6), .prod-table th:nth-child(7), .prod-table th:nth-child(8), .prod-table th:nth-child(9), .prod-table th:nth-child(10) { text-align: right; }
+  .prod-table th:nth-child(5), .prod-table th:nth-child(6), .prod-table th:nth-child(7), .prod-table th:nth-child(8), .prod-table th:nth-child(9), .prod-table th:nth-child(10), .prod-table th:nth-child(11) { text-align: right; }
   .total-row td { border: 1px solid #333; padding: 4px 8px; }
   .total-row td:first-child { font-weight: 700; text-align: right; }
   .total-row td:last-child { font-weight: 700; text-align: right; }
@@ -1849,7 +1884,7 @@ ${rows ? `<div class="section-header">PRODUTOS / ESPECIFICAÇÕES</div>
   <thead>
     <tr>
       <th>Ref</th><th>Linha</th><th>Cor</th><th>Formato</th>
-      <th>Valor m²</th><th>Qnt m²</th><th>M² real</th><th>M²/cx</th><th>Peso total</th><th>Valor R$</th>
+      <th>Preço un.</th><th>Qtd. solicitada</th><th>Caixas</th><th>Qtd. real</th><th>Qtd./cx</th><th>Peso total</th><th>Valor R$</th>
     </tr>
   </thead>
   <tbody>
@@ -1985,10 +2020,10 @@ ${budget.observacoes ? `
                   <tr className="text-xs text-muted-foreground bg-muted/30 border-b border-border">
                     <th className="text-left px-5 py-2.5 font-medium">Produto</th>
                     <th className="text-left px-3 py-2.5 font-medium hidden md:table-cell">Formato</th>
-                    <th className="text-right px-3 py-2.5 font-medium">m²</th>
+                    <th className="text-right px-3 py-2.5 font-medium">Qtd.</th>
                     <th className="text-right px-3 py-2.5 font-medium">Cx</th>
-                    <th className="text-right px-3 py-2.5 font-medium hidden md:table-cell">m² real</th>
-                    <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">R$/m²</th>
+                    <th className="text-right px-3 py-2.5 font-medium hidden md:table-cell">Qtd. real</th>
+                    <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">Preço un.</th>
                     <th className="text-right px-3 py-2.5 font-medium hidden lg:table-cell">Peso</th>
                     <th className="text-right px-3 py-2.5 font-medium">Subtotal</th>
                     <th className="px-3 py-2.5 w-16"></th>
@@ -2060,8 +2095,8 @@ ${budget.observacoes ? `
                         </td>
                         <td className="px-3 py-3 text-right font-mono font-semibold text-sm">
                           {isEditing && previewArea > 0
-                            ? <span className="text-primary">{fmtBRL(previewArea * editPrecoM2)}</span>
-                            : fmtBRL(item.subtotal)}
+                            ? <span className="text-primary">{fmtBRL(calculateBudgetLineSubtotal(item.product, previewArea, previewCx, editPrecoM2))}</span>
+                            : fmtBRL(calculateItemSubtotal(item))}
                         </td>
                         <td className="px-3 py-3">
                           {isEditing ? (
@@ -2165,7 +2200,7 @@ ${budget.observacoes ? `
                             <td className="px-3 py-3 text-right font-mono font-semibold text-sm">
                               {isEditing && previewQty > 0
                                 ? <span className="text-primary">{fmtBRL(previewQty * editPrecoM2)}</span>
-                                : fmtBRL(item.subtotal)}
+                                : fmtBRL(calculateItemSubtotal(item))}
                             </td>
                             <td className="px-3 py-3">
                               {isEditing ? (

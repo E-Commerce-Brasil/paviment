@@ -884,10 +884,10 @@ async function addBudgetItem(budgetId: string, item: {
   };
 }
 
-async function updateBudgetItem(id: string, areaM2: number, caixas: number, precoM2: number): Promise<void> {
+async function updateBudgetItem(id: string, areaM2: number, caixas: number, precoM2: number, subtotal: number): Promise<void> {
   const { error } = await supabase
     .from("budget_items")
-    .update({ area_m2: areaM2, caixas, subtotal: round2(areaM2 * precoM2) })
+    .update({ area_m2: areaM2, caixas, preco_m2: precoM2, subtotal: round2(subtotal) })
     .eq("id", id);
   if (error) throw error;
 }
@@ -964,6 +964,54 @@ function isVillacolProduct(product?: Product | null): boolean {
   return product?.marca === "Villacol";
 }
 
+function normalizeText(value?: string | null): string {
+  return (value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+function isVillaVinilicosBaseboard(product?: Product | null): boolean {
+  if (!product || isVillacolProduct(product)) return false;
+  const brand = normalizeText(product.marca);
+  const productText = normalizeText([product.linha, product.colecao, product.superficie, product.derivacao, product.tipoEmbalagem, product.referencia].filter(Boolean).join(" "));
+  const isVillaVinilicos = brand.includes("villa vinil") || productText.includes("vinilico");
+  const isBaseboard = productText.includes("rodape") || normalizeText(product.formato).includes("rodape");
+  return isVillaVinilicos && isBaseboard;
+}
+
+function getProductQuantityLabel(product?: Product | null): string {
+  if (isVillaVinilicosBaseboard(product)) return "m linear";
+  return "m²";
+}
+
+function calculateLinearMetersPerPiece(product?: Product | null): number {
+  const dimensions = (product?.formato || "")
+    .replace(/,/g, ".")
+    .match(/\d+(?:\.\d+)?/g)
+    ?.map(Number)
+    .filter((n) => Number.isFinite(n) && n > 0) || [];
+  if (dimensions.length === 0) return 0;
+  return Math.max(...dimensions) / 100;
+}
+
+function calculateLinearMetersPerBox(product?: Product | null): number {
+  const pieces = Number.isFinite(product?.pecasPorCaixa) ? product?.pecasPorCaixa || 0 : 0;
+  return calculateLinearMetersPerPiece(product) * pieces;
+}
+
+function calculateBoxesForRequestedQuantity(product: Product, requestedQuantity: number): number {
+  const quantityPerBox = isVillaVinilicosBaseboard(product) ? calculateLinearMetersPerBox(product) : product.m2PorCaixa;
+  return quantityPerBox > 0 ? Math.ceil(requestedQuantity / quantityPerBox) : 0;
+}
+
+function calculateRealQuantityFromBoxes(product: Product, boxes: number): number {
+  const quantityPerBox = isVillaVinilicosBaseboard(product) ? calculateLinearMetersPerBox(product) : product.m2PorCaixa;
+  return round2(boxes * (quantityPerBox || 0));
+}
+
+function calculateItemSubtotal(product: Product, boxes: number, requestedQuantity: number, unitPrice: number): number {
+  const pricedQuantity = isVillaVinilicosBaseboard(product) ? calculateRealQuantityFromBoxes(product, boxes) : requestedQuantity;
+  return round2(pricedQuantity * unitPrice);
+}
+
 function getComplementaryUnitLabel(product?: Product | null, plural = false): string {
   if (product?.categoriaComplementar === "Rejunte") return plural ? "potes" : "pote";
   if (product?.categoriaComplementar === "Argamassa") return plural ? "sacos" : "saco";
@@ -973,8 +1021,7 @@ function getComplementaryUnitLabel(product?: Product | null, plural = false): st
 
 function calculateItemRealAreaM2(item: BudgetItem): number {
   const caixas = Number.isFinite(item.caixas) ? item.caixas : 0;
-  const m2PorCaixa = Number.isFinite(item.product?.m2PorCaixa) ? item.product.m2PorCaixa : 0;
-  return round2(caixas * m2PorCaixa);
+  return calculateRealQuantityFromBoxes(item.product, caixas);
 }
 
 function calculateItemWeightKg(item: BudgetItem): number {
@@ -1165,8 +1212,11 @@ function ProductModal({
     const priceBase = selected[pk] as number | null;
     const price = priceBase != null ? calculateFinalPrice(priceBase, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
     const area = parseFloat(areaInput.replace(",", ".")) || 0;
-    const caixas = selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : 0;
+    const caixas = calculateBoxesForRequestedQuantity(selected, area);
+    const realQuantity = calculateRealQuantityFromBoxes(selected, caixas);
     const selectedIsVillacol = isVillacolProduct(selected);
+    const selectedIsLinearBaseboard = isVillaVinilicosBaseboard(selected);
+    const selectedQuantityLabel = getProductQuantityLabel(selected);
     const selectedUnitLabel = getComplementaryUnitLabel(selected, caixas !== 1);
 
     return (
@@ -1209,7 +1259,7 @@ function ProductModal({
             <div className="bg-primary/8 rounded-xl p-3 mb-4 flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Tabela {selectedTabela}</span>
               <span className="text-xl font-semibold text-primary font-mono">
-                {fmtBRL(price)}<span className="text-sm font-normal text-muted-foreground">{selectedIsVillacol ? "/un." : "/m²"}</span>
+                {fmtBRL(price)}<span className="text-sm font-normal text-muted-foreground">{selectedIsVillacol ? "/un." : `/${selectedQuantityLabel}`}</span>
               </span>
             </div>
           ) : (
@@ -1217,12 +1267,12 @@ function ProductModal({
               <AlertTriangle size={14} /> Preço não disponível para tabela {selectedTabela}
             </div>
           )}
-          <label className="block text-xs font-medium text-muted-foreground mb-1">{selectedIsVillacol ? `Quantidade de ${getComplementaryUnitLabel(selected, true)}` : "Área necessária (m²)"}</label>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">{selectedIsVillacol ? `Quantidade de ${getComplementaryUnitLabel(selected, true)}` : selectedIsLinearBaseboard ? "Metragem necessária (m linear)" : "Área necessária (m²)"}</label>
           <input type="text" value={areaInput} onChange={(e) => setAreaInput(e.target.value)}
-            placeholder={selectedIsVillacol ? "Ex: 10" : "Ex: 45,50"} autoFocus
+            placeholder={selectedIsVillacol ? "Ex: 10" : selectedIsLinearBaseboard ? "Ex: 24,00" : "Ex: 45,50"} autoFocus
             onKeyDown={(e) => e.key === "Enter" && confirmAdd()}
             className="w-full border border-border rounded-xl px-4 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 mb-3 font-mono" />
-          {area > 0 && selected.m2PorCaixa > 0 && (
+          {area > 0 && caixas > 0 && (
             <div className="bg-muted rounded-xl p-3 mb-4 text-sm space-y-1.5">
               <div className="flex justify-between text-muted-foreground">
                 <span>{selectedIsVillacol ? "Quantidade calculada" : "Caixas necessárias"}</span>
@@ -1230,14 +1280,20 @@ function ProductModal({
               </div>
               {!selectedIsVillacol && (
                 <div className="flex justify-between text-muted-foreground">
-                  <span>m² real (arredondado)</span>
-                  <span className="font-mono text-foreground">{(caixas * selected.m2PorCaixa).toFixed(2)} m²</span>
+                  <span>{selectedIsLinearBaseboard ? "metragem real" : "m² real (arredondado)"}</span>
+                  <span className="font-mono text-foreground">{realQuantity.toFixed(2)} {selectedQuantityLabel}</span>
+                </div>
+              )}
+              {selectedIsLinearBaseboard && calculateLinearMetersPerBox(selected) > 0 && (
+                <div className="flex justify-between text-muted-foreground">
+                  <span>metragem por caixa</span>
+                  <span className="font-mono text-foreground">{calculateLinearMetersPerBox(selected).toFixed(2)} m linear/cx</span>
                 </div>
               )}
               {price && (
                 <div className="flex justify-between pt-1.5 border-t border-border font-medium">
                   <span>Subtotal estimado</span>
-                  <span className="font-mono text-primary">{fmtBRL(area * price)}</span>
+                  <span className="font-mono text-primary">{fmtBRL(calculateItemSubtotal(selected, caixas, area, price))}</span>
                 </div>
               )}
             </div>
@@ -1521,8 +1577,11 @@ function BudgetEditor({
       toast.error(`Preço não disponível para a tabela ${itemTabelaPreco}.`);
       return;
     }
-    if (!product.m2PorCaixa || product.m2PorCaixa <= 0) {
-      toast.error("Produto sem m²/caixa válido. Corrija o cadastro antes de adicionar.");
+    const quantityPerBox = isVillaVinilicosBaseboard(product) ? calculateLinearMetersPerBox(product) : product.m2PorCaixa;
+    if (!quantityPerBox || quantityPerBox <= 0) {
+      toast.error(isVillaVinilicosBaseboard(product)
+        ? "Rodapé sem metragem por caixa válida. Corrija o formato e peças/caixa antes de adicionar."
+        : "Produto sem m²/caixa válido. Corrija o cadastro antes de adicionar.");
       return;
     }
     const precoM2 = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
@@ -1530,11 +1589,11 @@ function BudgetEditor({
       toast.error("Não foi possível calcular o preço final do produto.");
       return;
     }
-    const caixas = Math.ceil(areaM2 / product.m2PorCaixa);
+    const caixas = calculateBoxesForRequestedQuantity(product, areaM2);
     setSaving(true);
     try {
       const newItem = await addBudgetItem(budget.id, {
-        productId: product.id, product, areaM2, caixas, precoM2, subtotal: round2(areaM2 * precoM2),
+        productId: product.id, product, areaM2, caixas, precoM2, subtotal: calculateItemSubtotal(product, caixas, areaM2, precoM2),
       });
       const nextItems = [...budget.items, newItem];
       const b = updateLocal({ ...getSentBudgetDraftPatch(), items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
@@ -1589,11 +1648,12 @@ function BudgetEditor({
       toast.error("Não foi possível calcular o preço final do produto.");
       return;
     }
-    const caixas = item.product.m2PorCaixa > 0 ? Math.ceil(newArea / item.product.m2PorCaixa) : item.caixas;
+    const caixas = calculateBoxesForRequestedQuantity(item.product, newArea) || item.caixas;
     setSaving(true);
     try {
-      await updateBudgetItem(itemId, newArea, caixas, newPrecoM2);
-      const updatedItem = { ...item, areaM2: newArea, caixas, precoM2: newPrecoM2, subtotal: round2(newArea * newPrecoM2) };
+      const subtotal = calculateItemSubtotal(item.product, caixas, newArea, newPrecoM2);
+      await updateBudgetItem(itemId, newArea, caixas, newPrecoM2, subtotal);
+      const updatedItem = { ...item, areaM2: newArea, caixas, precoM2: newPrecoM2, subtotal };
       const nextItems = budget.items.map((i) => i.id === itemId ? updatedItem : i);
       const b = updateLocal({ ...getSentBudgetDraftPatch(), items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
       await persistTotals(b);
@@ -1985,10 +2045,10 @@ ${budget.observacoes ? `
                   <tr className="text-xs text-muted-foreground bg-muted/30 border-b border-border">
                     <th className="text-left px-5 py-2.5 font-medium">Produto</th>
                     <th className="text-left px-3 py-2.5 font-medium hidden md:table-cell">Formato</th>
-                    <th className="text-right px-3 py-2.5 font-medium">m²</th>
+                    <th className="text-right px-3 py-2.5 font-medium">Qtd.</th>
                     <th className="text-right px-3 py-2.5 font-medium">Cx</th>
-                    <th className="text-right px-3 py-2.5 font-medium hidden md:table-cell">m² real</th>
-                    <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">R$/m²</th>
+                    <th className="text-right px-3 py-2.5 font-medium hidden md:table-cell">Qtd. real</th>
+                    <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">Preço un.</th>
                     <th className="text-right px-3 py-2.5 font-medium hidden lg:table-cell">Peso</th>
                     <th className="text-right px-3 py-2.5 font-medium">Subtotal</th>
                     <th className="px-3 py-2.5 w-16"></th>
@@ -1998,8 +2058,8 @@ ${budget.observacoes ? `
                   {villagresItems.map((item) => {
                     const isEditing = editingItemId === item.id;
                     const previewArea = parseFloat(editAreaInput.replace(",", ".")) || 0;
-                    const previewCx = item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : 0;
-                    const previewRealArea = round2(previewCx * (item.product.m2PorCaixa || 0));
+                    const previewCx = previewArea > 0 ? calculateBoxesForRequestedQuantity(item.product, previewArea) : 0;
+                    const previewRealArea = calculateRealQuantityFromBoxes(item.product, previewCx);
                     const previewWeight = round2(previewCx * (item.product.pesoBrutoCx || 0));
                     const editPrecoBase = item.product[priceKey(editTabela)] as number | null;
                     const editPrecoM2 = editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
@@ -2025,7 +2085,7 @@ ${budget.observacoes ? `
                             <button onClick={() => !isLocked && startEditItem(item)}
                               className={`font-mono text-sm group flex items-center gap-1 ml-auto transition-colors ${isLocked ? "cursor-default" : "hover:text-primary"}`}
                               title={isLocked ? "Orçamento bloqueado" : "Clique para editar"}>
-                              {item.areaM2.toFixed(2)}
+                              {item.areaM2.toFixed(2)} {getProductQuantityLabel(item.product)}
                               {!isLocked && <Pencil size={10} className="opacity-0 group-hover:opacity-40 transition-opacity" />}
                             </button>
                           )}
@@ -2037,8 +2097,8 @@ ${budget.observacoes ? `
                         </td>
                         <td className="px-3 py-3 text-right font-mono text-sm hidden md:table-cell">
                           {isEditing && previewArea > 0
-                            ? <span className="text-primary font-semibold">{previewRealArea.toFixed(2)}</span>
-                            : calculateItemRealAreaM2(item).toFixed(2)}
+                            ? <span className="text-primary font-semibold">{previewRealArea.toFixed(2)} {getProductQuantityLabel(item.product)}</span>
+                            : `${calculateItemRealAreaM2(item).toFixed(2)} ${getProductQuantityLabel(item.product)}`}
                         </td>
                         <td className="px-3 py-3 text-right text-sm hidden sm:table-cell">
                           {isEditing ? (

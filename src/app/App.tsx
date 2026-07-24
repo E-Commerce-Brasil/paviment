@@ -72,6 +72,14 @@ interface Customer {
   createdAt: string;
 }
 
+interface UserProfile {
+  id: string;
+  nome: string;
+  email: string;
+  isAdmin: boolean;
+  createdAt: string;
+}
+
 interface BudgetItem {
   id: string;
   productId: string;
@@ -168,6 +176,16 @@ function mapCustomer(r: any): Customer {
   };
 }
 
+function mapUserProfile(r: any): UserProfile {
+  return {
+    id: r.id,
+    nome: r.nome || "",
+    email: r.email || "",
+    isAdmin: r.is_admin === true,
+    createdAt: r.created_at,
+  };
+}
+
 function mapItem(r: any): BudgetItem {
   return {
     id: r.id,
@@ -260,6 +278,16 @@ CREATE TABLE IF NOT EXISTS customers (
 );
 ALTER TABLE customers DISABLE ROW LEVEL SECURITY;
 
+CREATE TABLE IF NOT EXISTS app_users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  nome TEXT NOT NULL,
+  email TEXT NOT NULL UNIQUE,
+  is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE app_users DISABLE ROW LEVEL SECURITY;
+
 CREATE TABLE IF NOT EXISTS budgets (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   numero INTEGER GENERATED ALWAYS AS IDENTITY,
@@ -300,7 +328,17 @@ ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS logradouro TEXT;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS numero_end TEXT;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS complemento TEXT;
-ALTER TABLE customers ADD COLUMN IF NOT EXISTS bairro TEXT;`;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS bairro TEXT;
+CREATE TABLE IF NOT EXISTS app_users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  nome TEXT NOT NULL,
+  email TEXT NOT NULL UNIQUE,
+  is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE app_users DISABLE ROW LEVEL SECURITY;`;
 
 // ── CSV Parsing ───────────────────────────────────────────────────
 
@@ -543,6 +581,23 @@ async function searchCustomers(q: string): Promise<Customer[]> {
     .limit(30);
   if (error) throw error;
   return (data || []).map(mapCustomer);
+}
+
+async function fetchUserProfiles(): Promise<UserProfile[]> {
+  const { data, error } = await supabase
+    .from("app_users")
+    .select("*")
+    .order("nome", { ascending: true });
+  if (error) throw error;
+  return (data || []).map(mapUserProfile);
+}
+
+async function updateUserAdminStatus(userId: string, isAdmin: boolean): Promise<void> {
+  const { error } = await supabase
+    .from("app_users")
+    .update({ is_admin: isAdmin, updated_at: new Date().toISOString() })
+    .eq("id", userId);
+  if (error) throw error;
 }
 
 function buildCustomerRow(form: Partial<Customer>) {
@@ -809,6 +864,16 @@ async function runMigrations(): Promise<void> {
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS numero_end TEXT;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS complemento TEXT;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS bairro TEXT;
+      CREATE TABLE IF NOT EXISTS app_users (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        nome TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      ALTER TABLE app_users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE app_users DISABLE ROW LEVEL SECURITY;
     `});
   } catch {
     // rpc não existe — colunas devem ser adicionadas manualmente via SQL Editor
@@ -884,10 +949,10 @@ async function addBudgetItem(budgetId: string, item: {
   };
 }
 
-async function updateBudgetItem(id: string, areaM2: number, caixas: number, precoM2: number): Promise<void> {
+async function updateBudgetItem(id: string, areaM2: number, caixas: number, precoM2: number, subtotal: number): Promise<void> {
   const { error } = await supabase
     .from("budget_items")
-    .update({ area_m2: areaM2, caixas, subtotal: round2(areaM2 * precoM2) })
+    .update({ area_m2: areaM2, caixas, preco_m2: precoM2, subtotal: round2(subtotal) })
     .eq("id", id);
   if (error) throw error;
 }
@@ -964,6 +1029,62 @@ function isVillacolProduct(product?: Product | null): boolean {
   return product?.marca === "Villacol";
 }
 
+function normalizeText(value?: string | null): string {
+  return (value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+function getSearchableProductText(product?: Product | null): string {
+  if (!product) return "";
+  return normalizeText([product.marca, product.linha, product.colecao, product.superficie, product.derivacao, product.tipoEmbalagem, product.referencia, product.formato].filter(Boolean).join(" "));
+}
+
+function isVillaVinilicosProduct(product?: Product | null): boolean {
+  const productText = getSearchableProductText(product);
+  return productText.includes("villa vinil") || productText.includes("vinilico");
+}
+
+function isVillaVinilicosBaseboard(product?: Product | null): boolean {
+  if (!product || isVillacolProduct(product)) return false;
+  const productText = getSearchableProductText(product);
+  const isBaseboard = productText.includes("rodape");
+  return isVillaVinilicosProduct(product) && isBaseboard;
+}
+
+function getProductQuantityLabel(product?: Product | null): string {
+  if (isVillaVinilicosBaseboard(product)) return "m linear";
+  return "m²";
+}
+
+function calculateLinearMetersPerPiece(product?: Product | null): number {
+  const dimensions = (product?.formato || "")
+    .replace(/,/g, ".")
+    .match(/\d+(?:\.\d+)?/g)
+    ?.map(Number)
+    .filter((n) => Number.isFinite(n) && n > 0) || [];
+  if (dimensions.length === 0) return 0;
+  return Math.max(...dimensions) / 100;
+}
+
+function calculateLinearMetersPerBox(product?: Product | null): number {
+  const pieces = Number.isFinite(product?.pecasPorCaixa) ? product?.pecasPorCaixa || 0 : 0;
+  return calculateLinearMetersPerPiece(product) * pieces;
+}
+
+function calculateBoxesForRequestedQuantity(product: Product, requestedQuantity: number): number {
+  const quantityPerBox = isVillaVinilicosBaseboard(product) ? calculateLinearMetersPerBox(product) : product.m2PorCaixa;
+  return quantityPerBox > 0 ? Math.ceil(requestedQuantity / quantityPerBox) : 0;
+}
+
+function calculateRealQuantityFromBoxes(product: Product, boxes: number): number {
+  const quantityPerBox = isVillaVinilicosBaseboard(product) ? calculateLinearMetersPerBox(product) : product.m2PorCaixa;
+  return round2(boxes * (quantityPerBox || 0));
+}
+
+function calculateItemSubtotal(product: Product, boxes: number, requestedQuantity: number, unitPrice: number): number {
+  const pricedQuantity = isVillaVinilicosBaseboard(product) ? calculateRealQuantityFromBoxes(product, boxes) : requestedQuantity;
+  return round2(pricedQuantity * unitPrice);
+}
+
 function getComplementaryUnitLabel(product?: Product | null, plural = false): string {
   if (product?.categoriaComplementar === "Rejunte") return plural ? "potes" : "pote";
   if (product?.categoriaComplementar === "Argamassa") return plural ? "sacos" : "saco";
@@ -973,8 +1094,7 @@ function getComplementaryUnitLabel(product?: Product | null, plural = false): st
 
 function calculateItemRealAreaM2(item: BudgetItem): number {
   const caixas = Number.isFinite(item.caixas) ? item.caixas : 0;
-  const m2PorCaixa = Number.isFinite(item.product?.m2PorCaixa) ? item.product.m2PorCaixa : 0;
-  return round2(caixas * m2PorCaixa);
+  return calculateRealQuantityFromBoxes(item.product, caixas);
 }
 
 function calculateItemWeightKg(item: BudgetItem): number {
@@ -1165,8 +1285,11 @@ function ProductModal({
     const priceBase = selected[pk] as number | null;
     const price = priceBase != null ? calculateFinalPrice(priceBase, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
     const area = parseFloat(areaInput.replace(",", ".")) || 0;
-    const caixas = selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : 0;
+    const caixas = calculateBoxesForRequestedQuantity(selected, area);
+    const realQuantity = calculateRealQuantityFromBoxes(selected, caixas);
     const selectedIsVillacol = isVillacolProduct(selected);
+    const selectedIsLinearBaseboard = isVillaVinilicosBaseboard(selected);
+    const selectedQuantityLabel = getProductQuantityLabel(selected);
     const selectedUnitLabel = getComplementaryUnitLabel(selected, caixas !== 1);
 
     return (
@@ -1209,7 +1332,7 @@ function ProductModal({
             <div className="bg-primary/8 rounded-xl p-3 mb-4 flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Tabela {selectedTabela}</span>
               <span className="text-xl font-semibold text-primary font-mono">
-                {fmtBRL(price)}<span className="text-sm font-normal text-muted-foreground">{selectedIsVillacol ? "/un." : "/m²"}</span>
+                {fmtBRL(price)}<span className="text-sm font-normal text-muted-foreground">{selectedIsVillacol ? "/un." : `/${selectedQuantityLabel}`}</span>
               </span>
             </div>
           ) : (
@@ -1217,12 +1340,12 @@ function ProductModal({
               <AlertTriangle size={14} /> Preço não disponível para tabela {selectedTabela}
             </div>
           )}
-          <label className="block text-xs font-medium text-muted-foreground mb-1">{selectedIsVillacol ? `Quantidade de ${getComplementaryUnitLabel(selected, true)}` : "Área necessária (m²)"}</label>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">{selectedIsVillacol ? `Quantidade de ${getComplementaryUnitLabel(selected, true)}` : selectedIsLinearBaseboard ? "Metragem necessária (m linear)" : "Área necessária (m²)"}</label>
           <input type="text" value={areaInput} onChange={(e) => setAreaInput(e.target.value)}
-            placeholder={selectedIsVillacol ? "Ex: 10" : "Ex: 45,50"} autoFocus
+            placeholder={selectedIsVillacol ? "Ex: 10" : selectedIsLinearBaseboard ? "Ex: 24,00" : "Ex: 45,50"} autoFocus
             onKeyDown={(e) => e.key === "Enter" && confirmAdd()}
             className="w-full border border-border rounded-xl px-4 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 mb-3 font-mono" />
-          {area > 0 && selected.m2PorCaixa > 0 && (
+          {area > 0 && caixas > 0 && (
             <div className="bg-muted rounded-xl p-3 mb-4 text-sm space-y-1.5">
               <div className="flex justify-between text-muted-foreground">
                 <span>{selectedIsVillacol ? "Quantidade calculada" : "Caixas necessárias"}</span>
@@ -1230,14 +1353,20 @@ function ProductModal({
               </div>
               {!selectedIsVillacol && (
                 <div className="flex justify-between text-muted-foreground">
-                  <span>m² real (arredondado)</span>
-                  <span className="font-mono text-foreground">{(caixas * selected.m2PorCaixa).toFixed(2)} m²</span>
+                  <span>{selectedIsLinearBaseboard ? "metragem real" : "m² real (arredondado)"}</span>
+                  <span className="font-mono text-foreground">{realQuantity.toFixed(2)} {selectedQuantityLabel}</span>
+                </div>
+              )}
+              {selectedIsLinearBaseboard && calculateLinearMetersPerBox(selected) > 0 && (
+                <div className="flex justify-between text-muted-foreground">
+                  <span>metragem por caixa</span>
+                  <span className="font-mono text-foreground">{calculateLinearMetersPerBox(selected).toFixed(2)} m linear/cx</span>
                 </div>
               )}
               {price && (
                 <div className="flex justify-between pt-1.5 border-t border-border font-medium">
                   <span>Subtotal estimado</span>
-                  <span className="font-mono text-primary">{fmtBRL(area * price)}</span>
+                  <span className="font-mono text-primary">{fmtBRL(calculateItemSubtotal(selected, caixas, area, price))}</span>
                 </div>
               )}
             </div>
@@ -1285,6 +1414,7 @@ function ProductModal({
               className="border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
               <option value="">Todas as marcas</option>
               <option value="Villagres">Villagres</option>
+              <option value="Villa Vinílicos">Villa Vinílicos</option>
               <option value="Villacol">Villacol</option>
             </select>
             <select value={categoriaFiltro} onChange={(e) => setCategoriaFiltro(e.target.value)}
@@ -1521,8 +1651,11 @@ function BudgetEditor({
       toast.error(`Preço não disponível para a tabela ${itemTabelaPreco}.`);
       return;
     }
-    if (!product.m2PorCaixa || product.m2PorCaixa <= 0) {
-      toast.error("Produto sem m²/caixa válido. Corrija o cadastro antes de adicionar.");
+    const quantityPerBox = isVillaVinilicosBaseboard(product) ? calculateLinearMetersPerBox(product) : product.m2PorCaixa;
+    if (!quantityPerBox || quantityPerBox <= 0) {
+      toast.error(isVillaVinilicosBaseboard(product)
+        ? "Rodapé sem metragem por caixa válida. Corrija o formato e peças/caixa antes de adicionar."
+        : "Produto sem m²/caixa válido. Corrija o cadastro antes de adicionar.");
       return;
     }
     const precoM2 = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
@@ -1530,11 +1663,11 @@ function BudgetEditor({
       toast.error("Não foi possível calcular o preço final do produto.");
       return;
     }
-    const caixas = Math.ceil(areaM2 / product.m2PorCaixa);
+    const caixas = calculateBoxesForRequestedQuantity(product, areaM2);
     setSaving(true);
     try {
       const newItem = await addBudgetItem(budget.id, {
-        productId: product.id, product, areaM2, caixas, precoM2, subtotal: round2(areaM2 * precoM2),
+        productId: product.id, product, areaM2, caixas, precoM2, subtotal: calculateItemSubtotal(product, caixas, areaM2, precoM2),
       });
       const nextItems = [...budget.items, newItem];
       const b = updateLocal({ ...getSentBudgetDraftPatch(), items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
@@ -1589,11 +1722,12 @@ function BudgetEditor({
       toast.error("Não foi possível calcular o preço final do produto.");
       return;
     }
-    const caixas = item.product.m2PorCaixa > 0 ? Math.ceil(newArea / item.product.m2PorCaixa) : item.caixas;
+    const caixas = calculateBoxesForRequestedQuantity(item.product, newArea) || item.caixas;
     setSaving(true);
     try {
-      await updateBudgetItem(itemId, newArea, caixas, newPrecoM2);
-      const updatedItem = { ...item, areaM2: newArea, caixas, precoM2: newPrecoM2, subtotal: round2(newArea * newPrecoM2) };
+      const subtotal = calculateItemSubtotal(item.product, caixas, newArea, newPrecoM2);
+      await updateBudgetItem(itemId, newArea, caixas, newPrecoM2, subtotal);
+      const updatedItem = { ...item, areaM2: newArea, caixas, precoM2: newPrecoM2, subtotal };
       const nextItems = budget.items.map((i) => i.id === itemId ? updatedItem : i);
       const b = updateLocal({ ...getSentBudgetDraftPatch(), items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
       await persistTotals(b);
@@ -1985,10 +2119,10 @@ ${budget.observacoes ? `
                   <tr className="text-xs text-muted-foreground bg-muted/30 border-b border-border">
                     <th className="text-left px-5 py-2.5 font-medium">Produto</th>
                     <th className="text-left px-3 py-2.5 font-medium hidden md:table-cell">Formato</th>
-                    <th className="text-right px-3 py-2.5 font-medium">m²</th>
+                    <th className="text-right px-3 py-2.5 font-medium">Qtd.</th>
                     <th className="text-right px-3 py-2.5 font-medium">Cx</th>
-                    <th className="text-right px-3 py-2.5 font-medium hidden md:table-cell">m² real</th>
-                    <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">R$/m²</th>
+                    <th className="text-right px-3 py-2.5 font-medium hidden md:table-cell">Qtd. real</th>
+                    <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">Preço un.</th>
                     <th className="text-right px-3 py-2.5 font-medium hidden lg:table-cell">Peso</th>
                     <th className="text-right px-3 py-2.5 font-medium">Subtotal</th>
                     <th className="px-3 py-2.5 w-16"></th>
@@ -1998,8 +2132,8 @@ ${budget.observacoes ? `
                   {villagresItems.map((item) => {
                     const isEditing = editingItemId === item.id;
                     const previewArea = parseFloat(editAreaInput.replace(",", ".")) || 0;
-                    const previewCx = item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : 0;
-                    const previewRealArea = round2(previewCx * (item.product.m2PorCaixa || 0));
+                    const previewCx = previewArea > 0 ? calculateBoxesForRequestedQuantity(item.product, previewArea) : 0;
+                    const previewRealArea = calculateRealQuantityFromBoxes(item.product, previewCx);
                     const previewWeight = round2(previewCx * (item.product.pesoBrutoCx || 0));
                     const editPrecoBase = item.product[priceKey(editTabela)] as number | null;
                     const editPrecoM2 = editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
@@ -2025,7 +2159,7 @@ ${budget.observacoes ? `
                             <button onClick={() => !isLocked && startEditItem(item)}
                               className={`font-mono text-sm group flex items-center gap-1 ml-auto transition-colors ${isLocked ? "cursor-default" : "hover:text-primary"}`}
                               title={isLocked ? "Orçamento bloqueado" : "Clique para editar"}>
-                              {item.areaM2.toFixed(2)}
+                              {item.areaM2.toFixed(2)} {getProductQuantityLabel(item.product)}
                               {!isLocked && <Pencil size={10} className="opacity-0 group-hover:opacity-40 transition-opacity" />}
                             </button>
                           )}
@@ -2037,8 +2171,8 @@ ${budget.observacoes ? `
                         </td>
                         <td className="px-3 py-3 text-right font-mono text-sm hidden md:table-cell">
                           {isEditing && previewArea > 0
-                            ? <span className="text-primary font-semibold">{previewRealArea.toFixed(2)}</span>
-                            : calculateItemRealAreaM2(item).toFixed(2)}
+                            ? <span className="text-primary font-semibold">{previewRealArea.toFixed(2)} {getProductQuantityLabel(item.product)}</span>
+                            : `${calculateItemRealAreaM2(item).toFixed(2)} ${getProductQuantityLabel(item.product)}`}
                         </td>
                         <td className="px-3 py-3 text-right text-sm hidden sm:table-cell">
                           {isEditing ? (
@@ -2934,7 +3068,7 @@ async function createProduct(product: Omit<Product, "id">): Promise<Product> {
   return mapProduct(data);
 }
 
-function createEmptyProduct(marca: "Villagres" | "Villacol" = "Villagres"): Product {
+function createEmptyProduct(marca: string = "Villagres"): Product {
   return {
     id: "",
     marca,
@@ -3056,7 +3190,7 @@ function ProductEditModal({ product, onSave, onClose }: {
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <div>
             <h3 className="font-semibold">{isNew ? "Novo Produto" : "Editar Produto"}</h3>
-            <p className="text-xs text-muted-foreground font-mono">{isNew ? "Cadastre Villagres ou Villacol" : `Ref: ${product.referencia}`}</p>
+            <p className="text-xs text-muted-foreground font-mono">{isNew ? "Cadastre Villagres, Villa Vinílicos ou Villacol" : `Ref: ${product.referencia}`}</p>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X size={18} /></button>
         </div>
@@ -3067,6 +3201,7 @@ function ProductEditModal({ product, onSave, onClose }: {
               <label className="text-xs font-medium text-muted-foreground mb-1 block">Marca</label>
               <select value={form.marca} onChange={(e) => handleMarcaChange(e.target.value)} className={inputCls}>
                 <option value="Villagres">Villagres</option>
+                <option value="Villa Vinílicos">Villa Vinílicos</option>
                 <option value="Villacol">Villacol</option>
               </select>
             </div>
@@ -3308,8 +3443,48 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
   });
 
   const descontinuadosCount = products.filter((p) => p.descontinuado).length;
+  const villaVinilicosProducts = products.filter((p) => isVillaVinilicosProduct(p));
+  const villaVinilicosBaseboards = products.filter((p) => isVillaVinilicosBaseboard(p));
 
   const pk = priceKey(tabela);
+
+  function formatCSVValue(value: string | number | boolean | null | undefined): string {
+    const raw = value == null ? "" : String(value);
+    return /[";\n\r]/.test(raw) ? `"${raw.replace(/"/g, '""')}"` : raw;
+  }
+
+  function formatCSVNumber(value: number | null | undefined): string {
+    if (value == null || !Number.isFinite(Number(value))) return "";
+    return String(value).replace(".", ",");
+  }
+
+  function downloadProductsCSV(fileName: string, rows: Product[]) {
+    if (rows.length === 0) {
+      toast.error("Nenhum produto encontrado para exportar.");
+      return;
+    }
+    const headers = [
+      "Marca", "Formato", "Referencia", "Linha", "Colecao", "Cor", "Superficie", "Faces", "Variacao", "LocalUso", "Derivacao",
+      "M2PorCaixa", "PecasPorCaixa", "M2PorPallet", "CxPorPallet", "PesoBrutoM2", "PesoBrutoCx", "EspessuraMm",
+      "Preco1", "Preco2", "Preco3", "Preco4", "Descontinuado", "CategoriaComplementar", "TipoRejunte", "TipoEmbalagem",
+      "UnidadeCalculo", "MetrosPorPeca", "MetrosPorCaixa",
+    ];
+    const lines = rows.map((product) => [
+      product.marca, product.formato, product.referencia, product.linha, product.colecao, product.cor, product.superficie, product.faces, product.variacao, product.localUso, product.derivacao,
+      formatCSVNumber(product.m2PorCaixa), product.pecasPorCaixa, formatCSVNumber(product.m2PorPallet), product.cxPorPallet, formatCSVNumber(product.pesoBrutoM2), formatCSVNumber(product.pesoBrutoCx), formatCSVNumber(product.espessuraMm),
+      formatCSVNumber(product.preco1), formatCSVNumber(product.preco2), formatCSVNumber(product.preco3), formatCSVNumber(product.preco4), product.descontinuado ? "Sim" : "Não", product.categoriaComplementar, product.tipoRejunte, product.tipoEmbalagem,
+      getProductQuantityLabel(product), formatCSVNumber(calculateLinearMetersPerPiece(product)), formatCSVNumber(calculateLinearMetersPerBox(product)),
+    ].map(formatCSVValue).join(";"));
+    const csv = [headers.join(";"), ...lines].join("\n");
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`${rows.length} produtos exportados.`);
+  }
 
   function handleProductSaved(updated: Product) {
     setProducts((ps) => {
@@ -3384,6 +3559,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
           className="border border-border rounded-xl px-3 py-2.5 text-xs bg-card focus:outline-none">
           <option value="">Todas as marcas</option>
           <option value="Villagres">Villagres</option>
+          <option value="Villa Vinílicos">Villa Vinílicos</option>
           <option value="Villacol">Villacol</option>
         </select>
         <select value={categoriaFiltro} onChange={(e) => setCategoriaFiltro(e.target.value)}
@@ -3420,12 +3596,30 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
           className="flex items-center gap-1.5 bg-primary text-primary-foreground rounded-xl px-3 py-2 text-xs hover:opacity-90 transition-opacity">
           <Plus size={12} /> Novo Produto
         </button>
+        <button type="button" onClick={() => setEditingProduct({ ...createEmptyProduct("Villa Vinílicos"), colecao: "Vinílico", superficie: "Vinílico", linha: "Rodapé" })}
+          className="flex items-center gap-1.5 border border-primary text-primary rounded-xl px-3 py-2 text-xs hover:bg-primary/10 transition-colors">
+          <Plus size={12} /> Novo Rodapé
+        </button>
 
         {/* Toggle descontinuados */}
         <button onClick={() => setShowDescontinuados((v) => !v)}
           className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs border transition-colors ${showDescontinuados ? "bg-amber-100 border-amber-300 text-amber-800" : "border-border text-muted-foreground hover:bg-muted"}`}>
           {showDescontinuados ? <Check size={12} /> : <X size={12} />}
           Descontinuados {descontinuadosCount > 0 && `(${descontinuadosCount})`}
+        </button>
+
+        {/* Product exports */}
+        <button type="button" onClick={() => downloadProductsCSV("produtos_filtrados_paviment.csv", filtered)}
+          className="flex items-center gap-1.5 border border-border rounded-xl px-3 py-2 text-xs hover:bg-muted transition-colors text-muted-foreground">
+          <Copy size={12} /> Exportar Produtos
+        </button>
+        <button type="button" onClick={() => downloadProductsCSV("produtos_villa_vinilicos.csv", villaVinilicosProducts)}
+          className="flex items-center gap-1.5 border border-border rounded-xl px-3 py-2 text-xs hover:bg-muted transition-colors text-muted-foreground">
+          <Copy size={12} /> Villa Vinílicos ({villaVinilicosProducts.length})
+        </button>
+        <button type="button" onClick={() => downloadProductsCSV("rodapes_villa_vinilicos.csv", villaVinilicosBaseboards)}
+          className="flex items-center gap-1.5 border border-border rounded-xl px-3 py-2 text-xs hover:bg-muted transition-colors text-muted-foreground">
+          <Copy size={12} /> Rodapés ({villaVinilicosBaseboards.length})
         </button>
 
         {/* Export template */}
@@ -3586,6 +3780,78 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
   );
 }
 
+function UsersTab() {
+  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [savingId, setSavingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchUserProfiles()
+      .then(setUsers)
+      .catch((e: any) => toast.error("Erro ao carregar usuários: " + e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function handleAdminChange(user: UserProfile, isAdmin: boolean) {
+    if (user.isAdmin === isAdmin) return;
+    setSavingId(user.id);
+    try {
+      await updateUserAdminStatus(user.id, isAdmin);
+      setUsers((prev) => prev.map((u) => u.id === user.id ? { ...u, isAdmin } : u));
+      toast.success(`${user.nome || user.email} agora ${isAdmin ? "é admin" : "não é admin"}.`);
+    } catch (e: any) {
+      toast.error("Erro ao atualizar perfil: " + e.message);
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="font-semibold">Usuários</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">Marque o perfil de acesso de cada usuário.</p>
+        </div>
+        {loading && <Spinner size={14} />}
+      </div>
+
+      <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-sm">
+        {loading ? (
+          <div className="py-10 text-center text-sm text-muted-foreground">Carregando usuários...</div>
+        ) : users.length === 0 ? (
+          <div className="py-10 text-center text-sm text-muted-foreground">Nenhum usuário cadastrado.</div>
+        ) : (
+          <div className="divide-y divide-border">
+            {users.map((user) => {
+              const saving = savingId === user.id;
+              return (
+                <div key={user.id} className="px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-medium text-sm truncate">{user.nome || "Usuário sem nome"}</p>
+                    <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+                  </div>
+                  <div className="inline-flex rounded-xl border border-border bg-muted/30 p-1 self-start sm:self-auto">
+                    {([false, true] as const).map((isAdmin) => (
+                      <button key={String(isAdmin)} type="button" disabled={saving}
+                        onClick={() => handleAdminChange(user, isAdmin)}
+                        className={`px-3 py-1.5 text-xs rounded-lg transition-colors flex items-center gap-1.5 ${user.isAdmin === isAdmin ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-card"} ${saving ? "opacity-60 cursor-wait" : ""}`}>
+                        <span className={`w-2.5 h-2.5 rounded-full border ${user.isAdmin === isAdmin ? "border-primary-foreground bg-primary-foreground" : "border-muted-foreground/50"}`} />
+                        {isAdmin ? "Admin" : "Não admin"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
 // ── Customer Search (Home) ────────────────────────────────────────
 
 function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSettingsChange, onProductsChange, onOpenBudgetById }: {
@@ -3596,7 +3862,7 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
   onProductsChange: (products: Product[]) => void;
   onOpenBudgetById: (budgetId: string, customerId: string) => void;
 }) {
-  const [tab, setTab] = useState<"orcamentos" | "clientes" | "produtos">("orcamentos");
+  const [tab, setTab] = useState<"orcamentos" | "clientes" | "produtos" | "usuarios">("orcamentos");
   const [q, setQ] = useState("");
   const [results, setResults] = useState<Customer[]>([]);
   const [searching, setSearching] = useState(false);
@@ -3696,6 +3962,7 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
   const tabs = [
     { key: "orcamentos", label: "Orçamentos" },
     { key: "clientes", label: "Clientes" },
+    { key: "usuarios", label: "Usuários" },
     { key: "produtos", label: "Produtos" },
   ] as const;
 
@@ -4008,6 +4275,7 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
         )}
 
         {tab === "clientes" && <AllCustomersTab onSelect={onSelect} />}
+        {tab === "usuarios" && <UsersTab />}
         {tab === "produtos" && <AllProductsTab allProducts={allProducts} pricingSettings={pricingSettings} onPricingSettingsChange={onPricingSettingsChange} onProductsChange={onProductsChange} />}
       </div>
     </div>

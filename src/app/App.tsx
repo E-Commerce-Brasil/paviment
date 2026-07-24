@@ -72,6 +72,14 @@ interface Customer {
   createdAt: string;
 }
 
+interface UserProfile {
+  id: string;
+  nome: string;
+  email: string;
+  isAdmin: boolean;
+  createdAt: string;
+}
+
 interface BudgetItem {
   id: string;
   productId: string;
@@ -168,6 +176,16 @@ function mapCustomer(r: any): Customer {
   };
 }
 
+function mapUserProfile(r: any): UserProfile {
+  return {
+    id: r.id,
+    nome: r.nome || "",
+    email: r.email || "",
+    isAdmin: r.is_admin === true,
+    createdAt: r.created_at,
+  };
+}
+
 function mapItem(r: any): BudgetItem {
   return {
     id: r.id,
@@ -260,6 +278,16 @@ CREATE TABLE IF NOT EXISTS customers (
 );
 ALTER TABLE customers DISABLE ROW LEVEL SECURITY;
 
+CREATE TABLE IF NOT EXISTS app_users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  nome TEXT NOT NULL,
+  email TEXT NOT NULL UNIQUE,
+  is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE app_users DISABLE ROW LEVEL SECURITY;
+
 CREATE TABLE IF NOT EXISTS budgets (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   numero INTEGER GENERATED ALWAYS AS IDENTITY,
@@ -300,7 +328,17 @@ ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS logradouro TEXT;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS numero_end TEXT;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS complemento TEXT;
-ALTER TABLE customers ADD COLUMN IF NOT EXISTS bairro TEXT;`;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS bairro TEXT;
+CREATE TABLE IF NOT EXISTS app_users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  nome TEXT NOT NULL,
+  email TEXT NOT NULL UNIQUE,
+  is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE app_users DISABLE ROW LEVEL SECURITY;`;
 
 // ── CSV Parsing ───────────────────────────────────────────────────
 
@@ -543,6 +581,23 @@ async function searchCustomers(q: string): Promise<Customer[]> {
     .limit(30);
   if (error) throw error;
   return (data || []).map(mapCustomer);
+}
+
+async function fetchUserProfiles(): Promise<UserProfile[]> {
+  const { data, error } = await supabase
+    .from("app_users")
+    .select("*")
+    .order("nome", { ascending: true });
+  if (error) throw error;
+  return (data || []).map(mapUserProfile);
+}
+
+async function updateUserAdminStatus(userId: string, isAdmin: boolean): Promise<void> {
+  const { error } = await supabase
+    .from("app_users")
+    .update({ is_admin: isAdmin, updated_at: new Date().toISOString() })
+    .eq("id", userId);
+  if (error) throw error;
 }
 
 function buildCustomerRow(form: Partial<Customer>) {
@@ -809,6 +864,16 @@ async function runMigrations(): Promise<void> {
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS numero_end TEXT;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS complemento TEXT;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS bairro TEXT;
+      CREATE TABLE IF NOT EXISTS app_users (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        nome TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      ALTER TABLE app_users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE app_users DISABLE ROW LEVEL SECURITY;
     `});
   } catch {
     // rpc não existe — colunas devem ser adicionadas manualmente via SQL Editor
@@ -3715,6 +3780,78 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
   );
 }
 
+function UsersTab() {
+  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [savingId, setSavingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchUserProfiles()
+      .then(setUsers)
+      .catch((e: any) => toast.error("Erro ao carregar usuários: " + e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function handleAdminChange(user: UserProfile, isAdmin: boolean) {
+    if (user.isAdmin === isAdmin) return;
+    setSavingId(user.id);
+    try {
+      await updateUserAdminStatus(user.id, isAdmin);
+      setUsers((prev) => prev.map((u) => u.id === user.id ? { ...u, isAdmin } : u));
+      toast.success(`${user.nome || user.email} agora ${isAdmin ? "é admin" : "não é admin"}.`);
+    } catch (e: any) {
+      toast.error("Erro ao atualizar perfil: " + e.message);
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="font-semibold">Usuários</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">Marque o perfil de acesso de cada usuário.</p>
+        </div>
+        {loading && <Spinner size={14} />}
+      </div>
+
+      <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-sm">
+        {loading ? (
+          <div className="py-10 text-center text-sm text-muted-foreground">Carregando usuários...</div>
+        ) : users.length === 0 ? (
+          <div className="py-10 text-center text-sm text-muted-foreground">Nenhum usuário cadastrado.</div>
+        ) : (
+          <div className="divide-y divide-border">
+            {users.map((user) => {
+              const saving = savingId === user.id;
+              return (
+                <div key={user.id} className="px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-medium text-sm truncate">{user.nome || "Usuário sem nome"}</p>
+                    <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+                  </div>
+                  <div className="inline-flex rounded-xl border border-border bg-muted/30 p-1 self-start sm:self-auto">
+                    {([false, true] as const).map((isAdmin) => (
+                      <button key={String(isAdmin)} type="button" disabled={saving}
+                        onClick={() => handleAdminChange(user, isAdmin)}
+                        className={`px-3 py-1.5 text-xs rounded-lg transition-colors flex items-center gap-1.5 ${user.isAdmin === isAdmin ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-card"} ${saving ? "opacity-60 cursor-wait" : ""}`}>
+                        <span className={`w-2.5 h-2.5 rounded-full border ${user.isAdmin === isAdmin ? "border-primary-foreground bg-primary-foreground" : "border-muted-foreground/50"}`} />
+                        {isAdmin ? "Admin" : "Não admin"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
 // ── Customer Search (Home) ────────────────────────────────────────
 
 function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSettingsChange, onProductsChange, onOpenBudgetById }: {
@@ -3725,7 +3862,7 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
   onProductsChange: (products: Product[]) => void;
   onOpenBudgetById: (budgetId: string, customerId: string) => void;
 }) {
-  const [tab, setTab] = useState<"orcamentos" | "clientes" | "produtos">("orcamentos");
+  const [tab, setTab] = useState<"orcamentos" | "clientes" | "produtos" | "usuarios">("orcamentos");
   const [q, setQ] = useState("");
   const [results, setResults] = useState<Customer[]>([]);
   const [searching, setSearching] = useState(false);
@@ -3825,6 +3962,7 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
   const tabs = [
     { key: "orcamentos", label: "Orçamentos" },
     { key: "clientes", label: "Clientes" },
+    { key: "usuarios", label: "Usuários" },
     { key: "produtos", label: "Produtos" },
   ] as const;
 
@@ -4137,6 +4275,7 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
         )}
 
         {tab === "clientes" && <AllCustomersTab onSelect={onSelect} />}
+        {tab === "usuarios" && <UsersTab />}
         {tab === "produtos" && <AllProductsTab allProducts={allProducts} pricingSettings={pricingSettings} onPricingSettingsChange={onPricingSettingsChange} onProductsChange={onProductsChange} />}
       </div>
     </div>

@@ -1165,7 +1165,7 @@ function isLinearMeterProduct(product?: Product | null): boolean {
 }
 
 function getProductQuantityLabel(product?: Product | null, plural = false): string {
-  if (isVillaVinilicosProduct(product)) return plural ? "metros lineares" : "metro linear";
+  if (isLinearMeterProduct(product)) return plural ? "metros lineares" : "metro linear";
   if (isVillacolProduct(product)) return getComplementaryUnitLabel(product, plural);
   return plural ? "m²" : "m²";
 }
@@ -1191,6 +1191,10 @@ function calculateItemSubtotal(product: Product, areaM2: number, caixas: number,
 function calculateItemWeightKg(item: BudgetItem): number {
   const caixas = Number.isFinite(item.caixas) ? item.caixas : 0;
   const pesoPorCaixa = Number.isFinite(item.product?.pesoBrutoCx) ? item.product.pesoBrutoCx : 0;
+  const pesoPorMetroLinear = Number.isFinite(item.product?.pesoBrutoM2) ? item.product.pesoBrutoM2 : 0;
+  if (isLinearMeterProduct(item.product) && pesoPorMetroLinear > 0) {
+    return round2(item.areaM2 * pesoPorMetroLinear);
+  }
   return round2(caixas * pesoPorCaixa);
 }
 
@@ -1390,7 +1394,7 @@ function ProductModal({
     const area = parseFloat(areaInput.replace(",", ".")) || 0;
     const selectedIsVillacol = isVillacolProduct(selected);
     const selectedIsLinearMeter = isLinearMeterProduct(selected);
-    const caixas = selectedIsLinearMeter ? Math.ceil(area) : selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : 0;
+    const caixas = selectedIsLinearMeter ? (selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : Math.ceil(area)) : selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : 0;
     const selectedUnitLabel = selectedIsLinearMeter ? getProductQuantityLabel(selected, area !== 1) : getComplementaryUnitLabel(selected, caixas !== 1);
 
     return (
@@ -1784,7 +1788,7 @@ function BudgetEditor({
       toast.error("Não foi possível calcular o preço final do produto.");
       return;
     }
-    const caixas = isLinearProduct ? Math.ceil(areaM2) : Math.ceil(areaM2 / product.m2PorCaixa);
+    const caixas = isLinearProduct ? (product.m2PorCaixa > 0 ? Math.ceil(areaM2 / product.m2PorCaixa) : Math.ceil(areaM2)) : Math.ceil(areaM2 / product.m2PorCaixa);
     setSaving(true);
     try {
       const newItem = await addBudgetItem(budget.id, {
@@ -1850,7 +1854,7 @@ function BudgetEditor({
       toast.error("Não foi possível calcular o preço final do produto.");
       return;
     }
-    const caixas = isLinearMeterProduct(item.product) ? Math.ceil(newArea) : item.product.m2PorCaixa > 0 ? Math.ceil(newArea / item.product.m2PorCaixa) : item.caixas;
+    const caixas = isLinearMeterProduct(item.product) ? (item.product.m2PorCaixa > 0 ? Math.ceil(newArea / item.product.m2PorCaixa) : Math.ceil(newArea)) : item.product.m2PorCaixa > 0 ? Math.ceil(newArea / item.product.m2PorCaixa) : item.caixas;
     setSaving(true);
     try {
       const newSubtotal = calculateItemSubtotal(item.product, newArea, caixas, newPrecoM2);
@@ -2264,8 +2268,8 @@ ${budget.observacoes ? `
                   {villagresItems.map((item) => {
                     const isEditing = editingItemId === item.id;
                     const previewArea = parseFloat(editAreaInput.replace(",", ".")) || 0;
-                    const itemIsLinear = isVillaVinilicosProduct(item.product);
-                    const previewCx = itemIsLinear ? Math.ceil(previewArea) : item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : 0;
+                    const itemIsLinear = isLinearMeterProduct(item.product);
+                    const previewCx = itemIsLinear ? (item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : Math.ceil(previewArea)) : item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : 0;
                     const previewRealArea = itemIsLinear ? previewArea : round2(previewCx * (item.product.m2PorCaixa || 0));
                     const previewWeight = round2(previewCx * (item.product.pesoBrutoCx || 0));
                     const editPrecoBase = editTabela === "TE" ? null : item.product[priceKey(editTabela)] as number | null;
@@ -3279,11 +3283,12 @@ function createEmptyProduct(marca: "Villagres" | "Villacol" | "Villa Vinílicos"
 }
 
 
-type ProductTemplateKind = "villagres" | "villa_vinilicos" | "argamassas" | "rejuntes" | "niveladores";
+type ProductTemplateKind = "villagres" | "villa_vinilicos" | "villa_vinilicos_rodapes" | "argamassas" | "rejuntes" | "niveladores";
 
 const PRODUCT_TEMPLATE_LABELS: Record<ProductTemplateKind, string> = {
   villagres: "Produtos Villagres",
   villa_vinilicos: "Villa Vinílicos",
+  villa_vinilicos_rodapes: "Villa Vinílicos Rodapés",
   argamassas: "Argamassas",
   rejuntes: "Rejuntes",
   niveladores: "Niveladores",
@@ -3292,6 +3297,7 @@ const PRODUCT_TEMPLATE_LABELS: Record<ProductTemplateKind, string> = {
 const PRODUCT_TEMPLATE_HEADERS: Record<ProductTemplateKind, string[]> = {
   villagres: ["Formato", "Referencia", "Linha", "Colecao", "Cor", "Superficie", "Faces", "Variacao", "LocalUso", "Derivacao", "M2PorCaixa", "PecasPorCaixa", "M2PorPallet", "CxPorPallet", "PesoBrutoM2", "PesoBrutoCx", "EspessuraMm", "Preco1", "Preco2", "Preco3", "Preco4", "Preco5", "Descontinuado"],
   villa_vinilicos: ["Formato", "Referência", "Linha", "Coleção", "Cor", "Superfície", "Faces", "Capa Desgaste", "Local de Uso", "Derivação", "m2/cx", "peças/cx", "m2/pallet", "cx/pallet", "peso bruto/m2", "peso bruto/cx", "Espessura mm", "Preço T1", "Preço T2", "Preço T3", "Preço T4", "Preço T5"],
+  villa_vinilicos_rodapes: ["Formato", "Referência", "Linha", "Cor", "Superfície", "Derivação", "metro linear/cx", "peças/cx", "peso bruto/metro linear", "peso bruto/cx", "Espessura mm", "Preço 1", "Preço 2", "Preço 3", "Preço 4", "Preço 5"],
   argamassas: ["Referencia", "NomeComercial", "TipoEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Preco5", "Descontinuado"],
   rejuntes: ["Referencia", "NomeComercial", "Cor", "TipoRejunte", "TipoEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Preco5", "Descontinuado"],
   niveladores: ["Referencia", "NomeComercial", "EspessuraMm", "TipoEmbalagem", "QuantidadePorEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Preco5", "Descontinuado"],
@@ -3300,6 +3306,7 @@ const PRODUCT_TEMPLATE_HEADERS: Record<ProductTemplateKind, string[]> = {
 const PRODUCT_TEMPLATE_EXAMPLES: Record<ProductTemplateKind, string[]> = {
   villagres: ["60x60", "REF-001", "Nome da Linha", "Nome Coleção", "Bege", "Polido", "1", "-", "3", "-", "1,44", "6", "43,20", "30", "18,50", "26,65", "9,00", "45,90", "49,90", "54,90", "59,90", "64,90", "FALSE"],
   villa_vinilicos: ["18x122", "SPC-001", "Piso Vinílico Carvalho", "Coleção Vinílicos", "Carvalho", "Texturizado", "8", "0,30", "3", "Classe 32", "2,20", "10", "88,00", "40", "8,50", "18,70", "4,00", "89,90", "94,90", "99,90", "104,90", "109,90"],
+  villa_vinilicos_rodapes: ["7x240", "RP-001", "Rodapé Vinílico Carvalho", "Carvalho", "Texturizado", "Rodapé", "2,40", "1", "0,85", "2,04", "12,00", "29,90", "32,90", "35,90", "39,90", "44,90"],
   argamassas: ["ARG-001", "Argamassa ACIII", "Saco 20 kg", "20", "29,90", "32,90", "35,90", "39,90", "44,90", "FALSE"],
   rejuntes: ["REJ-001", "Rejunte Acrílico", "Branco", "Acrílico", "Pote 1 kg", "1", "18,90", "20,90", "22,90", "24,90", "26,90", "FALSE"],
   niveladores: ["NIV-001", "Nivelador 1,5 mm", "1,5", "Pacote 100 un", "100", "0,50", "35,90", "39,90", "44,90", "49,90", "54,90", "FALSE"],
@@ -3326,6 +3333,7 @@ function buildProductTemplateCSV(kind: ProductTemplateKind): string {
 }
 
 function inferTemplateKindFromHeaders(headerMap: Record<string, number>): ProductTemplateKind {
+  if (headerMap[normalizeCSVHeader("metro linear/cx")] != null || headerMap[normalizeCSVHeader("peso bruto/metro linear")] != null) return "villa_vinilicos_rodapes";
   if (headerMap[normalizeCSVHeader("Capa Desgaste")] != null || headerMap[normalizeCSVHeader("peso bruto/m2")] != null || headerMap[normalizeCSVHeader("Preço T5")] != null) return "villa_vinilicos";
   if (headerMap[normalizeCSVHeader("Superficie")] != null || headerMap[normalizeCSVHeader("Formato")] != null) return "villagres";
   if (headerMap[normalizeCSVHeader("TipoRejunte")] != null || headerMap[normalizeCSVHeader("Cor")] != null) return "rejuntes";
@@ -3350,7 +3358,7 @@ function buildProductsFromTemplateCSV(csvText: string): Omit<Product, "id">[] {
     const nome = getRowValue(row, headerMap, "NomeComercial", "Linha", "Nome").trim();
     if (!referencia && !nome) return null;
 
-    if (kind === "villagres" || kind === "villa_vinilicos") {
+    if (kind === "villagres" || kind === "villa_vinilicos" || kind === "villa_vinilicos_rodapes") {
       return {
         formato: getRowValue(row, headerMap, "Formato"),
         referencia,
@@ -3362,20 +3370,20 @@ function buildProductsFromTemplateCSV(csvText: string): Omit<Product, "id">[] {
         variacao: getRowValue(row, headerMap, "Variacao", "Variação", "Capa Desgaste"),
         localUso: parseInt(getRowValue(row, headerMap, "LocalUso", "Local de Uso")) || 3,
         derivacao: getRowValue(row, headerMap, "Derivacao", "Derivação"),
-        m2PorCaixa: parseNum(getRowValue(row, headerMap, "M2PorCaixa", "m2/cx", "m²/cx")),
+        m2PorCaixa: parseNum(getRowValue(row, headerMap, "M2PorCaixa", "m2/cx", "m²/cx", "metro linear/cx")),
         pecasPorCaixa: parseInt(getRowValue(row, headerMap, "PecasPorCaixa", "PeçasPorCaixa", "peças/cx", "pecas/cx")) || 0,
         m2PorPallet: parseNum(getRowValue(row, headerMap, "M2PorPallet", "m2/pallet", "m²/pallet")),
         cxPorPallet: parseInt(getRowValue(row, headerMap, "CxPorPallet", "cx/pallet")) || 0,
-        pesoBrutoM2: parseNum(getRowValue(row, headerMap, "PesoBrutoM2", "peso bruto/m2", "peso bruto/m²")),
+        pesoBrutoM2: parseNum(getRowValue(row, headerMap, "PesoBrutoM2", "peso bruto/m2", "peso bruto/m²", "peso bruto/metro linear")),
         pesoBrutoCx: parseNum(getRowValue(row, headerMap, "PesoBrutoCx", "PesoKg", "peso bruto/cx")),
         espessuraMm: parseNum(getRowValue(row, headerMap, "EspessuraMm", "Espessura mm")),
-        preco1: parsePrice(getRowValue(row, headerMap, "Preco1", "Preço1", "Preço T1")),
-        preco2: parsePrice(getRowValue(row, headerMap, "Preco2", "Preço2", "Preço T2")),
-        preco3: parsePrice(getRowValue(row, headerMap, "Preco3", "Preço3", "Preço T3")),
-        preco4: parsePrice(getRowValue(row, headerMap, "Preco4", "Preço4", "Preço T4")),
-        preco5: parsePrice(getRowValue(row, headerMap, "Preco5", "Preço5", "Preço T5")),
+        preco1: parsePrice(getRowValue(row, headerMap, "Preco1", "Preço1", "Preço T1", "Preço 1")),
+        preco2: parsePrice(getRowValue(row, headerMap, "Preco2", "Preço2", "Preço T2", "Preço 2")),
+        preco3: parsePrice(getRowValue(row, headerMap, "Preco3", "Preço3", "Preço T3", "Preço 3")),
+        preco4: parsePrice(getRowValue(row, headerMap, "Preco4", "Preço4", "Preço T4", "Preço 4")),
+        preco5: parsePrice(getRowValue(row, headerMap, "Preco5", "Preço5", "Preço T5", "Preço 5")),
         descontinuado: parseBool(getRowValue(row, headerMap, "Descontinuado")),
-        marca: kind === "villa_vinilicos" ? "Villa Vinílicos" : "Villagres",
+        marca: kind === "villa_vinilicos" || kind === "villa_vinilicos_rodapes" ? "Villa Vinílicos" : "Villagres",
         categoriaComplementar: "",
         tipoRejunte: "",
         tipoEmbalagem: "",

@@ -6,6 +6,7 @@ import {
   Search, Plus, ArrowLeft, Package, FileText,
   Trash2, Send, Save, X, ChevronRight,
   RotateCcw, AlertTriangle, Pencil, Check, Copy, Printer,
+  Shield, Lock, LogOut,
 } from "lucide-react";
 import { Toaster, toast } from "sonner";
 import { projectId, publicAnonKey } from "../../utils/supabase/info";
@@ -70,6 +71,14 @@ interface Customer {
   cidade?: string;
   estado?: string;
   createdAt: string;
+}
+
+export interface AppUser {
+  id: string;
+  username: string;
+  label: string;
+  isAdmin: boolean;
+  active: boolean;
 }
 
 interface BudgetItem {
@@ -168,6 +177,87 @@ function mapCustomer(r: any): Customer {
   };
 }
 
+function mapUser(r: any): AppUser {
+  return {
+    id: r.id,
+    username: r.username || "",
+    label: r.display_name || r.username || "",
+    isAdmin: r.is_admin === true,
+    active: r.active !== false,
+  };
+}
+
+async function fetchAppUsers(includeInactive = false): Promise<AppUser[]> {
+  let q = supabase.from("app_users").select("id, username, display_name, is_admin, active").order("username");
+  if (!includeInactive) q = q.eq("active", true);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapUser);
+}
+
+async function hashPassword(username: string, pass: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(`paviment:${username.trim().toLowerCase()}:${pass}`);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function loginUser(username: string, pass: string): Promise<AppUser | null> {
+  const normUser = username.trim().toLowerCase();
+  const pwdHash = await hashPassword(normUser, pass);
+  const { data, error } = await supabase
+    .from("app_users")
+    .select("id, username, display_name, is_admin, active")
+    .eq("username", normUser)
+    .eq("password_hash", pwdHash)
+    .eq("active", true)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? mapUser(data) : null;
+}
+
+async function createUser(user: { username: string; label: string; password: string; isAdmin?: boolean }): Promise<void> {
+  const normUser = user.username.trim().toLowerCase();
+  const pwdHash = await hashPassword(normUser, user.password);
+  const { error } = await supabase.from("app_users").insert({
+    username: normUser,
+    display_name: user.label || normUser,
+    password_hash: pwdHash,
+    is_admin: user.isAdmin ?? false,
+    active: true,
+  });
+  if (error) throw error;
+}
+
+async function updateUserPassword(username: string, newPass: string): Promise<void> {
+  const normUser = username.trim().toLowerCase();
+  const pwdHash = await hashPassword(normUser, newPass);
+  const { error } = await supabase
+    .from("app_users")
+    .update({ password_hash: pwdHash, updated_at: new Date().toISOString() })
+    .eq("username", normUser);
+  if (error) throw error;
+}
+
+async function updateUserAdminStatus(username: string, isAdmin: boolean): Promise<void> {
+  const normUser = username.trim().toLowerCase();
+  const { error } = await supabase
+    .from("app_users")
+    .update({ is_admin: isAdmin, updated_at: new Date().toISOString() })
+    .eq("username", normUser);
+  if (error) throw error;
+}
+
+async function deactivateUser(username: string): Promise<void> {
+  const normUser = username.trim().toLowerCase();
+  const { error } = await supabase
+    .from("app_users")
+    .update({ active: false, updated_at: new Date().toISOString() })
+    .eq("username", normUser);
+  if (error) throw error;
+}
+
 function mapItem(r: any): BudgetItem {
   return {
     id: r.id,
@@ -240,7 +330,23 @@ CREATE TABLE IF NOT EXISTS products (
 );
 ALTER TABLE products DISABLE ROW LEVEL SECURITY;
 
-CREATE TABLE IF NOT EXISTS pricing_settings (
+CREATE TABLE IF NOT EXISTS app_users (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        username TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+        active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      ALTER TABLE app_users DISABLE ROW LEVEL SECURITY;
+      INSERT INTO app_users (username, display_name, password_hash, is_admin, active)
+      VALUES
+        ('admin', 'Administrador', '79416c9685c6baf019b311c43844d8d13e1b1c05c8bfcd814048b8719ddf2ee1', TRUE, TRUE),
+        ('vendas', 'Vendas', 'e95677a8dc1e007ad2de15c4a87042c39592c8d358a26b5d0130b9e6440297f4', FALSE, TRUE)
+      ON CONFLICT (username) DO NOTHING;
+      CREATE TABLE IF NOT EXISTS pricing_settings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   imposto_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
   taxa_cartao_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
@@ -248,6 +354,23 @@ CREATE TABLE IF NOT EXISTS pricing_settings (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ALTER TABLE pricing_settings DISABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS app_users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  username TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE app_users DISABLE ROW LEVEL SECURITY;
+INSERT INTO app_users (username, display_name, password_hash, is_admin, active)
+VALUES
+  ('admin', 'Administrador', '79416c9685c6baf019b311c43844d8d13e1b1c05c8bfcd814048b8719ddf2ee1', TRUE, TRUE),
+  ('vendas', 'Vendas', 'e95677a8dc1e007ad2de15c4a87042c39592c8d358a26b5d0130b9e6440297f4', FALSE, TRUE)
+ON CONFLICT (username) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS customers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -796,6 +919,22 @@ async function runMigrations(): Promise<void> {
       ALTER TABLE products ADD COLUMN IF NOT EXISTS categoria_complementar TEXT;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS tipo_rejunte TEXT;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS tipo_embalagem TEXT;
+      CREATE TABLE IF NOT EXISTS app_users (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        username TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+        active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      ALTER TABLE app_users DISABLE ROW LEVEL SECURITY;
+      INSERT INTO app_users (username, display_name, password_hash, is_admin, active)
+      VALUES
+        ('admin', 'Administrador', '79416c9685c6baf019b311c43844d8d13e1b1c05c8bfcd814048b8719ddf2ee1', TRUE, TRUE),
+        ('vendas', 'Vendas', 'e95677a8dc1e007ad2de15c4a87042c39592c8d358a26b5d0130b9e6440297f4', FALSE, TRUE)
+      ON CONFLICT (username) DO NOTHING;
       CREATE TABLE IF NOT EXISTS pricing_settings (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         imposto_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
@@ -3588,7 +3727,451 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
 
 // ── Customer Search (Home) ────────────────────────────────────────
 
-function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSettingsChange, onProductsChange, onOpenBudgetById }: {
+// ── Users Management Component ─────────────────────────────────────
+
+function UsersTab({
+  users,
+  currentUser,
+  onUsersReload,
+}: {
+  users: AppUser[];
+  currentUser: AppUser;
+  onUsersReload: () => void;
+}) {
+  const [newUser, setNewUser] = useState({ username: "", label: "", password: "", isAdmin: false });
+  const [passwords, setPasswords] = useState<Record<string, string>>({});
+  const [loadingUser, setLoadingUser] = useState<string | null>(null);
+
+  function cleanUsername(val: string) {
+    return val.trim().toLowerCase().replace(/\s+/g, "_");
+  }
+
+  async function handleCreateUser() {
+    const username = cleanUsername(newUser.username);
+    const label = newUser.label.trim() || username;
+    const password = newUser.password.trim();
+
+    if (!username) {
+      toast.error("Informe o nome de usuário.");
+      return;
+    }
+    if (!/^[a-z0-9._-]+$/.test(username)) {
+      toast.error("Use apenas letras, números, ponto, hífen ou underline no usuário.");
+      return;
+    }
+    if (!password) {
+      toast.error("Informe uma senha inicial.");
+      return;
+    }
+    if (users.some((u) => u.username === username)) {
+      toast.error("Já existe um usuário com este nome.");
+      return;
+    }
+
+    setLoadingUser("new");
+    try {
+      await createUser({ username, label, password, isAdmin: newUser.isAdmin });
+      await onUsersReload();
+      setNewUser({ username: "", label: "", password: "", isAdmin: false });
+      toast.success(`Usuário "${username}" criado com sucesso!`);
+    } catch (e: any) {
+      toast.error("Erro ao criar usuário: " + e.message);
+    } finally {
+      setLoadingUser(null);
+    }
+  }
+
+  async function handleChangePassword(username: string) {
+    const pass = (passwords[username] || "").trim();
+    if (!pass) {
+      toast.error("Informe uma nova senha válida.");
+      return;
+    }
+    setLoadingUser(username);
+    try {
+      await updateUserPassword(username, pass);
+      await onUsersReload();
+      setPasswords((p) => ({ ...p, [username]: "" }));
+      toast.success(`Senha de "${username}" atualizada com sucesso.`);
+    } catch (e: any) {
+      toast.error("Erro ao alterar senha: " + e.message);
+    } finally {
+      setLoadingUser(null);
+    }
+  }
+
+  async function handleToggleAdmin(username: string, newIsAdmin: boolean) {
+    const userToUpdate = users.find((u) => u.username === username);
+    if (!userToUpdate) return;
+    if (userToUpdate.isAdmin === newIsAdmin) return;
+
+    // Regra de negócio: sempre deve haver pelo menos um admin ativo
+    if (!newIsAdmin) {
+      const activeAdminCount = users.filter((u) => u.active && u.isAdmin).length;
+      if (activeAdminCount <= 1) {
+        toast.error("Operação não permitida: É necessário manter pelo menos um usuário com perfil de Administrador no sistema.");
+        return;
+      }
+    }
+
+    setLoadingUser(`admin_${username}`);
+    try {
+      await updateUserAdminStatus(username, newIsAdmin);
+      await onUsersReload();
+      toast.success(
+        newIsAdmin
+          ? `Usuário "${username}" agora é Administrador.`
+          : `Usuário "${username}" agora é Usuário Padrão.`
+      );
+    } catch (e: any) {
+      toast.error("Erro ao atualizar perfil do usuário: " + e.message);
+    } finally {
+      setLoadingUser(null);
+    }
+  }
+
+  async function handleRemoveUser(username: string) {
+    if (username === "admin") {
+      toast.error("O usuário principal 'admin' não pode ser removido.");
+      return;
+    }
+    if (username === currentUser.username) {
+      toast.error("Você não pode remover o seu próprio usuário enquanto estiver logado.");
+      return;
+    }
+    const userToRemove = users.find((u) => u.username === username);
+    if (userToRemove?.isAdmin) {
+      const activeAdminCount = users.filter((u) => u.active && u.isAdmin).length;
+      if (activeAdminCount <= 1) {
+        toast.error("Operação não permitida: Remover este usuário deixaria o sistema sem nenhum Administrador.");
+        return;
+      }
+    }
+
+    if (
+      confirm(
+        `Deseja remover o usuário "${username}"? Ele perderá acesso ao sistema, mas seus orçamentos criados permanecerão salvos.`
+      )
+    ) {
+      setLoadingUser(username);
+      try {
+        await deactivateUser(username);
+        await onUsersReload();
+        toast.success(`Usuário "${username}" removido.`);
+      } catch (e: any) {
+        toast.error("Erro ao remover usuário: " + e.message);
+      } finally {
+        setLoadingUser(null);
+      }
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="font-semibold text-lg">Gerenciamento de Usuários</h2>
+        <p className="text-sm text-muted-foreground">
+          Gerencie acessos, defina permissões de Administrador e altere senhas dos usuários do sistema.
+        </p>
+      </div>
+
+      {/* Form de Criar Novo Usuário */}
+      <div className="bg-card border border-border rounded-2xl p-5 shadow-sm">
+        <h3 className="font-semibold text-base mb-4 flex items-center gap-2">
+          <Plus size={18} className="text-primary" /> Criar Novo Usuário
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label className="text-xs font-medium text-muted-foreground block mb-1">Nome de usuário *</label>
+            <input
+              type="text"
+              value={newUser.username}
+              onChange={(e) => setNewUser((u) => ({ ...u, username: cleanUsername(e.target.value) }))}
+              placeholder="ex: vendedor_2"
+              className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground block mb-1">Nome de exibição</label>
+            <input
+              type="text"
+              value={newUser.label}
+              onChange={(e) => setNewUser((u) => ({ ...u, label: e.target.value }))}
+              placeholder="Ex: João da Silva"
+              className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground block mb-1">Senha inicial *</label>
+            <input
+              type="password"
+              value={newUser.password}
+              onChange={(e) => setNewUser((u) => ({ ...u, password: e.target.value }))}
+              placeholder="Digite a senha"
+              className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25"
+            />
+          </div>
+        </div>
+
+        {/* Perfil Inicial */}
+        <div className="mt-4 pt-3 border-t border-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <span className="text-xs font-medium text-muted-foreground block">Perfil de Acesso do novo usuário:</span>
+            <div className="flex items-center gap-4 mt-1.5">
+              <label className="flex items-center gap-2 text-xs cursor-pointer font-medium">
+                <input
+                  type="radio"
+                  name="new_user_profile"
+                  checked={!newUser.isAdmin}
+                  onChange={() => setNewUser((u) => ({ ...u, isAdmin: false }))}
+                  className="accent-primary w-4 h-4 cursor-pointer"
+                />
+                <span>Usuário Padrão</span>
+              </label>
+              <label className="flex items-center gap-2 text-xs cursor-pointer font-medium text-primary">
+                <input
+                  type="radio"
+                  name="new_user_profile"
+                  checked={newUser.isAdmin}
+                  onChange={() => setNewUser((u) => ({ ...u, isAdmin: true }))}
+                  className="accent-primary w-4 h-4 cursor-pointer"
+                />
+                <span className="flex items-center gap-1"><Shield size={13} /> Administrador</span>
+              </label>
+            </div>
+          </div>
+
+          <button
+            onClick={handleCreateUser}
+            disabled={loadingUser === "new"}
+            className="bg-primary text-primary-foreground px-5 py-2.5 rounded-xl text-sm font-medium hover:opacity-90 transition-opacity flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            {loadingUser === "new" ? <Spinner size={14} /> : <Plus size={16} />}
+            Cadastrar Usuário
+          </button>
+        </div>
+      </div>
+
+      {/* Lista de Usuários Cadastrados */}
+      <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-sm">
+        <div className="px-5 py-3 border-b border-border bg-muted/30 flex items-center justify-between">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            {users.length} usuário{users.length !== 1 ? "s" : ""} cadastrado{users.length !== 1 ? "s" : ""}
+          </p>
+          <span className="text-xs text-muted-foreground flex items-center gap-1">
+            <Shield size={12} className="text-primary" /> Sempre é mantido ao menos 1 Administrador
+          </span>
+        </div>
+
+        <div className="divide-y divide-border">
+          {users.map((u) => {
+            const isSelf = u.username === currentUser.username;
+            const isUpdatingAdmin = loadingUser === `admin_${u.username}`;
+
+            return (
+              <div key={u.username} className="p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                {/* Info do Usuário */}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-semibold text-sm">{u.label}</p>
+                    {u.isAdmin ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-primary/10 text-primary border border-primary/20 rounded-full px-2 py-0.5">
+                        <Shield size={11} /> Admin
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-muted text-muted-foreground border border-border rounded-full px-2 py-0.5">
+                        Padrão
+                      </span>
+                    )}
+                    {isSelf && (
+                      <span className="text-[10px] bg-amber-100 text-amber-800 border border-amber-200 rounded px-1.5 py-0.5 font-medium">
+                        Você
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground font-mono mt-0.5">@{u.username}</p>
+                </div>
+
+                {/* Seleção do Perfil (RADIO BUTTONS) */}
+                <div className="bg-muted/40 border border-border rounded-xl p-2.5 shrink-0 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                  <span className="text-xs font-semibold text-muted-foreground mr-1">Perfil:</span>
+                  <div className="flex items-center gap-3">
+                    <label className={`flex items-center gap-1.5 text-xs cursor-pointer select-none ${!u.isAdmin ? "font-semibold text-foreground" : "text-muted-foreground"}`}>
+                      <input
+                        type="radio"
+                        name={`user_role_${u.username}`}
+                        value="user"
+                        checked={!u.isAdmin}
+                        disabled={isUpdatingAdmin}
+                        onChange={() => handleToggleAdmin(u.username, false)}
+                        className="accent-primary w-4 h-4 cursor-pointer"
+                      />
+                      <span>Usuário Padrão</span>
+                    </label>
+
+                    <label className={`flex items-center gap-1.5 text-xs cursor-pointer select-none ${u.isAdmin ? "font-semibold text-primary" : "text-muted-foreground"}`}>
+                      <input
+                        type="radio"
+                        name={`user_role_${u.username}`}
+                        value="admin"
+                        checked={u.isAdmin}
+                        disabled={isUpdatingAdmin}
+                        onChange={() => handleToggleAdmin(u.username, true)}
+                        className="accent-primary w-4 h-4 cursor-pointer"
+                      />
+                      <span className="flex items-center gap-1"><Shield size={12} /> Admin</span>
+                    </label>
+                  </div>
+                  {isUpdatingAdmin && <Spinner size={12} />}
+                </div>
+
+                {/* Ações (Nova Senha e Excluir) */}
+                <div className="flex items-center gap-2 shrink-0 pt-2 lg:pt-0 border-t lg:border-t-0 border-border">
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="password"
+                      value={passwords[u.username] || ""}
+                      onChange={(e) => setPasswords((p) => ({ ...p, [u.username]: e.target.value }))}
+                      onKeyDown={(e) => e.key === "Enter" && handleChangePassword(u.username)}
+                      placeholder="Nova senha"
+                      className="border border-border rounded-xl px-3 py-1.5 text-xs bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 w-32 font-mono"
+                    />
+                    <button
+                      onClick={() => handleChangePassword(u.username)}
+                      disabled={loadingUser === u.username}
+                      className="border border-border rounded-xl px-3 py-1.5 text-xs font-medium hover:bg-muted transition-colors flex items-center gap-1"
+                      title="Alterar senha"
+                    >
+                      {loadingUser === u.username ? <Spinner size={12} /> : <Save size={12} />}
+                      Salvar
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={() => handleRemoveUser(u.username)}
+                    disabled={u.username === "admin" || u.username === currentUser.username || loadingUser === u.username}
+                    className="p-2 text-muted-foreground hover:text-destructive hover:bg-red-50 rounded-xl transition-colors disabled:opacity-30"
+                    title={u.username === "admin" ? "Usuário admin não pode ser removido" : "Remover usuário"}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LoginScreen({ users, onLogin }: { users: AppUser[]; onLogin: (u: string, p: string) => Promise<void> }) {
+  const [username, setUsername] = useState(users[0]?.username || "admin");
+  const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      await onLogin(username, password);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-primary flex items-center justify-center px-4 py-8">
+      <div className="w-full max-w-sm bg-card border border-white/10 rounded-3xl p-7 shadow-2xl">
+        <div className="text-center mb-6">
+          <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-4">
+            <Lock size={25} className="text-primary" />
+          </div>
+          <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-serif)" }}>
+            Entrar no Paviment
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Selecione seu usuário e informe sua senha.
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="text-xs font-medium text-muted-foreground block mb-1">Usuário</label>
+            <select
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              className="w-full border border-border rounded-xl px-3 py-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-medium"
+            >
+              {users.map((u) => (
+                <option key={u.username} value={u.username}>
+                  {u.label} ({u.username}) {u.isAdmin ? "· Admin" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-muted-foreground block mb-1">Senha</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Digite a senha"
+              autoFocus
+              className="w-full border border-border rounded-xl px-3 py-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={submitting}
+            className="w-full bg-primary text-primary-foreground py-3 rounded-xl text-sm font-medium hover:opacity-90 transition-opacity flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            {submitting ? <Spinner size={16} /> : null}
+            Entrar
+          </button>
+        </form>
+      </div>
+      <Toaster position="bottom-right" richColors />
+    </div>
+  );
+}
+
+function LogoutButton({ currentUser, onLogout }: { currentUser: AppUser; onLogout: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onLogout}
+      className="fixed right-4 top-4 z-50 flex items-center gap-2 rounded-full border border-white/20 bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-lg transition-all hover:scale-[1.02] hover:opacity-95 focus:outline-none focus:ring-2 focus:ring-primary/30"
+      title={`Sair do sistema (${currentUser.label})`}
+    >
+      <LogOut size={14} />
+      <span>Sair</span>
+      <span className="hidden sm:inline opacity-60">· {currentUser.username}</span>
+      {currentUser.isAdmin && (
+        <span className="bg-white/20 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">
+          ADMIN
+        </span>
+      )}
+    </button>
+  );
+}
+
+function CustomerSearch({
+  currentUser,
+  users,
+  onUsersReload,
+  onSelect,
+  allProducts,
+  pricingSettings,
+  onPricingSettingsChange,
+  onProductsChange,
+  onOpenBudgetById,
+}: {
+  currentUser: AppUser;
+  users: AppUser[];
+  onUsersReload: () => void;
   onSelect: (c: Customer) => void;
   allProducts: Product[];
   pricingSettings: PricingSettings;
@@ -3596,7 +4179,7 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
   onProductsChange: (products: Product[]) => void;
   onOpenBudgetById: (budgetId: string, customerId: string) => void;
 }) {
-  const [tab, setTab] = useState<"orcamentos" | "clientes" | "produtos">("orcamentos");
+  const [tab, setTab] = useState<"orcamentos" | "clientes" | "produtos" | "usuarios">("orcamentos");
   const [q, setQ] = useState("");
   const [results, setResults] = useState<Customer[]>([]);
   const [searching, setSearching] = useState(false);
@@ -3693,10 +4276,13 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
     } catch (e: any) { toast.error("Erro: " + e.message); setCreating(false); }
   }
 
+  const isUserAdmin = currentUser.isAdmin || currentUser.username === "admin";
+
   const tabs = [
     { key: "orcamentos", label: "Orçamentos" },
     { key: "clientes", label: "Clientes" },
     { key: "produtos", label: "Produtos" },
+    ...(isUserAdmin ? [{ key: "usuarios", label: "Usuários" } as const] : []),
   ] as const;
 
   return (
@@ -4009,6 +4595,7 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
 
         {tab === "clientes" && <AllCustomersTab onSelect={onSelect} />}
         {tab === "produtos" && <AllProductsTab allProducts={allProducts} pricingSettings={pricingSettings} onPricingSettingsChange={onPricingSettingsChange} onProductsChange={onProductsChange} />}
+        {tab === "usuarios" && isUserAdmin && <UsersTab users={users} currentUser={currentUser} onUsersReload={onUsersReload} />}
       </div>
     </div>
   );
@@ -4021,6 +4608,8 @@ type View =
   | { type: "customer"; customer: Customer }
   | { type: "budget"; budget: Budget; customer: Customer };
 
+const CURRENT_USER_KEY = "paviment_current_user";
+
 export default function App() {
   const [view, setView] = useState<View>({ type: "home" });
   const [appState, setAppState] = useState<"loading" | "setup" | "seeding" | "ready" | "error">("loading");
@@ -4028,6 +4617,8 @@ export default function App() {
   const [initError, setInitError] = useState<string | null>(null);
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [pricingSettings, setPricingSettings] = useState<PricingSettings>({ impostoPercentual: 0, taxaCartaoPercentual: 0, fretePor100Kg: 4 });
+  const [users, setUsers] = useState<AppUser[]>([]);
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
 
   async function init() {
     setAppState("loading");
@@ -4037,6 +4628,16 @@ export default function App() {
       await runMigrations();
       const tablesOk = await checkTablesExist();
       if (!tablesOk) { setAppState("setup"); return; }
+
+      setInitMsg("Carregando usuários...");
+      const loadedUsers = await fetchAppUsers();
+      setUsers(loadedUsers);
+
+      const savedUsername = localStorage.getItem(CURRENT_USER_KEY);
+      if (savedUsername) {
+        const found = loadedUsers.find((u) => u.username === savedUsername);
+        if (found) setCurrentUser(found);
+      }
 
       setInitMsg("Carregando composição interna do preço...");
       setPricingSettings(await loadPricingSettings());
@@ -4049,7 +4650,6 @@ export default function App() {
         const parsed = buildProductsFromCSV(csvRaw);
         await seedProducts(parsed);
         setAllProducts(parsed.map((p, i) => ({ ...p, id: `_${i}` })));
-        // Reload from DB with real IDs
         setInitMsg("Finalizando...");
         setAllProducts(await fetchAllProducts());
       } else {
@@ -4064,6 +4664,36 @@ export default function App() {
   }
 
   useEffect(() => { init(); }, []);
+
+  function handleLogout() {
+    localStorage.removeItem(CURRENT_USER_KEY);
+    setCurrentUser(null);
+    setView({ type: "home" });
+  }
+
+  async function reloadUsers() {
+    const loadedUsers = await fetchAppUsers();
+    setUsers(loadedUsers);
+    if (currentUser) {
+      const updatedSelf = loadedUsers.find((u) => u.username === currentUser.username);
+      if (updatedSelf) setCurrentUser(updatedSelf);
+    }
+  }
+
+  async function handleLogin(username: string, pass: string) {
+    try {
+      const user = await loginUser(username, pass);
+      if (!user) {
+        toast.error("Usuário ou senha incorretos.");
+        return;
+      }
+      localStorage.setItem(CURRENT_USER_KEY, user.username);
+      setCurrentUser(user);
+      toast.success(`Bem-vindo, ${user.label}!`);
+    } catch (e: any) {
+      toast.error("Erro ao realizar login: " + e.message);
+    }
+  }
 
   if (appState === "setup") {
     return <SetupScreen onVerify={init} />;
@@ -4096,10 +4726,17 @@ export default function App() {
     );
   }
 
+  if (!currentUser) {
+    return <LoginScreen users={users} onLogin={handleLogin} />;
+  }
+
   return (
     <>
       {view.type === "home" && (
         <CustomerSearch
+          currentUser={currentUser}
+          users={users}
+          onUsersReload={reloadUsers}
           onSelect={(c) => setView({ type: "customer", customer: c })}
           allProducts={allProducts}
           pricingSettings={pricingSettings}
@@ -4137,6 +4774,7 @@ export default function App() {
           onOpenBudget={(b) => setView({ type: "budget", budget: b, customer: view.customer })}
         />
       )}
+      <LogoutButton currentUser={currentUser} onLogout={handleLogout} />
       <Toaster position="bottom-right" richColors />
     </>
   );

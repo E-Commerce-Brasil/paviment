@@ -6,6 +6,7 @@ import {
   Search, Plus, ArrowLeft, Package, FileText,
   Trash2, Send, Save, X, ChevronRight,
   RotateCcw, AlertTriangle, Pencil, Check, Copy, Printer,
+  LogOut, LockKeyhole,
 } from "lucide-react";
 import { Toaster, toast } from "sonner";
 import { projectId, publicAnonKey } from "../../utils/supabase/info";
@@ -42,6 +43,7 @@ interface Product {
   preco2: number | null;
   preco3: number | null;
   preco4: number | null;
+  preco5: number | null;
   descontinuado: boolean;
   marca: string;
   categoriaComplementar: string;
@@ -49,19 +51,31 @@ interface Product {
   tipoEmbalagem: string;
 }
 
+type PriceTableOption = 1 | 2 | 3 | 4 | 5 | "TE";
+
+interface AppUser {
+  id?: string;
+  username: string;
+  label: string;
+  isAdmin: boolean;
+  active: boolean;
+}
+
+const AUTH_STORAGE_KEY = "paviment.currentUser";
+const DEFAULT_PASSWORD_HASHES = {
+  admin: "79416c9685c6baf019b311c43844d8d13e1b1c05c8bfcd814048b8719ddf2ee1",
+  vendas: "e95677a8dc1e007ad2de15c4a87042c39592c8d358a26b5d0130b9e6440297f4",
+};
+
+function canAccessBudget(user: AppUser, budgetOwner: string): boolean {
+  return user.isAdmin || budgetOwner === user.username;
+}
+
 interface PricingSettings {
   id?: string;
   impostoPercentual: number;
   taxaCartaoPercentual: number;
   fretePor100Kg: number;
-}
-
-interface AppUser {
-  id: string;
-  username: string;
-  label: string;
-  isAdmin: boolean;
-  active: boolean;
 }
 
 interface Customer {
@@ -99,7 +113,7 @@ interface Budget {
   numero: number;
   customerId: string;
   status: BudgetStatus;
-  tabelaPreco: 1 | 2 | 3 | 4;
+  tabelaPreco: 1 | 2 | 3 | 4 | 5;
   frete: number;
   percentualImposto: number;
   formaPagamento: FormaPagamento;
@@ -121,13 +135,14 @@ interface Budget {
   totalFinal: number;
   createdAt: string;
   updatedAt: string;
+  createdBy: string;
 }
 
 
 // ── Mappers (DB snake_case → JS camelCase) ────────────────────────
 
 function mapProduct(r: any): Product {
-  return {
+  return normalizeProductBrand({
     id: r.id,
     referencia: r.referencia || "",
     formato: r.formato || "",
@@ -150,12 +165,13 @@ function mapProduct(r: any): Product {
     preco2: r.preco2 != null ? parseFloat(r.preco2) : null,
     preco3: r.preco3 != null ? parseFloat(r.preco3) : null,
     preco4: r.preco4 != null ? parseFloat(r.preco4) : null,
+    preco5: r.preco5 != null ? parseFloat(r.preco5) : null,
     descontinuado: r.descontinuado ?? false,
     marca: r.marca || "Villagres",
     categoriaComplementar: r.categoria_complementar || "",
     tipoRejunte: r.tipo_rejunte || "",
     tipoEmbalagem: r.tipo_embalagem || "",
-  };
+  });
 }
 
 function mapCustomer(r: any): Customer {
@@ -217,6 +233,7 @@ function mapBudget(r: any, items: BudgetItem[] = []): Budget {
     totalFinal: parseFloat(r.total_final) || 0,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    createdBy: r.created_by || "admin",
   };
 }
 
@@ -240,6 +257,7 @@ CREATE TABLE IF NOT EXISTS products (
   espessura_mm DECIMAL(10,2) DEFAULT 0,
   preco1 DECIMAL(12,4), preco2 DECIMAL(12,4),
   preco3 DECIMAL(12,4), preco4 DECIMAL(12,4),
+  preco5 DECIMAL(12,4),
   marca TEXT DEFAULT 'Villagres',
   categoria_complementar TEXT,
   tipo_rejunte TEXT,
@@ -257,6 +275,23 @@ CREATE TABLE IF NOT EXISTS pricing_settings (
 );
 ALTER TABLE pricing_settings DISABLE ROW LEVEL SECURITY;
 
+CREATE TABLE IF NOT EXISTS app_users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  username TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE app_users DISABLE ROW LEVEL SECURITY;
+INSERT INTO app_users (username, display_name, password_hash, is_admin, active)
+VALUES
+  ('admin', 'Administrador', '79416c9685c6baf019b311c43844d8d13e1b1c05c8bfcd814048b8719ddf2ee1', TRUE, TRUE),
+  ('vendas', 'Vendas', 'e95677a8dc1e007ad2de15c4a87042c39592c8d358a26b5d0130b9e6440297f4', FALSE, TRUE)
+ON CONFLICT (username) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS customers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   nome TEXT NOT NULL, cpf TEXT, email TEXT,
@@ -267,18 +302,6 @@ CREATE TABLE IF NOT EXISTS customers (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE customers DISABLE ROW LEVEL SECURITY;
-
-CREATE TABLE IF NOT EXISTS app_users (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  username TEXT NOT NULL UNIQUE,
-  display_name TEXT NOT NULL,
-  password_hash TEXT NOT NULL,
-  is_admin BOOLEAN NOT NULL DEFAULT FALSE,
-  active BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-ALTER TABLE app_users DISABLE ROW LEVEL SECURITY;
 
 CREATE TABLE IF NOT EXISTS budgets (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -294,6 +317,7 @@ CREATE TABLE IF NOT EXISTS budgets (
   desconto_pix_inclui_frete BOOLEAN DEFAULT FALSE,
   observacoes TEXT, subtotal DECIMAL(12,2) DEFAULT 0,
   total_final DECIMAL(12,2) DEFAULT 0,
+  created_by TEXT NOT NULL DEFAULT 'admin',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -315,7 +339,19 @@ ALTER TABLE budget_items DISABLE ROW LEVEL SECURITY;
 -- Migrações (execute se já tiver as tabelas criadas)
 ALTER TABLE budgets ADD COLUMN IF NOT EXISTS tecnico TEXT;
 ALTER TABLE budgets ADD COLUMN IF NOT EXISTS endereco_entrega TEXT;
+ALTER TABLE budgets ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT 'admin';
+UPDATE budgets SET created_by = 'admin' WHERE created_by IS NULL;
+ALTER TABLE budgets DROP CONSTRAINT IF EXISTS budgets_created_by_check;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS preco5 DECIMAL(12,4);
 ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS marca TEXT DEFAULT 'Villagres';
+UPDATE products
+SET marca = 'Villa Vinílicos'
+WHERE marca IS DISTINCT FROM 'Villa Vinílicos'
+  AND (
+    referencia ~* '^(SPC|LVT|RP)([[:space:]._/-]|$)'
+    OR (COALESCE(referencia, '') || ' ' || COALESCE(linha, '') || ' ' || COALESCE(colecao, '') || ' ' || COALESCE(cor, '') || ' ' || COALESCE(formato, '') || ' ' || COALESCE(superficie, '')) ~* 'vin[ií]lic'
+  );
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS logradouro TEXT;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS numero_end TEXT;
@@ -389,6 +425,7 @@ function buildProductsFromCSV(csvText: string): Omit<Product, "id">[] {
       preco2: parsePrice(row[18]),
       preco3: parsePrice(row[19]),
       preco4: parsePrice(row[20]),
+      preco5: parsePrice(row[21]),
     });
   }
   return products;
@@ -406,41 +443,10 @@ async function getProductCount(): Promise<number> {
   return count || 0;
 }
 
-async function fetchAppUsers(): Promise<AppUser[]> {
-  const { data, error } = await supabase
-    .from("app_users")
-    .select("id, username, display_name, is_admin, active")
-    .order("username");
-  if (error) throw error;
-  return (data || []).map((user) => ({
-    id: user.id,
-    username: user.username || "",
-    label: user.display_name || user.username || "",
-    isAdmin: user.is_admin === true,
-    active: user.active !== false,
-  }));
-}
-
-async function updateUserAdminRole(user: AppUser, isAdmin: boolean): Promise<void> {
-  if (user.isAdmin && !isAdmin) {
-    const { count, error: countError } = await supabase
-      .from("app_users")
-      .select("id", { count: "exact", head: true })
-      .eq("is_admin", true)
-      .eq("active", true);
-    if (countError) throw countError;
-    if ((count ?? 0) <= 1) throw new Error("O sistema precisa manter pelo menos um administrador ativo.");
-  }
-
-  const { error } = await supabase
-    .from("app_users")
-    .update({ is_admin: isAdmin, updated_at: new Date().toISOString() })
-    .eq("id", user.id);
-  if (error) throw error;
-}
-
 async function seedProducts(products: Omit<Product, "id">[]): Promise<void> {
-  const rows = products.map((p) => ({
+  const rows = products.map((product) => {
+    const p = normalizeProductBrand(product);
+    return ({
     referencia: p.referencia,
     formato: p.formato,
     linha: p.linha,
@@ -462,7 +468,10 @@ async function seedProducts(products: Omit<Product, "id">[]): Promise<void> {
     preco2: p.preco2,
     preco3: p.preco3,
     preco4: p.preco4,
-  }));
+    preco5: p.preco5,
+    marca: p.marca || "Villagres",
+  });
+  });
   // Insert in batches of 50
   for (let i = 0; i < rows.length; i += 50) {
     const batch = rows.slice(i, i + 50);
@@ -480,12 +489,14 @@ function mapBudgetSummary(r: any): BudgetSummary {
   return { ...mapBudget(r, []), customerNome: r.customers?.nome || "", customerCidade: r.customers?.cidade || "" };
 }
 
-async function fetchRecentBudgets(limit = 5): Promise<BudgetSummary[]> {
-  const { data, error } = await supabase
+async function fetchRecentBudgets(currentUser: AppUser, limit = 5): Promise<BudgetSummary[]> {
+  let q = supabase
     .from("budgets")
     .select("*, customers(nome, cidade)")
     .order("created_at", { ascending: false })
     .limit(limit);
+  if (currentUser.username !== "admin") q = q.eq("created_by", currentUser.username);
+  const { data, error } = await q;
   if (error) throw error;
   return (data || []).map(mapBudgetSummary);
 }
@@ -493,8 +504,9 @@ async function fetchRecentBudgets(limit = 5): Promise<BudgetSummary[]> {
 async function fetchBudgetsFiltered(filters: {
   status?: string; customerQ?: string;
   dataInicio?: string; dataFim?: string;
-}): Promise<BudgetSummary[]> {
+}, currentUser: AppUser): Promise<BudgetSummary[]> {
   let q = supabase.from("budgets").select("*, customers(nome, cidade)");
+  if (currentUser.username !== "admin") q = q.eq("created_by", currentUser.username);
   if (filters.status) q = q.eq("status", filters.status);
   if (filters.dataInicio) q = q.gte("created_at", filters.dataInicio);
   if (filters.dataFim) q = q.lte("created_at", filters.dataFim + "T23:59:59");
@@ -584,6 +596,76 @@ async function savePricingSettings(settings: PricingSettings): Promise<PricingSe
     taxaCartaoPercentual: parseDecimalInput(data.taxa_cartao_percentual),
     fretePor100Kg: data.frete_por_100kg == null ? 4 : parseDecimalInput(data.frete_por_100kg),
   };
+}
+
+
+function mapAppUser(r: any): AppUser {
+  return {
+    id: r.id,
+    username: r.username || "",
+    label: r.display_name || r.username || "",
+    isAdmin: r.is_admin === true,
+    active: r.active !== false,
+  };
+}
+
+async function hashUserPassword(username: string, password: string): Promise<string> {
+  const normalizedUsername = username.trim().toLowerCase();
+  const bytes = new TextEncoder().encode(`paviment:${normalizedUsername}:${password}`);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function fetchAppUsers(includeInactive = false): Promise<AppUser[]> {
+  let q = supabase
+    .from("app_users")
+    .select("id, username, display_name, is_admin, active")
+    .order("username");
+  if (!includeInactive) q = q.eq("active", true);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapAppUser);
+}
+
+async function authenticateAppUser(username: string, password: string): Promise<AppUser | null> {
+  const normalizedUsername = username.trim().toLowerCase();
+  const passwordHash = await hashUserPassword(normalizedUsername, password);
+  const { data, error } = await supabase
+    .from("app_users")
+    .select("id, username, display_name, is_admin, active")
+    .eq("username", normalizedUsername)
+    .eq("password_hash", passwordHash)
+    .eq("active", true)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? mapAppUser(data) : null;
+}
+
+async function createAppUser(user: { username: string; label: string; password: string }): Promise<void> {
+  const username = user.username.trim().toLowerCase();
+  const passwordHash = await hashUserPassword(username, user.password);
+  const { error } = await supabase
+    .from("app_users")
+    .insert({ username, display_name: user.label, password_hash: passwordHash, is_admin: false, active: true });
+  if (error) throw error;
+}
+
+async function updateAppUserPassword(username: string, password: string): Promise<void> {
+  const normalizedUsername = username.trim().toLowerCase();
+  const passwordHash = await hashUserPassword(normalizedUsername, password);
+  const { error } = await supabase
+    .from("app_users")
+    .update({ password_hash: passwordHash, updated_at: new Date().toISOString() })
+    .eq("username", normalizedUsername);
+  if (error) throw error;
+}
+
+async function deactivateAppUser(username: string): Promise<void> {
+  const { error } = await supabase
+    .from("app_users")
+    .update({ active: false, updated_at: new Date().toISOString() })
+    .eq("username", username);
+  if (error) throw error;
 }
 
 async function searchCustomers(q: string): Promise<Customer[]> {
@@ -798,12 +880,14 @@ async function deleteCustomer(id: string): Promise<void> {
   if (error) throw error;
 }
 
-async function getBudgetsForCustomer(customerId: string): Promise<Budget[]> {
-  const { data, error } = await supabase
+async function getBudgetsForCustomer(customerId: string, currentUser: AppUser): Promise<Budget[]> {
+  let q = supabase
     .from("budgets")
     .select("*")
     .eq("customer_id", customerId)
     .order("numero", { ascending: false });
+  if (currentUser.username !== "admin") q = q.eq("created_by", currentUser.username);
+  const { data, error } = await q;
   if (error) throw error;
   return (data || []).map((r) => mapBudget(r, []));
 }
@@ -818,10 +902,10 @@ async function getBudgetWithItems(budgetId: string): Promise<Budget> {
   return mapBudget(b, (items || []).map(mapItem));
 }
 
-async function createBudget(customerId: string): Promise<Budget> {
+async function createBudget(customerId: string, currentUser: AppUser): Promise<Budget> {
   const { data, error } = await supabase
     .from("budgets")
-    .insert({ customer_id: customerId, status: "rascunho", tabela_preco: 1, frete: 0, percentual_imposto: 0, forma_pagamento: "avista", parcelas_cartao: 1, desconto_pix_percentual: 0, desconto_pix_inclui_frete: false })
+    .insert({ customer_id: customerId, status: "rascunho", tabela_preco: 1, frete: 0, percentual_imposto: 0, forma_pagamento: "avista", parcelas_cartao: 1, desconto_pix_percentual: 0, desconto_pix_inclui_frete: false, created_by: currentUser.username })
     .select()
     .single();
   if (error) throw error;
@@ -841,11 +925,22 @@ async function runMigrations(): Promise<void> {
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_cidade TEXT;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_estado TEXT;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS forma_pagamento TEXT DEFAULT 'avista';
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT 'admin';
+      UPDATE budgets SET created_by = 'admin' WHERE created_by IS NULL;
+      ALTER TABLE budgets DROP CONSTRAINT IF EXISTS budgets_created_by_check;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS parcelas_cartao INTEGER DEFAULT 1;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS desconto_pix_percentual NUMERIC(5,2) DEFAULT 0;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS desconto_pix_inclui_frete BOOLEAN DEFAULT FALSE;
-      ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS preco5 DECIMAL(12,4);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS marca TEXT DEFAULT 'Villagres';
+      UPDATE products
+      SET marca = 'Villa Vinílicos'
+      WHERE marca IS DISTINCT FROM 'Villa Vinílicos'
+        AND (
+          referencia ~* '^(SPC|LVT|RP)([[:space:]._/-]|$)'
+          OR (COALESCE(referencia, '') || ' ' || COALESCE(linha, '') || ' ' || COALESCE(colecao, '') || ' ' || COALESCE(cor, '') || ' ' || COALESCE(formato, '') || ' ' || COALESCE(superficie, '')) ~* 'vin[ií]lic'
+        );
       ALTER TABLE products ADD COLUMN IF NOT EXISTS categoria_complementar TEXT;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS tipo_rejunte TEXT;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS tipo_embalagem TEXT;
@@ -857,6 +952,22 @@ async function runMigrations(): Promise<void> {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
       ALTER TABLE pricing_settings ADD COLUMN IF NOT EXISTS frete_por_100kg NUMERIC(10,2) NOT NULL DEFAULT 4;
+      CREATE TABLE IF NOT EXISTS app_users (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        username TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+        active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      ALTER TABLE app_users DISABLE ROW LEVEL SECURITY;
+      INSERT INTO app_users (username, display_name, password_hash, is_admin, active)
+      VALUES
+        ('admin', 'Administrador', '${DEFAULT_PASSWORD_HASHES.admin}', TRUE, TRUE),
+        ('vendas', 'Vendas', '${DEFAULT_PASSWORD_HASHES.vendas}', FALSE, TRUE)
+      ON CONFLICT (username) DO NOTHING;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS logradouro TEXT;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS numero_end TEXT;
@@ -937,10 +1048,10 @@ async function addBudgetItem(budgetId: string, item: {
   };
 }
 
-async function updateBudgetItem(id: string, areaM2: number, caixas: number, precoM2: number): Promise<void> {
+async function updateBudgetItem(id: string, areaM2: number, caixas: number, precoM2: number, subtotal: number): Promise<void> {
   const { error } = await supabase
     .from("budget_items")
-    .update({ area_m2: areaM2, caixas, subtotal: round2(areaM2 * precoM2) })
+    .update({ area_m2: areaM2, caixas, subtotal })
     .eq("id", id);
   if (error) throw error;
 }
@@ -955,7 +1066,7 @@ async function deleteBudget(id: string): Promise<void> {
   if (error) throw error;
 }
 
-async function duplicateBudget(original: Budget): Promise<Budget> {
+async function duplicateBudget(original: Budget, currentUser: AppUser): Promise<Budget> {
   const { data, error } = await supabase
     .from("budgets")
     .insert({
@@ -979,6 +1090,7 @@ async function duplicateBudget(original: Budget): Promise<Budget> {
       entrega_estado: original.entregaEstado || null,
       subtotal: original.subtotal,
       total_final: original.totalFinal,
+      created_by: currentUser.username,
     })
     .select()
     .single();
@@ -1017,6 +1129,47 @@ function isVillacolProduct(product?: Product | null): boolean {
   return product?.marca === "Villacol";
 }
 
+function hasVillaVinilicosSignature(product: Pick<Product, "referencia" | "linha" | "colecao" | "cor" | "formato" | "superficie" | "marca">): boolean {
+  const referencia = (product.referencia || "").trim();
+  const refUpper = referencia.toUpperCase();
+  const normalizedText = [product.referencia, product.linha, product.colecao, product.cor, product.formato, product.superficie, product.marca]
+    .filter(Boolean)
+    .join(" ")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  return /^(SPC|LVT|RP)[\s._/-]?/.test(refUpper) || refUpper === "SPC" || refUpper === "LVT" || refUpper === "RP" || normalizedText.includes("vinilico");
+}
+
+function hasVillaVinilicosRodapeSignature(product: Pick<Product, "referencia" | "linha" | "colecao" | "cor" | "formato" | "superficie" | "marca">): boolean {
+  const referencia = (product.referencia || "").trim().toUpperCase();
+  const normalizedText = [product.referencia, product.linha, product.colecao, product.cor, product.formato, product.superficie, product.marca]
+    .filter(Boolean)
+    .join(" ")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  return /^(RP)[\s._/-]?/.test(referencia) || referencia === "RP" || normalizedText.includes("rodape");
+}
+
+function normalizeProductBrand<T extends Product | Omit<Product, "id">>(product: T): T {
+  return hasVillaVinilicosSignature(product) ? { ...product, marca: "Villa Vinílicos" } : product;
+}
+
+function isVillaVinilicosProduct(product?: Product | null): boolean {
+  return product?.marca === "Villa Vinílicos" || (product ? hasVillaVinilicosSignature(product) : false);
+}
+
+function isLinearMeterProduct(product?: Product | null): boolean {
+  return product ? isVillaVinilicosProduct(product) && hasVillaVinilicosRodapeSignature(product) : false;
+}
+
+function getProductQuantityLabel(product?: Product | null, plural = false): string {
+  if (isLinearMeterProduct(product)) return plural ? "metros lineares" : "metro linear";
+  if (isVillacolProduct(product)) return getComplementaryUnitLabel(product, plural);
+  return plural ? "m²" : "m²";
+}
+
 function getComplementaryUnitLabel(product?: Product | null, plural = false): string {
   if (product?.categoriaComplementar === "Rejunte") return plural ? "potes" : "pote";
   if (product?.categoriaComplementar === "Argamassa") return plural ? "sacos" : "saco";
@@ -1030,9 +1183,18 @@ function calculateItemRealAreaM2(item: BudgetItem): number {
   return round2(caixas * m2PorCaixa);
 }
 
+function calculateItemSubtotal(product: Product, areaM2: number, caixas: number, precoM2: number): number {
+  const quantityBase = isVillacolProduct(product) || isLinearMeterProduct(product) ? areaM2 : caixas * (product.m2PorCaixa || 0);
+  return round2(quantityBase * precoM2);
+}
+
 function calculateItemWeightKg(item: BudgetItem): number {
   const caixas = Number.isFinite(item.caixas) ? item.caixas : 0;
   const pesoPorCaixa = Number.isFinite(item.product?.pesoBrutoCx) ? item.product.pesoBrutoCx : 0;
+  const pesoPorMetroLinear = Number.isFinite(item.product?.pesoBrutoM2) ? item.product.pesoBrutoM2 : 0;
+  if (isLinearMeterProduct(item.product) && pesoPorMetroLinear > 0) {
+    return round2(item.areaM2 * pesoPorMetroLinear);
+  }
   return round2(caixas * pesoPorCaixa);
 }
 
@@ -1070,7 +1232,7 @@ const LOCAL_USO: Record<number, string> = {
   1: "Parede/Piso", 2: "Parede", 3: "Piso Interno", 4: "Piso Externo",
 };
 
-function priceKey(t: 1 | 2 | 3 | 4): keyof Product {
+function priceKey(t: 1 | 2 | 3 | 4 | 5): keyof Product {
   return `preco${t}` as keyof Product;
 }
 
@@ -1103,6 +1265,14 @@ function StatusPill({ status }: { status: BudgetStatus }) {
   return (
     <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${STATUS_PILL[status]}`}>
       {STATUS_LABELS[status]}
+    </span>
+  );
+}
+
+function BudgetOwnerPill({ createdBy }: { createdBy: string }) {
+  return (
+    <span className="text-[10px] text-muted-foreground border border-border rounded px-1">
+      {createdBy || "admin"}
     </span>
   );
 }
@@ -1173,9 +1343,9 @@ function ProductModal({
   allProducts, tabelaPreco, pricingSettings, onSelect, onClose,
 }: {
   allProducts: Product[];
-  tabelaPreco: 1 | 2 | 3 | 4;
+  tabelaPreco: 1 | 2 | 3 | 4 | 5;
   pricingSettings?: PricingSettings;
-  onSelect: (product: Product, areaM2: number, tabelaPreco: 1 | 2 | 3 | 4) => void;
+  onSelect: (product: Product, areaM2: number, tabelaPreco: PriceTableOption, specialPrice?: number) => void;
   onClose: () => void;
 }) {
   const [q, setQ] = useState("");
@@ -1186,8 +1356,9 @@ function ProductModal({
   const [localUso, setLocalUso] = useState("");
   const [selected, setSelected] = useState<Product | null>(null);
   const [areaInput, setAreaInput] = useState("");
-  const [selectedTabela, setSelectedTabela] = useState<1 | 2 | 3 | 4>(tabelaPreco);
-  const pk = priceKey(selectedTabela);
+  const [selectedTabela, setSelectedTabela] = useState<PriceTableOption>(tabelaPreco);
+  const [specialPriceInput, setSpecialPriceInput] = useState("");
+  const pk = selectedTabela === "TE" ? null : priceKey(selectedTabela);
   const safeProducts = Array.isArray(allProducts) ? allProducts : [];
   const effectivePricingSettings = pricingSettings || { impostoPercentual: 0, taxaCartaoPercentual: 0, fretePor100Kg: 4 };
 
@@ -1207,20 +1378,24 @@ function ProductModal({
   function confirmAdd() {
     if (!selected) return;
     const area = parseFloat(areaInput.replace(",", "."));
-    if (!area || area <= 0) { toast.error(isVillacolProduct(selected) ? "Informe a quantidade" : "Informe a área em m²"); return; }
-    onSelect(selected, area, selectedTabela);
+    if (!area || area <= 0) { toast.error(isVillacolProduct(selected) || isLinearMeterProduct(selected) ? "Informe a quantidade" : "Informe a área em m²"); return; }
+    const specialPrice = selectedTabela === "TE" ? parseDecimalInput(specialPriceInput) : undefined;
+    if (selectedTabela === "TE" && (!specialPrice || specialPrice <= 0)) { toast.error("Informe um valor válido para a Tabela Especial."); return; }
+    onSelect(selected, area, selectedTabela, specialPrice);
   }
 
   const superficies = [...new Set(safeProducts.map((p) => p.superficie).filter(Boolean))].sort();
   const formatos = [...new Set(safeProducts.map((p) => p.formato).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true }));
 
   if (selected) {
-    const priceBase = selected[pk] as number | null;
-    const price = priceBase != null ? calculateFinalPrice(priceBase, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
+    const priceBase = pk ? selected[pk] as number | null : null;
+    const specialPrice = parseDecimalInput(specialPriceInput);
+    const price = selectedTabela === "TE" ? (specialPrice > 0 ? specialPrice : null) : priceBase != null ? calculateFinalPrice(priceBase, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
     const area = parseFloat(areaInput.replace(",", ".")) || 0;
-    const caixas = selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : 0;
     const selectedIsVillacol = isVillacolProduct(selected);
-    const selectedUnitLabel = getComplementaryUnitLabel(selected, caixas !== 1);
+    const selectedIsLinearMeter = isLinearMeterProduct(selected);
+    const caixas = selectedIsLinearMeter ? (selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : Math.ceil(area)) : selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : 0;
+    const selectedUnitLabel = selectedIsLinearMeter ? getProductQuantityLabel(selected, area !== 1) : getComplementaryUnitLabel(selected, caixas !== 1);
 
     return (
       <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
@@ -1243,45 +1418,57 @@ function ProductModal({
               <>
                 <p className="text-sm text-muted-foreground mt-0.5">{selected.colecao} · {selected.superficie}</p>
                 <p className="text-xs text-muted-foreground mt-0.5 font-mono">{selected.formato} · Ref: {selected.referencia}</p>
-                <p className="text-xs text-muted-foreground">{LOCAL_USO[selected.localUso]} · {selected.m2PorCaixa} m²/cx · {selected.espessuraMm}mm</p>
+                <p className="text-xs text-muted-foreground">{selectedIsLinearMeter ? "Venda por metro linear" : `${LOCAL_USO[selected.localUso]} · ${selected.m2PorCaixa} m²/cx · ${selected.espessuraMm}mm`}</p>
               </>
             )}
           </div>
           <div className="mb-4">
             <p className="text-xs font-medium text-muted-foreground mb-1.5">Tabela de preço deste produto</p>
-            <div className="grid grid-cols-4 gap-1.5">
-              {([1, 2, 3, 4] as const).map((t) => (
+            <div className="grid grid-cols-6 gap-1.5">
+              {([1, 2, 3, 4, 5] as const).map((t) => (
                 <button key={t} type="button" onClick={() => setSelectedTabela(t)}
                   className={`rounded-lg py-1.5 text-xs font-semibold border transition-colors ${selectedTabela === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
                   Tabela {t}
                 </button>
               ))}
+              <button type="button" onClick={() => setSelectedTabela("TE")}
+                className={`rounded-lg py-1.5 text-xs font-semibold border transition-colors ${selectedTabela === "TE" ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                TE
+              </button>
             </div>
+            {selectedTabela === "TE" && (
+              <div className="mt-2">
+                <label className="block text-xs font-medium text-muted-foreground mb-1">Valor especial {selectedIsLinearMeter ? "por metro linear" : selectedIsVillacol ? "por unidade" : "por m²"}</label>
+                <input type="text" value={specialPriceInput} onChange={(e) => setSpecialPriceInput(e.target.value)}
+                  placeholder="Ex: 129,90"
+                  className="w-full border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono" />
+              </div>
+            )}
           </div>
           {price ? (
             <div className="bg-primary/8 rounded-xl p-3 mb-4 flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Tabela {selectedTabela}</span>
+              <span className="text-sm text-muted-foreground">{selectedTabela === "TE" ? "Tabela Especial" : `Tabela ${selectedTabela}`}</span>
               <span className="text-xl font-semibold text-primary font-mono">
-                {fmtBRL(price)}<span className="text-sm font-normal text-muted-foreground">{selectedIsVillacol ? "/un." : "/m²"}</span>
+                {fmtBRL(price)}<span className="text-sm font-normal text-muted-foreground">{selectedIsLinearMeter ? "/m linear" : selectedIsVillacol ? "/un." : "/m²"}</span>
               </span>
             </div>
           ) : (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 flex items-center gap-2 text-sm text-amber-700">
-              <AlertTriangle size={14} /> Preço não disponível para tabela {selectedTabela}
+              <AlertTriangle size={14} /> {selectedTabela === "TE" ? "Informe o valor da Tabela Especial" : `Preço não disponível para tabela ${selectedTabela}`}
             </div>
           )}
-          <label className="block text-xs font-medium text-muted-foreground mb-1">{selectedIsVillacol ? `Quantidade de ${getComplementaryUnitLabel(selected, true)}` : "Área necessária (m²)"}</label>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">{selectedIsLinearMeter ? "Quantidade em metros lineares" : selectedIsVillacol ? `Quantidade de ${getComplementaryUnitLabel(selected, true)}` : "Área necessária (m²)"}</label>
           <input type="text" value={areaInput} onChange={(e) => setAreaInput(e.target.value)}
-            placeholder={selectedIsVillacol ? "Ex: 10" : "Ex: 45,50"} autoFocus
+            placeholder={selectedIsVillacol || selectedIsLinearMeter ? "Ex: 10" : "Ex: 45,50"} autoFocus
             onKeyDown={(e) => e.key === "Enter" && confirmAdd()}
             className="w-full border border-border rounded-xl px-4 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 mb-3 font-mono" />
           {area > 0 && selected.m2PorCaixa > 0 && (
             <div className="bg-muted rounded-xl p-3 mb-4 text-sm space-y-1.5">
               <div className="flex justify-between text-muted-foreground">
-                <span>{selectedIsVillacol ? "Quantidade calculada" : "Caixas necessárias"}</span>
-                <span className="font-mono font-medium text-foreground">{caixas} {selectedIsVillacol ? selectedUnitLabel : "cx"}</span>
+                <span>{selectedIsVillacol || selectedIsLinearMeter ? "Quantidade" : "Caixas necessárias"}</span>
+                <span className="font-mono font-medium text-foreground">{selectedIsLinearMeter ? `${area.toFixed(2)} ${selectedUnitLabel}` : `${caixas} ${selectedIsVillacol ? selectedUnitLabel : "cx"}`}</span>
               </div>
-              {!selectedIsVillacol && (
+              {!selectedIsVillacol && !selectedIsLinearMeter && (
                 <div className="flex justify-between text-muted-foreground">
                   <span>m² real (arredondado)</span>
                   <span className="font-mono text-foreground">{(caixas * selected.m2PorCaixa).toFixed(2)} m²</span>
@@ -1290,7 +1477,7 @@ function ProductModal({
               {price && (
                 <div className="flex justify-between pt-1.5 border-t border-border font-medium">
                   <span>Subtotal estimado</span>
-                  <span className="font-mono text-primary">{fmtBRL(area * price)}</span>
+                  <span className="font-mono text-primary">{fmtBRL(calculateItemSubtotal(selected, area, caixas, price))}</span>
                 </div>
               )}
             </div>
@@ -1326,12 +1513,16 @@ function ProductModal({
           </div>
           <div className="flex items-center gap-1.5 border border-border rounded-xl px-3 py-2 bg-muted/30">
             <span className="text-xs text-muted-foreground mr-1">Tabela do produto:</span>
-            {([1, 2, 3, 4] as const).map((t) => (
+            {([1, 2, 3, 4, 5] as const).map((t) => (
               <button key={t} type="button" onClick={() => setSelectedTabela(t)}
                 className={`w-7 h-6 rounded text-xs font-semibold transition-all ${selectedTabela === t ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>
                 {t}
               </button>
             ))}
+            <button type="button" onClick={() => setSelectedTabela("TE")}
+              className={`w-8 h-6 rounded text-xs font-semibold transition-all ${selectedTabela === "TE" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>
+              TE
+            </button>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
             <select value={marcaFiltro} onChange={(e) => setMarcaFiltro(e.target.value)}
@@ -1339,6 +1530,7 @@ function ProductModal({
               <option value="">Todas as marcas</option>
               <option value="Villagres">Villagres</option>
               <option value="Villacol">Villacol</option>
+              <option value="Villa Vinílicos">Villa Vinílicos</option>
             </select>
             <select value={categoriaFiltro} onChange={(e) => setCategoriaFiltro(e.target.value)}
               className="border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
@@ -1375,8 +1567,8 @@ function ProductModal({
           ) : (
             <div className="divide-y divide-border">
               {results.map((p) => {
-                const price = p[pk] as number | null;
-                const finalPrice = price != null ? calculateFinalPrice(price, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
+                const price = pk ? p[pk] as number | null : null;
+                const finalPrice = selectedTabela === "TE" ? null : price != null ? calculateFinalPrice(price, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
                 return (
                   <button key={p.id} onClick={() => setSelected(p)}
                     className="w-full text-left px-5 py-3 hover:bg-muted/50 transition-colors group">
@@ -1388,14 +1580,14 @@ function ProductModal({
                           {p.cor && p.cor !== "única" && p.cor !== "-"
                             ? <span className="text-muted-foreground font-normal"> · {p.cor}</span> : null}
                         </p>
-                        <p className="text-xs text-muted-foreground mt-0.5">{p.marca === "Villacol" ? [p.categoriaComplementar, p.tipoRejunte || p.tipoEmbalagem].filter(Boolean).join(" · ") : `${p.formato} · ${p.superficie} · ${LOCAL_USO[p.localUso]}`}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">{p.marca === "Villacol" ? [p.categoriaComplementar, p.tipoRejunte || p.tipoEmbalagem].filter(Boolean).join(" · ") : isVillaVinilicosProduct(p) ? [p.colecao, p.formato || "Metro linear"].filter(Boolean).join(" · ") : `${p.formato} · ${p.superficie} · ${LOCAL_USO[p.localUso]}`}</p>
                         <p className="text-xs text-muted-foreground font-mono">{p.referencia} · {p.colecao}</p>
                       </div>
                       <div className="text-right shrink-0">
                         {finalPrice != null
-                          ? <p className="text-sm font-semibold text-primary font-mono">{fmtBRL(finalPrice)}/m²</p>
+                          ? <p className="text-sm font-semibold text-primary font-mono">{fmtBRL(finalPrice)}/{isLinearMeterProduct(p) ? "m linear" : "m²"}</p>
                           : <p className="text-xs text-amber-600">Consultar</p>}
-                        <p className="text-xs text-muted-foreground">{p.m2PorCaixa} m²/cx</p>
+                        <p className="text-xs text-muted-foreground">{isLinearMeterProduct(p) ? "Venda por metro linear" : `${p.m2PorCaixa} m²/cx`}</p>
                       </div>
                     </div>
                   </button>
@@ -1412,9 +1604,9 @@ function ProductModal({
 // ── Budget Editor ─────────────────────────────────────────────────
 
 function BudgetEditor({
-  budget: initBudget, allProducts, pricingSettings, customer, onBack, onGoHome, onBudgetChange, onOpenBudget,
+  budget: initBudget, allProducts, pricingSettings, customer, currentUser, onBack, onGoHome, onBudgetChange, onOpenBudget,
 }: {
-  budget: Budget; allProducts: Product[]; pricingSettings: PricingSettings; customer: Customer;
+  budget: Budget; allProducts: Product[]; pricingSettings: PricingSettings; customer: Customer; currentUser: AppUser;
   onBack: () => void; onGoHome: () => void; onBudgetChange: (b: Budget) => void;
   onOpenBudget?: (b: Budget) => void;
 }) {
@@ -1431,7 +1623,8 @@ function BudgetEditor({
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [editAreaInput, setEditAreaInput] = useState("");
-  const [editTabela, setEditTabela] = useState<1 | 2 | 3 | 4>(initBudget.tabelaPreco);
+  const [editTabela, setEditTabela] = useState<PriceTableOption>(initBudget.tabelaPreco);
+  const [editSpecialPriceInput, setEditSpecialPriceInput] = useState("");
   const [showSaveDialog, setShowSaveDialog] = useState(false); // unused but kept for type safety
   const [isDirty, setIsDirty] = useState(false);
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
@@ -1467,6 +1660,7 @@ function BudgetEditor({
 
   const isLocked = budget.status === "fechado";
   const villagresItems = budget.items.filter((item) => !isVillacolProduct(item.product));
+  const villaVinilicosItems = budget.items.filter((item) => isVillaVinilicosProduct(item.product));
   const villacolItems = budget.items.filter((item) => isVillacolProduct(item.product));
   const pixOnlyCategories = ["Rejunte", "Niveladores/Cunhas"];
   const topFinancialItems = budget.items.filter((item) => !pixOnlyCategories.includes(item.product?.categoriaComplementar || ""));
@@ -1488,6 +1682,12 @@ function BudgetEditor({
       : "Subtotal Débito";
   const topPixDiscount = budget.formaPagamento === "avista_pix" ? round2(topSubtotalBeforeDiscount * Math.min(budget.descontoPixPercentual, 3) / 100) : 0;
   const topTotal = round2(topSubtotalBeforeDiscount - topPixDiscount);
+  const cardInstallmentLabel = budget.formaPagamento === "cartao" && budget.parcelasCartao > 1
+    ? `${budget.parcelasCartao} x ${fmtBRL(round2(topTotal / budget.parcelasCartao))}`
+    : "";
+  const cardInstallmentLabelPrint = budget.formaPagamento === "cartao" && budget.parcelasCartao > 1
+    ? `${budget.parcelasCartao} x ${fmtBRL(round2(topTotal / budget.parcelasCartao))}`
+    : "";
   const pixOnlyProductsSubtotal = round2(pixOnlyItems.reduce((sum, item) => sum + item.subtotal * noTaxOrCardFactor, 0));
   const pixOnlySubtotal = round2(pixOnlyProductsSubtotal + budget.frete);
   const generalTotal = round2(topTotal + pixOnlySubtotal);
@@ -1512,7 +1712,7 @@ function BudgetEditor({
   async function handleDuplicate() {
     setDuplicating(true);
     try {
-      const newBudget = await duplicateBudget(budget);
+      const newBudget = await duplicateBudget(budget, currentUser);
       const full = await getBudgetWithItems(newBudget.id);
       setShowDuplicateModal(false);
       toast.success(`Orçamento #${full.numero} criado como cópia!`);
@@ -1562,32 +1762,37 @@ function BudgetEditor({
     });
   }
 
-  async function handleAddProduct(product: Product, areaM2: number, itemTabelaPreco: 1 | 2 | 3 | 4) {
+  async function handleAddProduct(product: Product, areaM2: number, itemTabelaPreco: PriceTableOption, specialPrice?: number) {
     const already = budget.items.find((i) => i.productId === product.id);
     if (already) {
       setShowModal(false);
       toast.warning(`"${product.linha}" já está no orçamento — edite a metragem diretamente na tabela.`);
       return;
     }
-    const precoBase = product[priceKey(itemTabelaPreco)] as number | null;
-    if (precoBase == null || !Number.isFinite(Number(precoBase)) || Number(precoBase) <= 0) {
+    const precoBase = itemTabelaPreco === "TE" ? null : product[priceKey(itemTabelaPreco)] as number | null;
+    if (itemTabelaPreco !== "TE" && (precoBase == null || !Number.isFinite(Number(precoBase)) || Number(precoBase) <= 0)) {
       toast.error(`Preço não disponível para a tabela ${itemTabelaPreco}.`);
       return;
     }
-    if (!product.m2PorCaixa || product.m2PorCaixa <= 0) {
+    if (itemTabelaPreco === "TE" && (!specialPrice || specialPrice <= 0)) {
+      toast.error("Informe um valor válido para a Tabela Especial.");
+      return;
+    }
+    const isLinearProduct = isLinearMeterProduct(product);
+    if (!isLinearProduct && (!product.m2PorCaixa || product.m2PorCaixa <= 0)) {
       toast.error("Produto sem m²/caixa válido. Corrija o cadastro antes de adicionar.");
       return;
     }
-    const precoM2 = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
+    const precoM2 = itemTabelaPreco === "TE" ? round2(specialPrice || 0) : calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
     if (!Number.isFinite(precoM2) || precoM2 <= 0) {
       toast.error("Não foi possível calcular o preço final do produto.");
       return;
     }
-    const caixas = Math.ceil(areaM2 / product.m2PorCaixa);
+    const caixas = isLinearProduct ? (product.m2PorCaixa > 0 ? Math.ceil(areaM2 / product.m2PorCaixa) : Math.ceil(areaM2)) : Math.ceil(areaM2 / product.m2PorCaixa);
     setSaving(true);
     try {
       const newItem = await addBudgetItem(budget.id, {
-        productId: product.id, product, areaM2, caixas, precoM2, subtotal: round2(areaM2 * precoM2),
+        productId: product.id, product, areaM2, caixas, precoM2, subtotal: calculateItemSubtotal(product, areaM2, caixas, precoM2),
       });
       const nextItems = [...budget.items, newItem];
       const b = updateLocal({ ...getSentBudgetDraftPatch(), items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
@@ -1611,20 +1816,22 @@ function BudgetEditor({
     finally { setRemovingId(null); }
   }
 
-  function inferItemTabela(item: BudgetItem): 1 | 2 | 3 | 4 {
-    for (const t of [1, 2, 3, 4] as const) {
+  function inferItemTabela(item: BudgetItem): PriceTableOption {
+    for (const t of [1, 2, 3, 4, 5] as const) {
       const precoBase = item.product[priceKey(t)] as number | null;
       if (precoBase == null) continue;
       const precoTabela = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
       if (Math.abs(precoTabela - item.precoM2) < 0.01) return t;
     }
-    return budget.tabelaPreco;
+    return "TE";
   }
 
   function startEditItem(item: BudgetItem) {
     setEditingItemId(item.id);
     setEditAreaInput(String(item.areaM2).replace(".", ","));
-    setEditTabela(inferItemTabela(item));
+    const inferredTabela = inferItemTabela(item);
+    setEditTabela(inferredTabela);
+    setEditSpecialPriceInput(inferredTabela === "TE" ? String(item.precoM2).replace(".", ",") : "");
   }
 
   async function confirmEditItem(itemId: string) {
@@ -1632,21 +1839,27 @@ function BudgetEditor({
     if (!item) return;
     const newArea = parseFloat(editAreaInput.replace(",", "."));
     if (!newArea || newArea <= 0) { toast.error("Área inválida"); return; }
-    const precoBase = item.product[priceKey(editTabela)] as number | null;
-    if (precoBase == null || !Number.isFinite(Number(precoBase)) || Number(precoBase) <= 0) {
+    const precoBase = editTabela === "TE" ? null : item.product[priceKey(editTabela)] as number | null;
+    if (editTabela !== "TE" && (precoBase == null || !Number.isFinite(Number(precoBase)) || Number(precoBase) <= 0)) {
       toast.error(`Preço não disponível para a tabela ${editTabela}.`);
       return;
     }
-    const newPrecoM2 = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
+    const specialPrice = parseDecimalInput(editSpecialPriceInput);
+    if (editTabela === "TE" && (!specialPrice || specialPrice <= 0)) {
+      toast.error("Informe um valor válido para a Tabela Especial.");
+      return;
+    }
+    const newPrecoM2 = editTabela === "TE" ? round2(specialPrice) : calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
     if (!Number.isFinite(newPrecoM2) || newPrecoM2 <= 0) {
       toast.error("Não foi possível calcular o preço final do produto.");
       return;
     }
-    const caixas = item.product.m2PorCaixa > 0 ? Math.ceil(newArea / item.product.m2PorCaixa) : item.caixas;
+    const caixas = isLinearMeterProduct(item.product) ? (item.product.m2PorCaixa > 0 ? Math.ceil(newArea / item.product.m2PorCaixa) : Math.ceil(newArea)) : item.product.m2PorCaixa > 0 ? Math.ceil(newArea / item.product.m2PorCaixa) : item.caixas;
     setSaving(true);
     try {
-      await updateBudgetItem(itemId, newArea, caixas, newPrecoM2);
-      const updatedItem = { ...item, areaM2: newArea, caixas, precoM2: newPrecoM2, subtotal: round2(newArea * newPrecoM2) };
+      const newSubtotal = calculateItemSubtotal(item.product, newArea, caixas, newPrecoM2);
+      await updateBudgetItem(itemId, newArea, caixas, newPrecoM2, newSubtotal);
+      const updatedItem = { ...item, areaM2: newArea, caixas, precoM2: newPrecoM2, subtotal: newSubtotal };
       const nextItems = budget.items.map((i) => i.id === itemId ? updatedItem : i);
       const b = updateLocal({ ...getSentBudgetDraftPatch(), items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
       await persistTotals(b);
@@ -1813,15 +2026,18 @@ function BudgetEditor({
     const rows = villagresItems.map((item) => {
       const p = item.product;
       const cor = p?.cor && p.cor !== "única" && p.cor !== "-" ? p.cor : "";
+      const isVinilico = isVillaVinilicosProduct(p);
+      const isLinear = isLinearMeterProduct(p);
       return `<tr>
         <td>${p?.referencia ?? ""}</td>
         <td>${p?.linha ?? ""}</td>
-        <td>${p?.colecao ?? ""}${cor ? " / " + cor : ""}</td>
-        <td>${p?.formato ?? ""}</td>
+        <td>${isVinilico ? "Villa Vinílicos" : p?.colecao ?? ""}${!isVinilico && cor ? " / " + cor : ""}</td>
+        <td>${isLinear ? "Metro linear" : p?.formato ?? ""}</td>
         <td style="text-align:right">${fmtBRLStr(item.precoM2)}</td>
-        <td style="text-align:right">${item.areaM2.toFixed(2)}</td>
-        <td style="text-align:right">${calculateItemRealAreaM2(item).toFixed(2)}</td>
-        <td style="text-align:right">${p?.m2PorCaixa ?? ""}</td>
+        <td style="text-align:right">${item.areaM2.toFixed(2)}${isLinear ? " ml" : ""}</td>
+        <td style="text-align:right">${isLinear ? "—" : `${item.caixas} cx`}</td>
+        <td style="text-align:right">${isLinear ? "—" : calculateItemRealAreaM2(item).toFixed(2)}</td>
+        <td style="text-align:right">${isLinear ? "—" : (p?.m2PorCaixa ?? "")}</td>
         <td style="text-align:right">${fmtKg(calculateItemWeightKg(item))}</td>
         <td style="text-align:right">${fmtBRLStr(item.subtotal)}</td>
       </tr>`;
@@ -1902,7 +2118,7 @@ ${rows ? `<div class="section-header">PRODUTOS / ESPECIFICAÇÕES</div>
   <thead>
     <tr>
       <th>Ref</th><th>Linha</th><th>Cor</th><th>Formato</th>
-      <th>Valor m²</th><th>Qnt m²</th><th>M² real</th><th>M²/cx</th><th>Peso total</th><th>Valor R$</th>
+      <th>Valor m²/ml</th><th>Qnt m²/ml</th><th>Caixas</th><th>M² real</th><th>M²/cx</th><th>Peso total</th><th>Valor R$</th>
     </tr>
   </thead>
   <tbody>
@@ -1925,10 +2141,10 @@ ${complementaryRows ? `<div class="section-header">PRODUTOS COMPLEMENTARES</div>
 
 <div class="clearfix">
   <table class="totals-box">
-    <tr><td>Produtos Villagres</td><td>${fmtBRLStr(villagresSubtotal)}</td></tr>
+    <tr><td>Produtos Villagres / Villa Vinílicos</td><td>${fmtBRLStr(villagresSubtotal)}</td></tr>
     <tr><td>Argamassas</td><td>${fmtBRLStr(argamassaSubtotal)}</td></tr>
     ${topPixDiscount > 0 ? `<tr><td>Desconto PIX (${budget.descontoPixPercentual}%)</td><td>- ${fmtBRLStr(topPixDiscount)}</td></tr>` : ""}
-    <tr><td>${topSubtotalLabel}</td><td>${fmtBRLStr(topTotal)}</td></tr>
+    <tr><td>${topSubtotalLabel}${cardInstallmentLabelPrint ? ` (${cardInstallmentLabelPrint})` : ""}</td><td>${fmtBRLStr(topTotal)}</td></tr>
     <tr><td>Rejuntes/Niveladores Villacol (PIX)</td><td>${fmtBRLStr(pixOnlyProductsSubtotal)}</td></tr>
     ${budget.frete > 0 ? `<tr><td>Frete (PIX)</td><td>${fmtBRLStr(budget.frete)}</td></tr>` : ""}
     <tr><td>Subtotal PIX</td><td>${fmtBRLStr(pixOnlySubtotal)}</td></tr>
@@ -1976,6 +2192,7 @@ ${budget.observacoes ? `
           </div>
           <div className="flex items-center gap-2">
             <StatusPill status={budget.status} />
+            <BudgetOwnerPill createdBy={budget.createdBy} />
             {saving && <Spinner size={14} />}
           </div>
         </div>
@@ -2038,10 +2255,10 @@ ${budget.observacoes ? `
                   <tr className="text-xs text-muted-foreground bg-muted/30 border-b border-border">
                     <th className="text-left px-5 py-2.5 font-medium">Produto</th>
                     <th className="text-left px-3 py-2.5 font-medium hidden md:table-cell">Formato</th>
-                    <th className="text-right px-3 py-2.5 font-medium">m²</th>
+                    <th className="text-right px-3 py-2.5 font-medium">Qtd.</th>
                     <th className="text-right px-3 py-2.5 font-medium">Cx</th>
                     <th className="text-right px-3 py-2.5 font-medium hidden md:table-cell">m² real</th>
-                    <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">R$/m²</th>
+                    <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">R$/m² ou ml</th>
                     <th className="text-right px-3 py-2.5 font-medium hidden lg:table-cell">Peso</th>
                     <th className="text-right px-3 py-2.5 font-medium">Subtotal</th>
                     <th className="px-3 py-2.5 w-16"></th>
@@ -2051,11 +2268,13 @@ ${budget.observacoes ? `
                   {villagresItems.map((item) => {
                     const isEditing = editingItemId === item.id;
                     const previewArea = parseFloat(editAreaInput.replace(",", ".")) || 0;
-                    const previewCx = item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : 0;
-                    const previewRealArea = round2(previewCx * (item.product.m2PorCaixa || 0));
+                    const itemIsLinear = isLinearMeterProduct(item.product);
+                    const previewCx = itemIsLinear ? (item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : Math.ceil(previewArea)) : item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : 0;
+                    const previewRealArea = itemIsLinear ? previewArea : round2(previewCx * (item.product.m2PorCaixa || 0));
                     const previewWeight = round2(previewCx * (item.product.pesoBrutoCx || 0));
-                    const editPrecoBase = item.product[priceKey(editTabela)] as number | null;
-                    const editPrecoM2 = editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
+                    const editPrecoBase = editTabela === "TE" ? null : item.product[priceKey(editTabela)] as number | null;
+                    const editSpecialPrice = parseDecimalInput(editSpecialPriceInput);
+                    const editPrecoM2 = editTabela === "TE" ? editSpecialPrice : editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
                     return (
                       <tr key={item.id} className={`transition-colors ${isEditing ? "bg-primary/4" : "hover:bg-muted/20"}`}>
                         <td className="px-5 py-3">
@@ -2063,11 +2282,11 @@ ${budget.observacoes ? `
                           <p className="text-xs text-muted-foreground">
                             {item.product?.cor && item.product.cor !== "única" && item.product.cor !== "-"
                               ? `${item.product.cor} · ` : ""}
-                            {item.product?.superficie}
+                            {itemIsLinear ? "Venda por metro linear" : item.product?.superficie}
                           </p>
                           <p className="text-xs text-muted-foreground font-mono">Ref: {item.product?.referencia}</p>
                         </td>
-                        <td className="px-3 py-3 text-xs text-muted-foreground hidden md:table-cell">{item.product?.formato}</td>
+                        <td className="px-3 py-3 text-xs text-muted-foreground hidden md:table-cell">{itemIsLinear ? "Metro linear" : item.product?.formato}</td>
                         <td className="px-3 py-3 text-right">
                           {isEditing ? (
                             <input type="text" value={editAreaInput} onChange={(e) => setEditAreaInput(e.target.value)}
@@ -2078,32 +2297,41 @@ ${budget.observacoes ? `
                             <button onClick={() => !isLocked && startEditItem(item)}
                               className={`font-mono text-sm group flex items-center gap-1 ml-auto transition-colors ${isLocked ? "cursor-default" : "hover:text-primary"}`}
                               title={isLocked ? "Orçamento bloqueado" : "Clique para editar"}>
-                              {item.areaM2.toFixed(2)}
+                              {item.areaM2.toFixed(2)} {itemIsLinear ? "ml" : ""}
                               {!isLocked && <Pencil size={10} className="opacity-0 group-hover:opacity-40 transition-opacity" />}
                             </button>
                           )}
                         </td>
                         <td className="px-3 py-3 text-right font-mono text-sm">
                           {isEditing && previewArea > 0
-                            ? <span className="text-primary font-semibold">{previewCx}</span>
-                            : item.caixas}
+                            ? <span className="text-primary font-semibold">{itemIsLinear ? "—" : previewCx}</span>
+                            : itemIsLinear ? "—" : item.caixas}
                         </td>
                         <td className="px-3 py-3 text-right font-mono text-sm hidden md:table-cell">
                           {isEditing && previewArea > 0
-                            ? <span className="text-primary font-semibold">{previewRealArea.toFixed(2)}</span>
-                            : calculateItemRealAreaM2(item).toFixed(2)}
+                            ? <span className="text-primary font-semibold">{itemIsLinear ? "—" : previewRealArea.toFixed(2)}</span>
+                            : itemIsLinear ? "—" : calculateItemRealAreaM2(item).toFixed(2)}
                         </td>
                         <td className="px-3 py-3 text-right text-sm hidden sm:table-cell">
                           {isEditing ? (
                             <div className="space-y-1">
-                              <div className="grid grid-cols-4 gap-1">
-                                {([1, 2, 3, 4] as const).map((t) => (
+                              <div className="grid grid-cols-6 gap-1">
+                                {([1, 2, 3, 4, 5] as const).map((t) => (
                                   <button key={t} type="button" onClick={() => setEditTabela(t)}
                                     className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
                                     T{t}
                                   </button>
                                 ))}
+                                <button type="button" onClick={() => setEditTabela("TE")}
+                                  className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === "TE" ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                                  TE
+                                </button>
                               </div>
+                              {editTabela === "TE" && (
+                                <input type="text" value={editSpecialPriceInput} onChange={(e) => setEditSpecialPriceInput(e.target.value)}
+                                  placeholder="Valor especial"
+                                  className="w-24 border border-primary rounded-lg px-2 py-1 text-xs text-right font-mono bg-card focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                              )}
                               <p className="font-mono text-primary font-semibold">{fmtBRL(editPrecoM2)}</p>
                             </div>
                           ) : <span className="font-mono">{fmtBRL(item.precoM2)}</span>}
@@ -2113,7 +2341,7 @@ ${budget.observacoes ? `
                         </td>
                         <td className="px-3 py-3 text-right font-mono font-semibold text-sm">
                           {isEditing && previewArea > 0
-                            ? <span className="text-primary">{fmtBRL(previewArea * editPrecoM2)}</span>
+                            ? <span className="text-primary">{fmtBRL(calculateItemSubtotal(item.product, previewArea, previewCx, editPrecoM2))}</span>
                             : fmtBRL(item.subtotal)}
                         </td>
                         <td className="px-3 py-3">
@@ -2168,8 +2396,9 @@ ${budget.observacoes ? `
                         const previewQty = parseFloat(editAreaInput.replace(",", ".")) || 0;
                         const previewCx = item.product.m2PorCaixa > 0 ? Math.ceil(previewQty / item.product.m2PorCaixa) : Math.ceil(previewQty);
                         const previewWeight = round2(previewCx * (item.product.pesoBrutoCx || 0));
-                        const editPrecoBase = item.product[priceKey(editTabela)] as number | null;
-                        const editPrecoM2 = editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
+                        const editPrecoBase = editTabela === "TE" ? null : item.product[priceKey(editTabela)] as number | null;
+                        const editSpecialPrice = parseDecimalInput(editSpecialPriceInput);
+                        const editPrecoM2 = editTabela === "TE" ? editSpecialPrice : editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
                         const embalagem = item.product.tipoEmbalagem || item.product.tipoRejunte || item.product.categoriaComplementar || "—";
                         const unitLabel = getComplementaryUnitLabel(item.product, item.caixas !== 1);
                         const previewUnitLabel = getComplementaryUnitLabel(item.product, previewCx !== 1);
@@ -2203,21 +2432,30 @@ ${budget.observacoes ? `
                             <td className="px-3 py-3 text-right text-sm hidden md:table-cell">
                               {isEditing ? (
                                 <div className="space-y-1">
-                                  <div className="grid grid-cols-4 gap-1">
-                                    {([1, 2, 3, 4] as const).map((t) => (
+                                  <div className="grid grid-cols-6 gap-1">
+                                    {([1, 2, 3, 4, 5] as const).map((t) => (
                                       <button key={t} type="button" onClick={() => setEditTabela(t)}
                                         className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
                                         T{t}
                                       </button>
                                     ))}
+                                    <button type="button" onClick={() => setEditTabela("TE")}
+                                      className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === "TE" ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                                      TE
+                                    </button>
                                   </div>
+                                  {editTabela === "TE" && (
+                                    <input type="text" value={editSpecialPriceInput} onChange={(e) => setEditSpecialPriceInput(e.target.value)}
+                                      placeholder="Valor especial"
+                                      className="w-24 border border-primary rounded-lg px-2 py-1 text-xs text-right font-mono bg-card focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                                  )}
                                   <p className="font-mono text-primary font-semibold">{fmtBRL(editPrecoM2)}</p>
                                 </div>
                               ) : <span className="font-mono">{fmtBRL(item.precoM2)}</span>}
                             </td>
                             <td className="px-3 py-3 text-right font-mono font-semibold text-sm">
                               {isEditing && previewQty > 0
-                                ? <span className="text-primary">{fmtBRL(previewQty * editPrecoM2)}</span>
+                                ? <span className="text-primary">{fmtBRL(calculateItemSubtotal(item.product, previewQty, previewCx, editPrecoM2))}</span>
                                 : fmtBRL(item.subtotal)}
                             </td>
                             <td className="px-3 py-3">
@@ -2497,7 +2735,7 @@ ${budget.observacoes ? `
                   </div>
                 )}
                 <div className="flex justify-between text-sm font-semibold pt-2 border-t border-border">
-                  <span>{topSubtotalLabel}</span>
+                  <span>{topSubtotalLabel}{cardInstallmentLabel && <span className="ml-1 text-xs text-muted-foreground">({cardInstallmentLabel})</span>}</span>
                   <span className="font-mono">{fmtBRL(topTotal)}</span>
                 </div>
               </div>
@@ -2587,9 +2825,9 @@ ${budget.observacoes ? `
 // ── Customer View ─────────────────────────────────────────────────
 
 function CustomerView({
-  customer: initCustomer, allProducts, pricingSettings, onBack, onOpenBudget,
+  customer: initCustomer, allProducts, pricingSettings, currentUser, onBack, onOpenBudget,
 }: {
-  customer: Customer; allProducts: Product[]; pricingSettings: PricingSettings;
+  customer: Customer; allProducts: Product[]; pricingSettings: PricingSettings; currentUser: AppUser;
   onBack: () => void;
   onOpenBudget: (b: Budget, c: Customer) => void;
 }) {
@@ -2639,7 +2877,7 @@ function CustomerView({
   async function loadBudgets() {
     setLoading(true);
     try {
-      setBudgets(await getBudgetsForCustomer(customer.id));
+      setBudgets(await getBudgetsForCustomer(customer.id, currentUser));
     } catch { toast.error("Erro ao carregar orçamentos"); }
     finally { setLoading(false); }
   }
@@ -2649,7 +2887,7 @@ function CustomerView({
   async function handleCreateBudget() {
     setCreating(true);
     try {
-      const b = await createBudget(customer.id);
+      const b = await createBudget(customer.id, currentUser);
       onOpenBudget(b, customer);
     } catch (e: any) { toast.error("Erro: " + e.message); setCreating(false); }
   }
@@ -2764,6 +3002,7 @@ function CustomerView({
                     <div className="flex items-center gap-2 mb-1">
                       <span className="font-semibold text-sm">Orçamento #{b.numero}</span>
                       <StatusPill status={b.status} />
+                      <BudgetOwnerPill createdBy={b.createdBy} />
                     </div>
                     <p className="text-xs text-muted-foreground">
                       {fmtDate(b.createdAt)} · Tabela {b.tabelaPreco}
@@ -2952,42 +3191,65 @@ function AllCustomersTab({ onSelect }: { onSelect: (c: Customer) => void }) {
 }
 
 async function updateProduct(id: string, patch: Partial<Omit<Product, "id">>): Promise<void> {
+  const normalized = normalizeProductBrand({ ...createEmptyProduct(), ...patch });
   const { error } = await supabase.from("products").update({
-    referencia: patch.referencia, formato: patch.formato, linha: patch.linha,
-    colecao: patch.colecao, cor: patch.cor, superficie: patch.superficie,
-    m2_por_caixa: patch.m2PorCaixa, pecas_por_caixa: patch.pecasPorCaixa,
-    m2_por_pallet: patch.m2PorPallet, cx_por_pallet: patch.cxPorPallet,
-    peso_bruto_m2: patch.pesoBrutoM2, peso_bruto_cx: patch.pesoBrutoCx, espessura_mm: patch.espessuraMm,
-    preco1: patch.preco1, preco2: patch.preco2, preco3: patch.preco3, preco4: patch.preco4,
-    descontinuado: patch.descontinuado ?? false,
-    marca: patch.marca || "Villagres",
-    categoria_complementar: patch.categoriaComplementar || null,
-    tipo_rejunte: patch.tipoRejunte || null,
-    tipo_embalagem: patch.tipoEmbalagem || null,
+    referencia: normalized.referencia, formato: normalized.formato, linha: normalized.linha,
+    colecao: normalized.colecao, cor: normalized.cor, superficie: normalized.superficie,
+    m2_por_caixa: normalized.m2PorCaixa, pecas_por_caixa: normalized.pecasPorCaixa,
+    m2_por_pallet: normalized.m2PorPallet, cx_por_pallet: normalized.cxPorPallet,
+    peso_bruto_m2: normalized.pesoBrutoM2, peso_bruto_cx: normalized.pesoBrutoCx, espessura_mm: normalized.espessuraMm,
+    preco1: normalized.preco1, preco2: normalized.preco2, preco3: normalized.preco3, preco4: normalized.preco4, preco5: normalized.preco5,
+    descontinuado: normalized.descontinuado ?? false,
+    marca: normalized.marca || "Villagres",
+    categoria_complementar: normalized.categoriaComplementar || null,
+    tipo_rejunte: normalized.tipoRejunte || null,
+    tipo_embalagem: normalized.tipoEmbalagem || null,
   }).eq("id", id);
   if (error) throw error;
 }
 
 async function createProduct(product: Omit<Product, "id">): Promise<Product> {
+  const normalized = normalizeProductBrand(product);
   const { data, error } = await supabase.from("products").insert({
-    referencia: product.referencia, formato: product.formato, linha: product.linha,
-    colecao: product.colecao, cor: product.cor, superficie: product.superficie,
-    faces: product.faces, variacao: product.variacao, local_uso: product.localUso, derivacao: product.derivacao,
-    m2_por_caixa: product.m2PorCaixa, pecas_por_caixa: product.pecasPorCaixa,
-    m2_por_pallet: product.m2PorPallet, cx_por_pallet: product.cxPorPallet,
-    peso_bruto_m2: product.pesoBrutoM2, peso_bruto_cx: product.pesoBrutoCx, espessura_mm: product.espessuraMm,
-    preco1: product.preco1, preco2: product.preco2, preco3: product.preco3, preco4: product.preco4,
-    descontinuado: product.descontinuado ?? false,
-    marca: product.marca || "Villagres",
-    categoria_complementar: product.categoriaComplementar || null,
-    tipo_rejunte: product.tipoRejunte || null,
-    tipo_embalagem: product.tipoEmbalagem || null,
+    referencia: normalized.referencia, formato: normalized.formato, linha: normalized.linha,
+    colecao: normalized.colecao, cor: normalized.cor, superficie: normalized.superficie,
+    faces: normalized.faces, variacao: normalized.variacao, local_uso: normalized.localUso, derivacao: normalized.derivacao,
+    m2_por_caixa: normalized.m2PorCaixa, pecas_por_caixa: normalized.pecasPorCaixa,
+    m2_por_pallet: normalized.m2PorPallet, cx_por_pallet: normalized.cxPorPallet,
+    peso_bruto_m2: normalized.pesoBrutoM2, peso_bruto_cx: normalized.pesoBrutoCx, espessura_mm: normalized.espessuraMm,
+    preco1: normalized.preco1, preco2: normalized.preco2, preco3: normalized.preco3, preco4: normalized.preco4, preco5: normalized.preco5,
+    descontinuado: normalized.descontinuado ?? false,
+    marca: normalized.marca || "Villagres",
+    categoria_complementar: normalized.categoriaComplementar || null,
+    tipo_rejunte: normalized.tipoRejunte || null,
+    tipo_embalagem: normalized.tipoEmbalagem || null,
   }).select().single();
   if (error) throw error;
   return mapProduct(data);
 }
 
-function createEmptyProduct(marca: "Villagres" | "Villacol" = "Villagres"): Product {
+async function deleteProduct(id: string): Promise<{ deleted: boolean; archived: boolean }> {
+  const { count, error: countError } = await supabase
+    .from("budget_items")
+    .select("id", { count: "exact", head: true })
+    .eq("product_id", id);
+  if (countError) throw countError;
+
+  if ((count || 0) > 0) {
+    const { error: archiveError } = await supabase
+      .from("products")
+      .update({ descontinuado: true })
+      .eq("id", id);
+    if (archiveError) throw archiveError;
+    return { deleted: false, archived: true };
+  }
+
+  const { error } = await supabase.from("products").delete().eq("id", id);
+  if (error) throw error;
+  return { deleted: true, archived: false };
+}
+
+function createEmptyProduct(marca: "Villagres" | "Villacol" | "Villa Vinílicos" = "Villagres"): Product {
   return {
     id: "",
     marca,
@@ -3015,21 +3277,198 @@ function createEmptyProduct(marca: "Villagres" | "Villacol" = "Villagres"): Prod
     preco2: null,
     preco3: null,
     preco4: null,
+    preco5: null,
     descontinuado: false,
   };
 }
 
+
+type ProductTemplateKind = "villagres" | "villa_vinilicos" | "villa_vinilicos_rodapes" | "argamassas" | "rejuntes" | "niveladores";
+
+const PRODUCT_TEMPLATE_LABELS: Record<ProductTemplateKind, string> = {
+  villagres: "Produtos Villagres",
+  villa_vinilicos: "Villa Vinílicos",
+  villa_vinilicos_rodapes: "Villa Vinílicos Rodapés",
+  argamassas: "Argamassas",
+  rejuntes: "Rejuntes",
+  niveladores: "Niveladores",
+};
+
+const PRODUCT_TEMPLATE_HEADERS: Record<ProductTemplateKind, string[]> = {
+  villagres: ["Formato", "Referencia", "Linha", "Colecao", "Cor", "Superficie", "Faces", "Variacao", "LocalUso", "Derivacao", "M2PorCaixa", "PecasPorCaixa", "M2PorPallet", "CxPorPallet", "PesoBrutoM2", "PesoBrutoCx", "EspessuraMm", "Preco1", "Preco2", "Preco3", "Preco4", "Preco5", "Descontinuado"],
+  villa_vinilicos: ["Formato", "Referência", "Linha", "Coleção", "Cor", "Superfície", "Faces", "Capa Desgaste", "Local de Uso", "Derivação", "m2/cx", "peças/cx", "m2/pallet", "cx/pallet", "peso bruto/m2", "peso bruto/cx", "Espessura mm", "Preço T1", "Preço T2", "Preço T3", "Preço T4", "Preço T5"],
+  villa_vinilicos_rodapes: ["Formato", "Referência", "Linha", "Cor", "Superfície", "Derivação", "metro linear/cx", "peças/cx", "peso bruto/metro linear", "peso bruto/cx", "Espessura mm", "Preço 1", "Preço 2", "Preço 3", "Preço 4", "Preço 5"],
+  argamassas: ["Referencia", "NomeComercial", "TipoEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Preco5", "Descontinuado"],
+  rejuntes: ["Referencia", "NomeComercial", "Cor", "TipoRejunte", "TipoEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Preco5", "Descontinuado"],
+  niveladores: ["Referencia", "NomeComercial", "EspessuraMm", "TipoEmbalagem", "QuantidadePorEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Preco5", "Descontinuado"],
+};
+
+const PRODUCT_TEMPLATE_EXAMPLES: Record<ProductTemplateKind, string[]> = {
+  villagres: ["60x60", "REF-001", "Nome da Linha", "Nome Coleção", "Bege", "Polido", "1", "-", "3", "-", "1,44", "6", "43,20", "30", "18,50", "26,65", "9,00", "45,90", "49,90", "54,90", "59,90", "64,90", "FALSE"],
+  villa_vinilicos: ["18x122", "SPC-001", "Piso Vinílico Carvalho", "Coleção Vinílicos", "Carvalho", "Texturizado", "8", "0,30", "3", "Classe 32", "2,20", "10", "88,00", "40", "8,50", "18,70", "4,00", "89,90", "94,90", "99,90", "104,90", "109,90"],
+  villa_vinilicos_rodapes: ["7x240", "RP-001", "Rodapé Vinílico Carvalho", "Carvalho", "Texturizado", "Rodapé", "2,40", "1", "0,85", "2,04", "12,00", "29,90", "32,90", "35,90", "39,90", "44,90"],
+  argamassas: ["ARG-001", "Argamassa ACIII", "Saco 20 kg", "20", "29,90", "32,90", "35,90", "39,90", "44,90", "FALSE"],
+  rejuntes: ["REJ-001", "Rejunte Acrílico", "Branco", "Acrílico", "Pote 1 kg", "1", "18,90", "20,90", "22,90", "24,90", "26,90", "FALSE"],
+  niveladores: ["NIV-001", "Nivelador 1,5 mm", "1,5", "Pacote 100 un", "100", "0,50", "35,90", "39,90", "44,90", "49,90", "54,90", "FALSE"],
+};
+
+function normalizeCSVHeader(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+}
+
+function parseBool(value: string): boolean {
+  return ["true", "sim", "s", "1", "yes"].includes(value.trim().toLowerCase());
+}
+
+function getRowValue(row: string[], headerMap: Record<string, number>, ...keys: string[]): string {
+  for (const key of keys) {
+    const index = headerMap[normalizeCSVHeader(key)];
+    if (index != null) return row[index] || "";
+  }
+  return "";
+}
+
+function buildProductTemplateCSV(kind: ProductTemplateKind): string {
+  return `${PRODUCT_TEMPLATE_HEADERS[kind].join(";")}\n${PRODUCT_TEMPLATE_EXAMPLES[kind].join(";")}`;
+}
+
+function inferTemplateKindFromHeaders(headerMap: Record<string, number>): ProductTemplateKind {
+  if (headerMap[normalizeCSVHeader("metro linear/cx")] != null || headerMap[normalizeCSVHeader("peso bruto/metro linear")] != null) return "villa_vinilicos_rodapes";
+  if (headerMap[normalizeCSVHeader("Capa Desgaste")] != null || headerMap[normalizeCSVHeader("peso bruto/m2")] != null || headerMap[normalizeCSVHeader("Preço T5")] != null) return "villa_vinilicos";
+  if (headerMap[normalizeCSVHeader("Superficie")] != null || headerMap[normalizeCSVHeader("Formato")] != null) return "villagres";
+  if (headerMap[normalizeCSVHeader("TipoRejunte")] != null || headerMap[normalizeCSVHeader("Cor")] != null) return "rejuntes";
+  if (headerMap[normalizeCSVHeader("QuantidadePorEmbalagem")] != null || headerMap[normalizeCSVHeader("EspessuraMm")] != null) return "niveladores";
+  return "argamassas";
+}
+
+function buildProductsFromTemplateCSV(csvText: string): Omit<Product, "id">[] {
+  const rows = parseCSVFull(csvText);
+  if (rows.length < 2) return [];
+  const headerMap = rows[0].reduce<Record<string, number>>((acc, header, index) => {
+    acc[normalizeCSVHeader(header)] = index;
+    return acc;
+  }, {});
+  if (headerMap[normalizeCSVHeader("Referencia")] == null && headerMap[normalizeCSVHeader("Ref")] == null) {
+    return buildProductsFromCSV(csvText);
+  }
+
+  const kind = inferTemplateKindFromHeaders(headerMap);
+  return rows.slice(1).map((row) => {
+    const referencia = getRowValue(row, headerMap, "Referencia", "Ref").trim();
+    const nome = getRowValue(row, headerMap, "NomeComercial", "Linha", "Nome").trim();
+    if (!referencia && !nome) return null;
+
+    if (kind === "villagres" || kind === "villa_vinilicos" || kind === "villa_vinilicos_rodapes") {
+      return {
+        formato: getRowValue(row, headerMap, "Formato"),
+        referencia,
+        linha: nome,
+        colecao: getRowValue(row, headerMap, "Colecao", "Coleção"),
+        cor: getRowValue(row, headerMap, "Cor"),
+        superficie: getRowValue(row, headerMap, "Superficie", "Superfície"),
+        faces: parseInt(getRowValue(row, headerMap, "Faces")) || 0,
+        variacao: getRowValue(row, headerMap, "Variacao", "Variação", "Capa Desgaste"),
+        localUso: parseInt(getRowValue(row, headerMap, "LocalUso", "Local de Uso")) || 3,
+        derivacao: getRowValue(row, headerMap, "Derivacao", "Derivação"),
+        m2PorCaixa: parseNum(getRowValue(row, headerMap, "M2PorCaixa", "m2/cx", "m²/cx", "metro linear/cx")),
+        pecasPorCaixa: parseInt(getRowValue(row, headerMap, "PecasPorCaixa", "PeçasPorCaixa", "peças/cx", "pecas/cx")) || 0,
+        m2PorPallet: parseNum(getRowValue(row, headerMap, "M2PorPallet", "m2/pallet", "m²/pallet")),
+        cxPorPallet: parseInt(getRowValue(row, headerMap, "CxPorPallet", "cx/pallet")) || 0,
+        pesoBrutoM2: parseNum(getRowValue(row, headerMap, "PesoBrutoM2", "peso bruto/m2", "peso bruto/m²", "peso bruto/metro linear")),
+        pesoBrutoCx: parseNum(getRowValue(row, headerMap, "PesoBrutoCx", "PesoKg", "peso bruto/cx")),
+        espessuraMm: parseNum(getRowValue(row, headerMap, "EspessuraMm", "Espessura mm")),
+        preco1: parsePrice(getRowValue(row, headerMap, "Preco1", "Preço1", "Preço T1", "Preço 1")),
+        preco2: parsePrice(getRowValue(row, headerMap, "Preco2", "Preço2", "Preço T2", "Preço 2")),
+        preco3: parsePrice(getRowValue(row, headerMap, "Preco3", "Preço3", "Preço T3", "Preço 3")),
+        preco4: parsePrice(getRowValue(row, headerMap, "Preco4", "Preço4", "Preço T4", "Preço 4")),
+        preco5: parsePrice(getRowValue(row, headerMap, "Preco5", "Preço5", "Preço T5", "Preço 5")),
+        descontinuado: parseBool(getRowValue(row, headerMap, "Descontinuado")),
+        marca: kind === "villa_vinilicos" || kind === "villa_vinilicos_rodapes" ? "Villa Vinílicos" : "Villagres",
+        categoriaComplementar: "",
+        tipoRejunte: "",
+        tipoEmbalagem: "",
+      };
+    }
+
+    const categoriaComplementar = kind === "argamassas" ? "Argamassa" : kind === "rejuntes" ? "Rejunte" : "Niveladores/Cunhas";
+    const quantidadePorEmbalagem = parseInt(getRowValue(row, headerMap, "QuantidadePorEmbalagem")) || 1;
+    const pesoKg = parseNum(getRowValue(row, headerMap, "PesoKg", "PesoBrutoCx"));
+    return {
+      formato: "",
+      referencia,
+      linha: nome || categoriaComplementar,
+      colecao: "",
+      cor: getRowValue(row, headerMap, "Cor"),
+      superficie: "",
+      faces: 0,
+      variacao: "",
+      localUso: 3,
+      derivacao: "",
+      m2PorCaixa: 1,
+      pecasPorCaixa: kind === "niveladores" ? quantidadePorEmbalagem : 1,
+      m2PorPallet: 0,
+      cxPorPallet: 0,
+      pesoBrutoM2: 0,
+      pesoBrutoCx: pesoKg,
+      espessuraMm: parseNum(getRowValue(row, headerMap, "EspessuraMm")),
+      preco1: parsePrice(getRowValue(row, headerMap, "Preco1", "Preço1")),
+      preco2: parsePrice(getRowValue(row, headerMap, "Preco2", "Preço2")),
+      preco3: parsePrice(getRowValue(row, headerMap, "Preco3", "Preço3")),
+      preco4: parsePrice(getRowValue(row, headerMap, "Preco4", "Preço4")),
+      preco5: parsePrice(getRowValue(row, headerMap, "Preco5", "Preço5")),
+      descontinuado: parseBool(getRowValue(row, headerMap, "Descontinuado")),
+      marca: "Villacol",
+      categoriaComplementar,
+      tipoRejunte: kind === "rejuntes" ? getRowValue(row, headerMap, "TipoRejunte") : "",
+      tipoEmbalagem: getRowValue(row, headerMap, "TipoEmbalagem"),
+    };
+  }).filter(Boolean) as Omit<Product, "id">[];
+}
+
+async function importProducts(products: Omit<Product, "id">[]): Promise<{ created: number; updated: number; total: number }> {
+  const existing = await fetchAllProducts();
+  const byRef = new Map(existing.filter((p) => p.referencia).map((p) => [p.referencia.trim().toLowerCase(), p]));
+  const byName = new Map(existing.filter((p) => p.linha).map((p) => [p.linha.trim().toLowerCase(), p]));
+  let created = 0;
+  let updated = 0;
+
+  for (const product of products) {
+    const refKey = product.referencia.trim().toLowerCase();
+    const nameKey = product.linha.trim().toLowerCase();
+    const match = refKey ? byRef.get(refKey) : nameKey ? byName.get(nameKey) : undefined;
+    if (match) {
+      await updateProduct(match.id, product);
+      updated++;
+      byRef.set(refKey, { ...match, ...product });
+      byName.set(nameKey, { ...match, ...product });
+    } else {
+      if (!refKey) throw new Error(`Produto novo "${product.linha}" sem referência. Informe uma referência para criar novos produtos.`);
+      const createdProduct = await createProduct(product);
+      created++;
+      if (createdProduct.referencia) byRef.set(createdProduct.referencia.trim().toLowerCase(), createdProduct);
+      if (createdProduct.linha) byName.set(createdProduct.linha.trim().toLowerCase(), createdProduct);
+    }
+  }
+
+  return { created, updated, total: products.length };
+}
+
 // ── Product Edit Modal ────────────────────────────────────────────
 
-function ProductEditModal({ product, onSave, onClose }: {
+function ProductEditModal({ product, onSave, onDelete, onClose }: {
   product: Product;
   onSave: (updated: Product) => void;
+  onDelete: (productId: string) => void;
   onClose: () => void;
 }) {
   const [form, setForm] = useState({ ...product });
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const isNew = !product.id;
   const isVillacol = form.marca === "Villacol";
+  const isVillaVinilicos = form.marca === "Villa Vinílicos";
+  const isVillaVinilicosLinear = isVillaVinilicos && hasVillaVinilicosRodapeSignature(form);
   const isRejunte = isVillacol && form.categoriaComplementar === "Rejunte";
   const isArgamassa = isVillacol && form.categoriaComplementar === "Argamassa";
   const isNiveladorCunha = isVillacol && form.categoriaComplementar === "Niveladores/Cunhas";
@@ -3069,7 +3508,7 @@ function ProductEditModal({ product, onSave, onClose }: {
     if (!form.linha.trim()) { toast.error("Informe o nome do produto."); return; }
     setSaving(true);
     try {
-      const normalizedProduct: Product = {
+      const normalizedProduct: Product = normalizeProductBrand({
         ...form,
         marca: form.marca || "Villagres",
         categoriaComplementar: form.marca === "Villacol" ? form.categoriaComplementar || "Argamassa" : "",
@@ -3079,6 +3518,7 @@ function ProductEditModal({ product, onSave, onClose }: {
         preco2: form.preco2 != null && form.preco2 !== "" ? parseFloat(String(form.preco2).replace(",", ".")) : null,
         preco3: form.preco3 != null && form.preco3 !== "" ? parseFloat(String(form.preco3).replace(",", ".")) : null,
         preco4: form.preco4 != null && form.preco4 !== "" ? parseFloat(String(form.preco4).replace(",", ".")) : null,
+        preco5: form.preco5 != null && form.preco5 !== "" ? parseFloat(String(form.preco5).replace(",", ".")) : null,
         faces: parseInt(String(form.faces)) || 0,
         localUso: parseInt(String(form.localUso)) || 3,
         m2PorCaixa: parseFloat(String(form.m2PorCaixa).replace(",", ".")) || (form.marca === "Villacol" ? 1 : 0),
@@ -3088,7 +3528,7 @@ function ProductEditModal({ product, onSave, onClose }: {
         pesoBrutoCx: parseFloat(String(form.pesoBrutoCx).replace(",", ".")) || 0,
         pesoBrutoM2: parseFloat(String(form.pesoBrutoM2).replace(",", ".")) || 0,
         espessuraMm: parseFloat(String(form.espessuraMm).replace(",", ".")) || 0,
-      };
+      });
       if (isNew) {
         const created = await createProduct(normalizedProduct);
         onSave(created);
@@ -3102,6 +3542,24 @@ function ProductEditModal({ product, onSave, onClose }: {
     finally { setSaving(false); }
   }
 
+
+  async function handleDelete() {
+    if (isNew) return;
+    setDeleting(true);
+    try {
+      const result = await deleteProduct(form.id);
+      onDelete(form.id);
+      setShowDeleteConfirm(false);
+      toast.success(result.archived
+        ? "Produto usado em orçamentos: foi marcado como descontinuado e removido da lista ativa."
+        : "Produto excluído!");
+    } catch (e: any) {
+      toast.error("Erro ao excluir: " + e.message);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   const inputCls = "w-full border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25";
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
@@ -3109,7 +3567,7 @@ function ProductEditModal({ product, onSave, onClose }: {
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <div>
             <h3 className="font-semibold">{isNew ? "Novo Produto" : "Editar Produto"}</h3>
-            <p className="text-xs text-muted-foreground font-mono">{isNew ? "Cadastre Villagres ou Villacol" : `Ref: ${product.referencia}`}</p>
+            <p className="text-xs text-muted-foreground font-mono">{isNew ? "Cadastre Villagres, Villacol ou Villa Vinílicos" : `Ref: ${product.referencia}`}</p>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X size={18} /></button>
         </div>
@@ -3121,6 +3579,7 @@ function ProductEditModal({ product, onSave, onClose }: {
               <select value={form.marca} onChange={(e) => handleMarcaChange(e.target.value)} className={inputCls}>
                 <option value="Villagres">Villagres</option>
                 <option value="Villacol">Villacol</option>
+                <option value="Villa Vinílicos">Villa Vinílicos</option>
               </select>
             </div>
             <div>
@@ -3210,8 +3669,8 @@ function ProductEditModal({ product, onSave, onClose }: {
                   <input {...field("faces")} inputMode="numeric" className={inputCls} />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Variação</label>
-                  <input {...field("variacao")} placeholder="Ex.: V1, V2, V3" className={inputCls} />
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{isVillaVinilicos ? "Capa Desgaste" : "Variação"}</label>
+                  <input {...field("variacao")} placeholder={isVillaVinilicos ? "Ex.: 0,30" : "Ex.: V1, V2, V3"} className={inputCls} />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-muted-foreground mb-1 block">Local de uso</label>
@@ -3268,11 +3727,16 @@ function ProductEditModal({ product, onSave, onClose }: {
               Produtos Villacol entram como itens complementares. Use m²/caixa = 1 para controlar por unidade/embalagem no orçamento.
             </p>
           )}
+          {isVillaVinilicos && (
+            <p className="text-xs text-muted-foreground rounded-xl bg-blue-50 border border-blue-100 px-3 py-2">
+              Produtos Villa Vinílicos são classificados pela marca; somente rodapés (RP/rodapé) são vendidos e calculados por metro linear.
+            </p>
+          )}
 
           <div>
-            <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Tabelas de Preço {isVillacol ? "(R$/unidade ou embalagem)" : "(R$/m²)"}</p>
-            <div className="grid grid-cols-4 gap-2">
-              {([1, 2, 3, 4] as const).map((t) => (
+            <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Tabelas de Preço {isVillaVinilicosLinear ? "(R$/metro linear)" : isVillacol ? "(R$/unidade ou embalagem)" : "(R$/m²)"}</p>
+            <div className="grid grid-cols-5 gap-2">
+              {([1, 2, 3, 4, 5] as const).map((t) => (
                 <div key={t}>
                   <label className="text-xs text-muted-foreground mb-1 block text-center">Tab. {t}</label>
                   <input
@@ -3306,12 +3770,40 @@ function ProductEditModal({ product, onSave, onClose }: {
         </div>
 
         <div className="px-6 py-4 border-t border-border flex gap-2">
+          {!isNew && (
+            <button onClick={() => setShowDeleteConfirm(true)} disabled={deleting || saving}
+              className="border border-destructive/30 text-destructive rounded-xl px-4 py-2.5 text-sm hover:bg-red-50 transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
+              {deleting ? <Spinner size={14} /> : <Trash2 size={14} />} Excluir
+            </button>
+          )}
           <button onClick={onClose} className="flex-1 border border-border rounded-xl py-2.5 text-sm hover:bg-muted transition-colors">Cancelar</button>
-          <button onClick={handleSave} disabled={saving}
+          <button onClick={handleSave} disabled={saving || deleting}
             className="flex-1 bg-primary text-primary-foreground rounded-xl py-2.5 text-sm font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2">
             {saving ? <Spinner size={14} /> : <Check size={14} />} {isNew ? "Criar Produto" : "Salvar Alterações"}
           </button>
         </div>
+
+        {showDeleteConfirm && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
+            <div className="bg-card rounded-2xl shadow-2xl w-full max-w-sm p-6 border border-border">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold">Excluir produto</h3>
+                <button onClick={() => setShowDeleteConfirm(false)} className="text-muted-foreground hover:text-foreground"><X size={16} /></button>
+              </div>
+              <p className="text-sm text-muted-foreground leading-relaxed mb-4">
+                Deseja excluir o produto <strong className="text-foreground">{form.linha}</strong>?
+                Se ele já estiver em algum orçamento, o sistema irá apenas marcá-lo como descontinuado para preservar o histórico.
+              </p>
+              <div className="flex gap-2">
+                <button onClick={() => setShowDeleteConfirm(false)} className="flex-1 border border-border rounded-xl py-2.5 text-sm hover:bg-muted transition-colors">Cancelar</button>
+                <button onClick={handleDelete} disabled={deleting}
+                  className="flex-1 bg-destructive text-destructive-foreground rounded-xl py-2.5 text-sm font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2">
+                  {deleting ? <Spinner size={14} /> : <Trash2 size={14} />} Excluir
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -3326,11 +3818,12 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
   const [localUso, setLocalUso] = useState("");
   const [marcaFiltro, setMarcaFiltro] = useState("");
   const [categoriaFiltro, setCategoriaFiltro] = useState("");
-  const [tabela, setTabela] = useState<1 | 2 | 3 | 4>(1);
+  const [tabela, setTabela] = useState<1 | 2 | 3 | 4 | 5>(1);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState<{ ok: number; total: number } | null>(null);
+  const [importResult, setImportResult] = useState<{ created: number; updated: number; total: number } | null>(null);
   const [showDescontinuados, setShowDescontinuados] = useState(false);
+  const [showTemplateExportModal, setShowTemplateExportModal] = useState(false);
   const [pricingForm, setPricingForm] = useState({
     imposto: String(pricingSettings.impostoPercentual || ""),
     taxa: String(pricingSettings.taxaCartaoPercentual || ""),
@@ -3375,6 +3868,16 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
     setEditingProduct(null);
   }
 
+
+  function handleProductDeleted(productId: string) {
+    setProducts((ps) => {
+      const next = ps.filter((p) => p.id !== productId);
+      onProductsChange(next);
+      return next;
+    });
+    setEditingProduct(null);
+  }
+
   function handlePricingInput(key: "imposto" | "taxa" | "fretePor100Kg", value: string) {
     if (value.trim() === "") {
       setPricingForm((f) => ({ ...f, [key]: "" }));
@@ -3403,6 +3906,16 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
     }
   }
 
+  function exportProductTemplate(kind: ProductTemplateKind) {
+    const csv = buildProductTemplateCSV(kind);
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `template_produtos_${kind}.csv`; a.click();
+    URL.revokeObjectURL(url);
+    setShowTemplateExportModal(false);
+  }
+
   async function handleImportCSV(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -3411,14 +3924,14 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
     setImportResult(null);
     try {
       const text = await file.text();
-      const parsed = buildProductsFromCSV(text);
+      const parsed = buildProductsFromTemplateCSV(text);
       if (parsed.length === 0) { toast.error("Nenhum produto encontrado no arquivo."); return; }
-      await seedProducts(parsed);
+      const result = await importProducts(parsed);
       const refreshed = await fetchAllProducts();
       setProducts(refreshed);
       onProductsChange(refreshed);
-      setImportResult({ ok: parsed.length, total: parsed.length });
-      toast.success(`${parsed.length} produtos importados com sucesso!`);
+      setImportResult(result);
+      toast.success(`${result.created} produtos criados e ${result.updated} atualizados.`);
     } catch (e: any) { toast.error("Erro ao importar: " + e.message); }
     finally { setImporting(false); }
   }
@@ -3438,6 +3951,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
           <option value="">Todas as marcas</option>
           <option value="Villagres">Villagres</option>
           <option value="Villacol">Villacol</option>
+          <option value="Villa Vinílicos">Villa Vinílicos</option>
         </select>
         <select value={categoriaFiltro} onChange={(e) => setCategoriaFiltro(e.target.value)}
           className="border border-border rounded-xl px-3 py-2.5 text-xs bg-card focus:outline-none">
@@ -3461,7 +3975,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
         </select>
         <div className="flex items-center gap-1 border border-border rounded-xl px-3 bg-card h-[38px]">
           <span className="text-xs text-muted-foreground">Tab.</span>
-          {([1, 2, 3, 4] as const).map((t) => (
+          {([1, 2, 3, 4, 5] as const).map((t) => (
             <button key={t} onClick={() => setTabela(t)}
               className={`w-6 h-6 rounded text-xs font-semibold transition-all ${tabela === t ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>
               {t}
@@ -3482,16 +3996,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
         </button>
 
         {/* Export template */}
-        <button onClick={() => {
-          const headers = "Formato;Referencia;Linha;Colecao;Cor;Superficie;Faces;Variacao;LocalUso;Derivacao;M2PorCaixa;PecasPorCaixa;M2PorPallet;CxPorPallet;PesoBrutoM2;PesoBrutoCx;EspessuraMm;Preco1;Preco2;Preco3;Preco4";
-          const example = "60x60;REF-001;Nome da Linha;Nome Coleção;Bege;Polido;1;-;3;-;1,44;6;43,20;30;18,50;26,65;9,00;45,90;49,90;54,90;59,90";
-          const csv = headers + "\n" + example;
-          const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url; a.download = "template_produtos_villagres.csv"; a.click();
-          URL.revokeObjectURL(url);
-        }}
+        <button onClick={() => setShowTemplateExportModal(true)}
           className="flex items-center gap-1.5 border border-border rounded-xl px-3 py-2 text-xs hover:bg-muted transition-colors text-muted-foreground">
           <Copy size={12} /> Exportar Template
         </button>
@@ -3507,8 +4012,31 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
       {importResult && (
         <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-xl px-4 py-2.5 text-sm text-green-800">
           <Check size={14} className="text-green-600 shrink-0" />
-          <span><strong>{importResult.ok}</strong> produtos importados/atualizados com sucesso.</span>
+          <span><strong>{importResult.created}</strong> criados e <strong>{importResult.updated}</strong> atualizados ({importResult.total} no arquivo).</span>
           <button onClick={() => setImportResult(null)} className="ml-auto text-green-600 hover:text-green-800"><X size={13} /></button>
+        </div>
+      )}
+
+      {showTemplateExportModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-card rounded-2xl shadow-2xl w-full max-w-md p-6 border border-border">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-semibold">Exportar template</h3>
+                <p className="text-xs text-muted-foreground mt-1">Escolha a linha de produtos para gerar o arquivo com os campos corretos.</p>
+              </div>
+              <button onClick={() => setShowTemplateExportModal(false)} className="text-muted-foreground hover:text-foreground"><X size={16} /></button>
+            </div>
+            <div className="grid gap-2">
+              {(Object.keys(PRODUCT_TEMPLATE_LABELS) as ProductTemplateKind[]).map((kind) => (
+                <button key={kind} type="button" onClick={() => exportProductTemplate(kind)}
+                  className="w-full border border-border rounded-xl px-4 py-3 text-left hover:bg-muted transition-colors">
+                  <span className="text-sm font-medium">{PRODUCT_TEMPLATE_LABELS[kind]}</span>
+                  <span className="block text-xs text-muted-foreground mt-0.5">Template CSV específico para {PRODUCT_TEMPLATE_LABELS[kind].toLowerCase()}.</span>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
@@ -3580,7 +4108,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
                 <th className="text-left px-5 py-2.5 font-medium">Produto</th>
                 <th className="text-left px-3 py-2.5 font-medium hidden md:table-cell">Formato</th>
                 <th className="text-left px-3 py-2.5 font-medium hidden lg:table-cell">Superfície</th>
-                <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">m²/cx</th>
+                <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">Unidade</th>
                 <th className="text-right px-3 py-2.5 font-medium">Preço-base</th>
                 <th className="w-10 px-3 py-2.5"></th>
               </tr>
@@ -3601,13 +4129,15 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
                       <p className="text-xs text-muted-foreground">
                         {p.marca === "Villacol"
                           ? [p.categoriaComplementar, p.tipoRejunte || p.tipoEmbalagem, p.cor].filter(Boolean).join(" · ")
-                          : `${p.cor && p.cor !== "única" && p.cor !== "-" ? `${p.cor} · ` : ""}${p.colecao}`}
+                          : isVillaVinilicosProduct(p)
+                            ? [isLinearMeterProduct(p) ? "Venda por metro linear" : "Venda por m²", p.colecao].filter(Boolean).join(" · ")
+                            : `${p.cor && p.cor !== "única" && p.cor !== "-" ? `${p.cor} · ` : ""}${p.colecao}`}
                       </p>
                       <p className="text-xs text-muted-foreground font-mono">Ref: {p.referencia}</p>
                     </td>
-                    <td className="px-3 py-2.5 text-xs text-muted-foreground hidden md:table-cell">{p.formato}</td>
-                    <td className="px-3 py-2.5 text-xs text-muted-foreground hidden lg:table-cell">{p.superficie} · {LOCAL_USO[p.localUso]}</td>
-                    <td className="px-3 py-2.5 text-right text-xs font-mono hidden sm:table-cell">{p.m2PorCaixa}</td>
+                    <td className="px-3 py-2.5 text-xs text-muted-foreground hidden md:table-cell">{isLinearMeterProduct(p) ? "Metro linear" : p.formato}</td>
+                    <td className="px-3 py-2.5 text-xs text-muted-foreground hidden lg:table-cell">{isVillaVinilicosProduct(p) ? `Villa Vinílicos · ${isLinearMeterProduct(p) ? "metro linear" : "m²"}` : `${p.superficie} · ${LOCAL_USO[p.localUso]}`}</td>
+                    <td className="px-3 py-2.5 text-right text-xs font-mono hidden sm:table-cell">{isLinearMeterProduct(p) ? "m linear" : p.m2PorCaixa}</td>
                     <td className="px-3 py-2.5 text-right">
                       {price
                         ? <span className="font-mono text-muted-foreground">{fmtBRL(price)}</span>
@@ -3632,6 +4162,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
         <ProductEditModal
           product={editingProduct}
           onSave={handleProductSaved}
+          onDelete={handleProductDeleted}
           onClose={() => setEditingProduct(null)}
         />
       )}
@@ -3639,78 +4170,134 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
   );
 }
 
-// ── Users ─────────────────────────────────────────────────────────
 
-function UsersTab() {
-  const [users, setUsers] = useState<AppUser[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [savingId, setSavingId] = useState<string | null>(null);
+// ── Users Management ──────────────────────────────────────────────
 
-  useEffect(() => {
-    fetchAppUsers()
-      .then(setUsers)
-      .catch((error) => toast.error("Erro ao carregar usuários: " + error.message))
-      .finally(() => setLoading(false));
-  }, []);
+function UsersTab({ users, currentUser, onUsersReload }: {
+  users: AppUser[];
+  currentUser: AppUser;
+  onUsersReload: () => Promise<void>;
+}) {
+  const [newUser, setNewUser] = useState({ username: "", label: "", password: "" });
+  const [editingPasswords, setEditingPasswords] = useState<Record<string, string>>({});
+  const [savingUser, setSavingUser] = useState<string | null>(null);
 
-  async function handleRoleChange(user: AppUser, isAdmin: boolean) {
-    if (user.isAdmin === isAdmin) return;
-    setSavingId(user.id);
+  function normalizeUsername(value: string): string {
+    return value.trim().toLowerCase().replace(/\s+/g, "_");
+  }
+
+  async function handleCreateUser() {
+    const username = normalizeUsername(newUser.username);
+    const label = newUser.label.trim() || username;
+    const password = newUser.password.trim();
+
+    if (!username) { toast.error("Informe o usuário."); return; }
+    if (!/^[a-z0-9._-]+$/.test(username)) { toast.error("Use apenas letras, números, ponto, hífen ou underline no usuário."); return; }
+    if (!password) { toast.error("Informe uma senha."); return; }
+    if (users.some((user) => user.username === username)) { toast.error("Já existe um usuário com este nome."); return; }
+
+    setSavingUser("new");
     try {
-      await updateUserAdminRole(user, isAdmin);
-      setUsers((current) => current.map((item) => item.id === user.id ? { ...item, isAdmin } : item));
-      toast.success(`${user.label} agora é ${isAdmin ? "administrador" : "usuário comum"}.`);
-    } catch (error: any) {
-      toast.error("Erro ao alterar perfil: " + error.message);
-    } finally {
-      setSavingId(null);
-    }
+      await createAppUser({ username, label, password });
+      await onUsersReload();
+      setNewUser({ username: "", label: "", password: "" });
+      toast.success(`Usuário ${username} criado.`);
+    } catch (e: any) { toast.error("Erro ao criar usuário: " + e.message); }
+    finally { setSavingUser(null); }
+  }
+
+  async function handleSavePassword(username: string) {
+    const password = editingPasswords[username]?.trim();
+    if (!password) { toast.error("Informe uma senha válida."); return; }
+
+    setSavingUser(username);
+    try {
+      await updateAppUserPassword(username, password);
+      await onUsersReload();
+      setEditingPasswords((prev) => ({ ...prev, [username]: "" }));
+      toast.success(`Senha de ${username} atualizada.`);
+    } catch (e: any) { toast.error("Erro ao alterar senha: " + e.message); }
+    finally { setSavingUser(null); }
+  }
+
+  async function handleRemoveUser(username: string) {
+    if (username === "admin") { toast.error("O usuário admin não pode ser removido."); return; }
+    if (username === currentUser.username) { toast.error("Você não pode remover o usuário logado."); return; }
+    if (!confirm(`Remover o usuário "${username}"? Os orçamentos criados por ele continuarão salvos, mas ficarão visíveis apenas para o admin.`)) return;
+
+    setSavingUser(username);
+    try {
+      await deactivateAppUser(username);
+      await onUsersReload();
+      toast.success(`Usuário ${username} removido.`);
+    } catch (e: any) { toast.error("Erro ao remover usuário: " + e.message); }
+    finally { setSavingUser(null); }
   }
 
   return (
     <div className="space-y-5">
       <div>
         <h2 className="font-semibold mb-1">Usuários</h2>
-        <p className="text-sm text-muted-foreground">Defina o nível de acesso de cada usuário.</p>
+        <p className="text-sm text-muted-foreground">Somente o admin pode criar usuários, alterar senhas e remover acessos.</p>
       </div>
-      <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-sm">
-        {loading ? (
-          <div className="flex justify-center py-10"><Spinner /></div>
-        ) : users.length === 0 ? (
-          <div className="py-10 text-center text-sm text-muted-foreground">Nenhum usuário cadastrado.</div>
-        ) : (
-          <div className="divide-y divide-border">
-            {users.map((user) => (
-              <div key={user.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 px-5 py-4">
-                <div>
-                  <p className="font-medium text-sm">{user.label}</p>
-                  <p className="text-xs text-muted-foreground font-mono">
-                    {user.username}{!user.active && " · inativo"}
-                  </p>
-                </div>
-                <fieldset className="flex items-center gap-4" disabled={savingId === user.id || !user.active}>
-                  <legend className="sr-only">Perfil de {user.label}</legend>
-                  {([
-                    { value: false, label: "Usuário" },
-                    { value: true, label: "Admin" },
-                  ] as const).map((role) => (
-                    <label key={String(role.value)} className="flex items-center gap-2 text-sm cursor-pointer">
-                      <input
-                        type="radio"
-                        name={`role-${user.id}`}
-                        checked={user.isAdmin === role.value}
-                        onChange={() => handleRoleChange(user, role.value)}
-                        className="h-4 w-4 accent-primary"
-                      />
-                      {role.label}
-                    </label>
-                  ))}
-                  {savingId === user.id && <Spinner size={13} />}
-                </fieldset>
-              </div>
-            ))}
+
+      <div className="bg-card border border-border rounded-2xl p-5 shadow-sm">
+        <h3 className="font-semibold mb-4">Criar novo usuário</h3>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Usuário *</label>
+            <input value={newUser.username} onChange={(e) => setNewUser((form) => ({ ...form, username: normalizeUsername(e.target.value) }))}
+              placeholder="ex: vendedor_2"
+              className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
           </div>
-        )}
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Nome exibido</label>
+            <input value={newUser.label} onChange={(e) => setNewUser((form) => ({ ...form, label: e.target.value }))}
+              placeholder="Ex: Vendedor 2"
+              className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Senha *</label>
+            <input type="password" value={newUser.password} onChange={(e) => setNewUser((form) => ({ ...form, password: e.target.value }))}
+              placeholder="Senha inicial"
+              className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+          </div>
+        </div>
+        <button onClick={handleCreateUser} disabled={savingUser === "new"}
+          className="mt-4 bg-primary text-primary-foreground px-4 py-2.5 rounded-xl text-sm font-medium hover:opacity-90 transition-opacity flex items-center gap-2">
+          {savingUser === "new" ? <Spinner size={14} /> : <Plus size={14} />} Criar usuário
+        </button>
+      </div>
+
+      <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-sm">
+        <div className="px-5 py-3 border-b border-border bg-muted/30">
+          <p className="text-xs text-muted-foreground">{users.length} usuário{users.length !== 1 ? "s" : ""} cadastrado{users.length !== 1 ? "s" : ""}</p>
+        </div>
+        <div className="divide-y divide-border">
+          {users.map((user) => (
+            <div key={user.username} className="p-5 flex flex-col md:flex-row md:items-center gap-3 md:justify-between">
+              <div>
+                <p className="font-semibold text-sm">{user.label}</p>
+                <p className="text-xs text-muted-foreground font-mono">{user.username}{user.username === "admin" ? " · administrador" : ""}</p>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                <input type="password" value={editingPasswords[user.username] || ""}
+                  onChange={(e) => setEditingPasswords((prev) => ({ ...prev, [user.username]: e.target.value }))}
+                  onKeyDown={(e) => e.key === "Enter" && handleSavePassword(user.username)}
+                  placeholder="Nova senha"
+                  className="border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+                <button onClick={() => handleSavePassword(user.username)} disabled={savingUser === user.username}
+                  className="border border-border rounded-xl px-3 py-2 text-sm hover:bg-muted transition-colors flex items-center justify-center gap-1.5">
+                  {savingUser === user.username ? <Spinner size={13} /> : <Save size={13} />} Salvar senha
+                </button>
+                <button onClick={() => handleRemoveUser(user.username)} disabled={savingUser === user.username || user.username === "admin" || user.username === currentUser.username}
+                  className="border border-border rounded-xl px-3 py-2 text-sm text-muted-foreground hover:text-destructive hover:bg-red-50 transition-colors disabled:opacity-40 disabled:hover:text-muted-foreground disabled:hover:bg-transparent flex items-center justify-center gap-1.5">
+                  <Trash2 size={13} /> Remover
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -3718,7 +4305,10 @@ function UsersTab() {
 
 // ── Customer Search (Home) ────────────────────────────────────────
 
-function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSettingsChange, onProductsChange, onOpenBudgetById }: {
+function CustomerSearch({ currentUser, users, onUsersReload, onSelect, allProducts, pricingSettings, onPricingSettingsChange, onProductsChange, onOpenBudgetById }: {
+  currentUser: AppUser;
+  users: AppUser[];
+  onUsersReload: () => Promise<void>;
   onSelect: (c: Customer) => void;
   allProducts: Product[];
   pricingSettings: PricingSettings;
@@ -3749,7 +4339,7 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
   const hasFilter = !!(filterStatus || filterCliente || filterDataInicio || filterDataFim);
 
   useEffect(() => {
-    fetchRecentBudgets(5)
+    fetchRecentBudgets(currentUser, 5)
       .then(setRecentBudgets)
       .catch(() => {})
       .finally(() => setBudgetsLoading(false));
@@ -3763,12 +4353,12 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
         setFilteredBudgets(await fetchBudgetsFiltered({
           status: filterStatus, customerQ: filterCliente,
           dataInicio: filterDataInicio, dataFim: filterDataFim,
-        }));
+        }, currentUser));
       } catch {}
       finally { setIsFiltering(false); }
     }, 300);
     return () => clearTimeout(t);
-  }, [filterStatus, filterCliente, filterDataInicio, filterDataFim]);
+  }, [filterStatus, filterCliente, filterDataInicio, filterDataFim, currentUser]);
 
   useEffect(() => {
     if (!q.trim()) { setResults([]); return; }
@@ -3827,7 +4417,7 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
     { key: "orcamentos", label: "Orçamentos" },
     { key: "clientes", label: "Clientes" },
     { key: "produtos", label: "Produtos" },
-    { key: "usuarios", label: "Usuários" },
+    ...(currentUser.username === "admin" ? [{ key: "usuarios" as const, label: "Usuários" }] : []),
   ] as const;
 
   return (
@@ -4092,6 +4682,7 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
                                       <div className="flex items-center gap-2 flex-wrap">
                                         <span className="font-semibold text-sm">#{b.numero}</span>
                                         <StatusPill status={b.status} />
+                                        <BudgetOwnerPill createdBy={b.createdBy} />
                                         {locked && <span className="text-[10px] text-muted-foreground border border-border rounded px-1">bloqueado</span>}
                                       </div>
                                       <p className="text-sm font-medium mt-0.5 truncate">{b.customerNome}</p>
@@ -4140,8 +4731,72 @@ function CustomerSearch({ onSelect, allProducts, pricingSettings, onPricingSetti
 
         {tab === "clientes" && <AllCustomersTab onSelect={onSelect} />}
         {tab === "produtos" && <AllProductsTab allProducts={allProducts} pricingSettings={pricingSettings} onPricingSettingsChange={onPricingSettingsChange} onProductsChange={onProductsChange} />}
-        {tab === "usuarios" && <UsersTab />}
+        {tab === "usuarios" && currentUser.username === "admin" && <UsersTab users={users} currentUser={currentUser} onUsersReload={onUsersReload} />}
       </div>
+    </div>
+  );
+}
+
+
+
+function SystemLogoutButton({ currentUser, onLogout }: { currentUser: AppUser; onLogout: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onLogout}
+      className="fixed right-4 top-4 z-50 flex items-center gap-2 rounded-full border border-white/20 bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-lg transition-all hover:scale-[1.02] hover:opacity-95 focus:outline-none focus:ring-2 focus:ring-primary/30"
+      title={`Sair do sistema (${currentUser.label})`}
+    >
+      <LogOut size={14} />
+      <span>Sair</span>
+      <span className="hidden sm:inline opacity-60">· {currentUser.username}</span>
+    </button>
+  );
+}
+
+// ── Login Screen ─────────────────────────────────────────────────
+
+function LoginScreen({ users, onLogin }: { users: AppUser[]; onLogin: (username: string, password: string) => Promise<void> }) {
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("");
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    await onLogin(username, password);
+  }
+
+  return (
+    <div className="min-h-screen bg-primary flex items-center justify-center px-4 py-8">
+      <div className="w-full max-w-sm bg-card border border-white/10 rounded-3xl p-7 shadow-2xl">
+        <div className="text-center mb-6">
+          <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-4">
+            <LockKeyhole size={25} className="text-primary" />
+          </div>
+          <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-serif)" }}>Entrar no Paviment</h1>
+          <p className="text-sm text-muted-foreground mt-1">Use seu usuário para acessar os orçamentos.</p>
+        </div>
+
+        <form onSubmit={submit} className="space-y-4">
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Usuário</label>
+            <select value={username} onChange={(e) => setUsername(e.target.value)}
+              className="w-full mt-1 border border-border rounded-xl px-3 py-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25">
+              {users.map((user) => <option key={user.username} value={user.username}>{user.label} ({user.username})</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Senha</label>
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+              placeholder="Digite a senha" autoFocus
+              className="w-full mt-1 border border-border rounded-xl px-3 py-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+          </div>
+          <button type="submit" className="w-full bg-primary text-primary-foreground py-3 rounded-xl text-sm font-medium hover:opacity-90 transition-opacity">
+            Entrar
+          </button>
+        </form>
+
+      </div>
+      <Toaster position="bottom-right" richColors />
     </div>
   );
 }
@@ -4154,6 +4809,8 @@ type View =
   | { type: "budget"; budget: Budget; customer: Customer };
 
 export default function App() {
+  const [appUsers, setAppUsers] = useState<AppUser[]>([]);
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const [view, setView] = useState<View>({ type: "home" });
   const [appState, setAppState] = useState<"loading" | "setup" | "seeding" | "ready" | "error">("loading");
   const [initMsg, setInitMsg] = useState("Verificando banco de dados...");
@@ -4169,6 +4826,12 @@ export default function App() {
       await runMigrations();
       const tablesOk = await checkTablesExist();
       if (!tablesOk) { setAppState("setup"); return; }
+
+      setInitMsg("Carregando usuários...");
+      const users = await fetchAppUsers();
+      setAppUsers(users);
+      const savedUsername = localStorage.getItem(AUTH_STORAGE_KEY);
+      if (savedUsername) setCurrentUser(users.find((user) => user.username === savedUsername) || null);
 
       setInitMsg("Carregando composição interna do preço...");
       setPricingSettings(await loadPricingSettings());
@@ -4196,6 +4859,28 @@ export default function App() {
   }
 
   useEffect(() => { init(); }, []);
+
+  function handleLogout() {
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+    setCurrentUser(null);
+    setView({ type: "home" });
+  }
+
+  async function reloadUsers() {
+    const users = await fetchAppUsers();
+    setAppUsers(users);
+    setCurrentUser((user) => user ? users.find((candidate) => candidate.username === user.username) || null : null);
+  }
+
+  async function handleLogin(username: string, password: string) {
+    try {
+      const user = await authenticateAppUser(username, password);
+      if (!user) { toast.error("Usuário ou senha inválidos."); return; }
+      localStorage.setItem(AUTH_STORAGE_KEY, user.username);
+      setCurrentUser(user);
+      toast.success(`Bem-vindo, ${user.label}!`);
+    } catch (e: any) { toast.error("Erro ao entrar: " + e.message); }
+  }
 
   if (appState === "setup") {
     return <SetupScreen onVerify={init} />;
@@ -4228,10 +4913,17 @@ export default function App() {
     );
   }
 
+  if (!currentUser) {
+    return <LoginScreen users={appUsers} onLogin={handleLogin} />;
+  }
+
   return (
     <>
       {view.type === "home" && (
         <CustomerSearch
+          currentUser={currentUser}
+          users={appUsers}
+          onUsersReload={reloadUsers}
           onSelect={(c) => setView({ type: "customer", customer: c })}
           allProducts={allProducts}
           pricingSettings={pricingSettings}
@@ -4243,6 +4935,10 @@ export default function App() {
                 getBudgetWithItems(budgetId),
                 supabase.from("customers").select("*").eq("id", customerId).single(),
               ]);
+              if (!canAccessBudget(currentUser, full.createdBy)) {
+                toast.error("Você não tem permissão para acessar este orçamento.");
+                return;
+              }
               if (cData) setView({ type: "budget", budget: full, customer: mapCustomer(cData) });
             } catch (e: any) { toast.error("Erro ao abrir orçamento: " + e.message); }
           }}
@@ -4253,6 +4949,7 @@ export default function App() {
           customer={view.customer}
           allProducts={allProducts}
           pricingSettings={pricingSettings}
+          currentUser={currentUser}
           onBack={() => setView({ type: "home" })}
           onOpenBudget={(b, c) => setView({ type: "budget", budget: b, customer: c })}
         />
@@ -4263,12 +4960,14 @@ export default function App() {
           allProducts={allProducts}
           pricingSettings={pricingSettings}
           customer={view.customer}
+          currentUser={currentUser}
           onBack={() => setView({ type: "customer", customer: view.customer })}
           onGoHome={() => setView({ type: "home" })}
           onBudgetChange={(b) => setView({ type: "budget", budget: b, customer: view.customer })}
           onOpenBudget={(b) => setView({ type: "budget", budget: b, customer: view.customer })}
         />
       )}
+      <SystemLogoutButton currentUser={currentUser} onLogout={handleLogout} />
       <Toaster position="bottom-right" richColors />
     </>
   );

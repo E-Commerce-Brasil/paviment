@@ -4395,7 +4395,7 @@ function UsersTab({ users, currentUser, onUsersReload }: {
         </div>
         <div className="divide-y divide-border">
           {users.map((user) => (
-            <div key={user.username} className="p-5 grid grid-cols-1 xl:grid-cols-[minmax(180px,1fr)_auto] gap-4 xl:items-center">
+            <div key={user.username} className="p-5 space-y-4">
               <div className="flex items-center gap-3 min-w-0">
                 <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${draftAdminRoles[user.username] ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
                   {draftAdminRoles[user.username] ? <ShieldCheck size={18} /> : <UserRound size={18} />}
@@ -4408,38 +4408,40 @@ function UsersTab({ users, currentUser, onUsersReload }: {
                   <p className="text-xs text-muted-foreground font-mono truncate">@{user.username}</p>
                 </div>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-[auto_minmax(180px,1fr)_auto_auto] gap-2 md:items-end">
-                <fieldset className="grid grid-cols-2 rounded-xl bg-muted/60 p-1 h-10" disabled={savingUser !== null}>
+              <div className="flex flex-col lg:flex-row gap-3 lg:items-center">
+                <fieldset className="grid grid-cols-2 rounded-xl bg-muted/60 p-1.5 h-12 w-full lg:w-80 shrink-0" disabled={savingUser !== null}>
                   <legend className="sr-only">Perfil de {user.label}</legend>
-                  <label className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition-colors ${!draftAdminRoles[user.username] ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+                  <label className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold transition-colors ${!draftAdminRoles[user.username] ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
                     <input type="radio" name={`role-${user.username}`} value="user" checked={!draftAdminRoles[user.username]}
                       onChange={() => handleDraftAdminRoleChange(user.username, false)} className="sr-only" />
-                    <UserRound size={13} />
+                    <UserRound size={15} className="shrink-0" />
                     Usuário
                   </label>
-                  <label className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition-colors ${draftAdminRoles[user.username] ? "bg-card text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+                  <label className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold transition-colors ${draftAdminRoles[user.username] ? "bg-card text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
                     <input type="radio" name={`role-${user.username}`} value="admin" checked={draftAdminRoles[user.username] === true}
                       onChange={() => handleDraftAdminRoleChange(user.username, true)} className="sr-only" />
-                    <ShieldCheck size={13} />
-                    Admin
+                    <ShieldCheck size={15} className="shrink-0" />
+                    Administrador
                   </label>
                 </fieldset>
-                <div className="relative">
-                  <KeyRound size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                  <input type="password" value={editingPasswords[user.username] || ""}
-                    onChange={(e) => setEditingPasswords((prev) => ({ ...prev, [user.username]: e.target.value }))}
-                    onKeyDown={(e) => e.key === "Enter" && handleSavePassword(user.username)}
-                    placeholder="Nova senha"
-                    className="w-full h-10 border border-border rounded-xl pl-9 pr-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+                <div className="grid grid-cols-1 sm:grid-cols-[minmax(220px,1fr)_auto_auto] gap-2 flex-1">
+                  <div className="relative">
+                    <KeyRound size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                    <input type="password" value={editingPasswords[user.username] || ""}
+                      onChange={(e) => setEditingPasswords((prev) => ({ ...prev, [user.username]: e.target.value }))}
+                      onKeyDown={(e) => e.key === "Enter" && handleSavePassword(user.username)}
+                      placeholder="Nova senha"
+                      className="w-full h-12 border border-border rounded-xl pl-9 pr-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+                  </div>
+                  <button onClick={() => handleSavePassword(user.username)} disabled={savingUser === user.username}
+                    className="h-12 shrink-0 whitespace-nowrap border border-border rounded-xl px-4 text-sm hover:bg-muted transition-colors flex items-center justify-center gap-1.5">
+                    {savingUser === user.username ? <Spinner size={13} /> : <Save size={13} />} Salvar senha
+                  </button>
+                  <button onClick={() => handleRemoveUser(user.username)} disabled={savingUser === user.username || user.username === "admin" || user.username === currentUser.username}
+                    className="h-12 border border-border rounded-xl px-4 text-sm text-muted-foreground hover:text-destructive hover:bg-red-50 transition-colors disabled:opacity-40 disabled:hover:text-muted-foreground disabled:hover:bg-transparent flex items-center justify-center gap-1.5">
+                    <Trash2 size={13} /> Remover
+                  </button>
                 </div>
-                <button onClick={() => handleSavePassword(user.username)} disabled={savingUser === user.username}
-                  className="h-10 shrink-0 whitespace-nowrap border border-border rounded-xl px-3 text-sm hover:bg-muted transition-colors flex items-center justify-center gap-1.5">
-                  {savingUser === user.username ? <Spinner size={13} /> : <Save size={13} />} Salvar senha
-                </button>
-                <button onClick={() => handleRemoveUser(user.username)} disabled={savingUser === user.username || user.username === "admin" || user.username === currentUser.username}
-                  className="h-10 border border-border rounded-xl px-3 text-sm text-muted-foreground hover:text-destructive hover:bg-red-50 transition-colors disabled:opacity-40 disabled:hover:text-muted-foreground disabled:hover:bg-transparent flex items-center justify-center gap-1.5">
-                  <Trash2 size={13} /> Remover
-                </button>
               </div>
             </div>
           ))}

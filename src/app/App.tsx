@@ -3779,6 +3779,75 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
 
 // ── Users Management Component ─────────────────────────────────────
 
+function UserRolePicker({
+  isAdmin,
+  onChange,
+  disabled = false,
+  compact = false,
+}: {
+  isAdmin: boolean;
+  onChange: (isAdmin: boolean) => void;
+  disabled?: boolean;
+  compact?: boolean;
+}) {
+  const options = [
+    { value: false, label: "Padrão", description: "Acesso às operações", icon: Lock },
+    { value: true, label: "Administrador", description: "Acesso total", icon: Shield },
+  ];
+
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Perfil de acesso"
+      className="inline-grid grid-cols-2 gap-1 rounded-xl border border-border bg-muted/60 p-1 shadow-inner"
+    >
+      {options.map((option) => {
+        const selected = isAdmin === option.value;
+        const Icon = option.icon;
+        return (
+          <button
+            key={option.label}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            disabled={disabled}
+            onClick={() => onChange(option.value)}
+            className={`group flex items-center rounded-lg text-left transition-all duration-200 disabled:cursor-wait disabled:opacity-60 ${
+              compact ? "gap-2 px-3 py-2" : "gap-2.5 px-3.5 py-2.5"
+            } ${
+              selected
+                ? option.value
+                  ? "bg-primary text-primary-foreground shadow-sm"
+                  : "bg-card text-foreground shadow-sm ring-1 ring-border"
+                : "text-muted-foreground hover:bg-card/70 hover:text-foreground"
+            }`}
+          >
+            <span
+              className={`grid shrink-0 place-items-center rounded-md ${compact ? "h-6 w-6" : "h-7 w-7"} ${
+                selected
+                  ? option.value
+                    ? "bg-white/15"
+                    : "bg-muted"
+                  : "bg-background/60 group-hover:bg-background"
+              }`}
+            >
+              <Icon size={compact ? 13 : 15} />
+            </span>
+            <span className="min-w-0">
+              <span className="block whitespace-nowrap text-xs font-semibold leading-tight">{option.label}</span>
+              {!compact && (
+                <span className={`mt-0.5 block whitespace-nowrap text-[10px] leading-tight ${selected && option.value ? "text-primary-foreground/75" : "text-muted-foreground"}`}>
+                  {option.description}
+                </span>
+              )}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function UsersTab({
   users,
   currentUser,
@@ -3967,27 +4036,11 @@ function UsersTab({
         <div className="mt-4 pt-3 border-t border-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <span className="text-xs font-medium text-muted-foreground block">Perfil de Acesso do novo usuário:</span>
-            <div className="flex items-center gap-4 mt-1.5">
-              <label className="flex items-center gap-2 text-xs cursor-pointer font-medium">
-                <input
-                  type="radio"
-                  name="new_user_profile"
-                  checked={!newUser.isAdmin}
-                  onChange={() => setNewUser((u) => ({ ...u, isAdmin: false }))}
-                  className="accent-primary w-4 h-4 cursor-pointer"
-                />
-                <span>Usuário Padrão</span>
-              </label>
-              <label className="flex items-center gap-2 text-xs cursor-pointer font-medium text-primary">
-                <input
-                  type="radio"
-                  name="new_user_profile"
-                  checked={newUser.isAdmin}
-                  onChange={() => setNewUser((u) => ({ ...u, isAdmin: true }))}
-                  className="accent-primary w-4 h-4 cursor-pointer"
-                />
-                <span className="flex items-center gap-1"><Shield size={13} /> Administrador</span>
-              </label>
+            <div className="mt-2">
+              <UserRolePicker
+                isAdmin={newUser.isAdmin}
+                onChange={(isAdmin) => setNewUser((u) => ({ ...u, isAdmin }))}
+              />
             </div>
           </div>
 
@@ -4042,37 +4095,19 @@ function UsersTab({
                   <p className="text-xs text-muted-foreground font-mono mt-0.5">@{u.username}</p>
                 </div>
 
-                {/* Seleção do Perfil (RADIO BUTTONS) */}
-                <div className="bg-muted/40 border border-border rounded-xl p-2.5 shrink-0 flex flex-col sm:flex-row items-start sm:items-center gap-3">
-                  <span className="text-xs font-semibold text-muted-foreground mr-1">Perfil:</span>
-                  <div className="flex items-center gap-3">
-                    <label className={`flex items-center gap-1.5 text-xs cursor-pointer select-none ${!u.isAdmin ? "font-semibold text-foreground" : "text-muted-foreground"}`}>
-                      <input
-                        type="radio"
-                        name={`user_role_${u.username}`}
-                        value="user"
-                        checked={!u.isAdmin}
-                        disabled={isUpdatingAdmin}
-                        onChange={() => handleToggleAdmin(u.username, false)}
-                        className="accent-primary w-4 h-4 cursor-pointer"
-                      />
-                      <span>Usuário Padrão</span>
-                    </label>
-
-                    <label className={`flex items-center gap-1.5 text-xs cursor-pointer select-none ${u.isAdmin ? "font-semibold text-primary" : "text-muted-foreground"}`}>
-                      <input
-                        type="radio"
-                        name={`user_role_${u.username}`}
-                        value="admin"
-                        checked={u.isAdmin}
-                        disabled={isUpdatingAdmin}
-                        onChange={() => handleToggleAdmin(u.username, true)}
-                        className="accent-primary w-4 h-4 cursor-pointer"
-                      />
-                      <span className="flex items-center gap-1"><Shield size={12} /> Admin</span>
-                    </label>
-                  </div>
-                  {isUpdatingAdmin && <Spinner size={12} />}
+                {/* Seletor visual do Perfil */}
+                <div className="relative shrink-0">
+                  <UserRolePicker
+                    compact
+                    isAdmin={u.isAdmin}
+                    disabled={isUpdatingAdmin}
+                    onChange={(isAdmin) => handleToggleAdmin(u.username, isAdmin)}
+                  />
+                  {isUpdatingAdmin && (
+                    <span className="absolute -right-1 -top-1 grid h-5 w-5 place-items-center rounded-full bg-card shadow">
+                      <Spinner size={11} />
+                    </span>
+                  )}
                 </div>
 
                 {/* Ações (Nova Senha e Excluir) */}

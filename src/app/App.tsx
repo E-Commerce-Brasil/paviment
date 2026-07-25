@@ -1202,8 +1202,15 @@ function calculateItemRealAreaM2(item: BudgetItem): number {
   return round2(caixas * m2PorCaixa);
 }
 
+function calculateRealLinearMeters(product: Product, requestedMeters: number, caixas: number): number {
+  const linearMetersPerBox = Number.isFinite(product.m2PorCaixa) ? product.m2PorCaixa : 0;
+  return linearMetersPerBox > 0 ? round2(caixas * linearMetersPerBox) : round2(requestedMeters);
+}
+
 function calculateItemSubtotal(product: Product, areaM2: number, caixas: number, precoM2: number): number {
-  const quantityBase = isVillacolProduct(product) || isLinearMeterProduct(product) ? areaM2 : caixas * (product.m2PorCaixa || 0);
+  const quantityBase = isLinearMeterProduct(product)
+    ? calculateRealLinearMeters(product, areaM2, caixas)
+    : isVillacolProduct(product) ? areaM2 : caixas * (product.m2PorCaixa || 0);
   return round2(quantityBase * precoM2);
 }
 
@@ -1211,8 +1218,11 @@ function calculateItemWeightKg(item: BudgetItem): number {
   const caixas = Number.isFinite(item.caixas) ? item.caixas : 0;
   const pesoPorCaixa = Number.isFinite(item.product?.pesoBrutoCx) ? item.product.pesoBrutoCx : 0;
   const pesoPorMetroLinear = Number.isFinite(item.product?.pesoBrutoM2) ? item.product.pesoBrutoM2 : 0;
-  if (isLinearMeterProduct(item.product) && pesoPorMetroLinear > 0) {
-    return round2(item.areaM2 * pesoPorMetroLinear);
+  if (isLinearMeterProduct(item.product)) {
+    if (pesoPorCaixa > 0) return round2(caixas * pesoPorCaixa);
+    if (pesoPorMetroLinear > 0) {
+      return round2(calculateRealLinearMeters(item.product, item.areaM2, caixas) * pesoPorMetroLinear);
+    }
   }
   return round2(caixas * pesoPorCaixa);
 }
@@ -1484,9 +1494,15 @@ function ProductModal({
           {area > 0 && selected.m2PorCaixa > 0 && (
             <div className="bg-muted rounded-xl p-3 mb-4 text-sm space-y-1.5">
               <div className="flex justify-between text-muted-foreground">
-                <span>{selectedIsVillacol || selectedIsLinearMeter ? "Quantidade" : "Caixas necessárias"}</span>
-                <span className="font-mono font-medium text-foreground">{selectedIsLinearMeter ? `${area.toFixed(2)} ${selectedUnitLabel}` : `${caixas} ${selectedIsVillacol ? selectedUnitLabel : "cx"}`}</span>
+                <span>{selectedIsVillacol ? "Quantidade" : "Caixas necessárias"}</span>
+                <span className="font-mono font-medium text-foreground">{`${caixas} ${selectedIsVillacol ? selectedUnitLabel : "cx"}`}</span>
               </div>
+              {selectedIsLinearMeter && (
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Metragem linear real</span>
+                  <span className="font-mono text-foreground">{calculateRealLinearMeters(selected, area, caixas).toFixed(2)} ml</span>
+                </div>
+              )}
               {!selectedIsVillacol && !selectedIsLinearMeter && (
                 <div className="flex justify-between text-muted-foreground">
                   <span>m² real (arredondado)</span>
@@ -2054,9 +2070,9 @@ function BudgetEditor({
         <td>${isLinear ? "Metro linear" : p?.formato ?? ""}</td>
         <td style="text-align:right">${fmtBRLStr(item.precoM2)}</td>
         <td style="text-align:right">${item.areaM2.toFixed(2)}${isLinear ? " ml" : ""}</td>
-        <td style="text-align:right">${isLinear ? "—" : `${item.caixas} cx`}</td>
-        <td style="text-align:right">${isLinear ? "—" : calculateItemRealAreaM2(item).toFixed(2)}</td>
-        <td style="text-align:right">${isLinear ? "—" : (p?.m2PorCaixa ?? "")}</td>
+        <td style="text-align:right">${item.caixas} cx</td>
+        <td style="text-align:right">${isLinear ? `${calculateRealLinearMeters(p, item.areaM2, item.caixas).toFixed(2)} ml` : calculateItemRealAreaM2(item).toFixed(2)}</td>
+        <td style="text-align:right">${p?.m2PorCaixa ?? ""}${isLinear ? " ml/cx" : ""}</td>
         <td style="text-align:right">${fmtKg(calculateItemWeightKg(item))}</td>
         <td style="text-align:right">${fmtBRLStr(item.subtotal)}</td>
       </tr>`;
@@ -2276,7 +2292,7 @@ ${budget.observacoes ? `
                     <th className="text-left px-3 py-2.5 font-medium hidden md:table-cell">Formato</th>
                     <th className="text-right px-3 py-2.5 font-medium">Qtd.</th>
                     <th className="text-right px-3 py-2.5 font-medium">Cx</th>
-                    <th className="text-right px-3 py-2.5 font-medium hidden md:table-cell">m² real</th>
+                    <th className="text-right px-3 py-2.5 font-medium hidden md:table-cell">m²/ml real</th>
                     <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">R$/m² ou ml</th>
                     <th className="text-right px-3 py-2.5 font-medium hidden lg:table-cell">Peso</th>
                     <th className="text-right px-3 py-2.5 font-medium">Subtotal</th>
@@ -2289,8 +2305,8 @@ ${budget.observacoes ? `
                     const previewArea = parseFloat(editAreaInput.replace(",", ".")) || 0;
                     const itemIsLinear = isLinearMeterProduct(item.product);
                     const previewCx = itemIsLinear ? (item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : Math.ceil(previewArea)) : item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : 0;
-                    const previewRealArea = itemIsLinear ? previewArea : round2(previewCx * (item.product.m2PorCaixa || 0));
-                    const previewWeight = round2(previewCx * (item.product.pesoBrutoCx || 0));
+                    const previewRealArea = itemIsLinear ? calculateRealLinearMeters(item.product, previewArea, previewCx) : round2(previewCx * (item.product.m2PorCaixa || 0));
+                    const previewWeight = calculateItemWeightKg({ ...item, areaM2: previewArea, caixas: previewCx });
                     const editPrecoBase = editTabela === "TE" ? null : item.product[priceKey(editTabela)] as number | null;
                     const editSpecialPrice = parseDecimalInput(editSpecialPriceInput);
                     const editPrecoM2 = editTabela === "TE" ? editSpecialPrice : editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
@@ -2323,13 +2339,13 @@ ${budget.observacoes ? `
                         </td>
                         <td className="px-3 py-3 text-right font-mono text-sm">
                           {isEditing && previewArea > 0
-                            ? <span className="text-primary font-semibold">{itemIsLinear ? "—" : previewCx}</span>
-                            : itemIsLinear ? "—" : item.caixas}
+                            ? <span className="text-primary font-semibold">{previewCx}</span>
+                            : item.caixas}
                         </td>
                         <td className="px-3 py-3 text-right font-mono text-sm hidden md:table-cell">
                           {isEditing && previewArea > 0
-                            ? <span className="text-primary font-semibold">{itemIsLinear ? "—" : previewRealArea.toFixed(2)}</span>
-                            : itemIsLinear ? "—" : calculateItemRealAreaM2(item).toFixed(2)}
+                            ? <span className="text-primary font-semibold">{previewRealArea.toFixed(2)}{itemIsLinear ? " ml" : ""}</span>
+                            : <>{itemIsLinear ? calculateRealLinearMeters(item.product, item.areaM2, item.caixas).toFixed(2) : calculateItemRealAreaM2(item).toFixed(2)}{itemIsLinear ? " ml" : ""}</>}
                         </td>
                         <td className="px-3 py-3 text-right text-sm hidden sm:table-cell">
                           {isEditing ? (

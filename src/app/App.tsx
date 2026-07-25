@@ -6,7 +6,7 @@ import {
   Search, Plus, ArrowLeft, Package, FileText,
   Trash2, Send, Save, X, ChevronRight,
   RotateCcw, AlertTriangle, Pencil, Check, Copy, Printer,
-  LogOut, LockKeyhole,
+  LogOut, LockKeyhole, UserPlus, UserRound, ShieldCheck, KeyRound,
 } from "lucide-react";
 import { Toaster, toast } from "sonner";
 import { projectId, publicAnonKey } from "../../utils/supabase/info";
@@ -641,12 +641,12 @@ async function authenticateAppUser(username: string, password: string): Promise<
   return data ? mapAppUser(data) : null;
 }
 
-async function createAppUser(user: { username: string; label: string; password: string }): Promise<void> {
+async function createAppUser(user: { username: string; label: string; password: string; isAdmin: boolean }): Promise<void> {
   const username = user.username.trim().toLowerCase();
   const passwordHash = await hashUserPassword(username, user.password);
   const { error } = await supabase
     .from("app_users")
-    .insert({ username, display_name: user.label, password_hash: passwordHash, is_admin: false, active: true });
+    .insert({ username, display_name: user.label, password_hash: passwordHash, is_admin: user.isAdmin, active: true });
   if (error) throw error;
 }
 
@@ -4221,7 +4221,7 @@ function UsersTab({ users, currentUser, onUsersReload }: {
   currentUser: AppUser;
   onUsersReload: () => Promise<void>;
 }) {
-  const [newUser, setNewUser] = useState({ username: "", label: "", password: "" });
+  const [newUser, setNewUser] = useState({ username: "", label: "", password: "", isAdmin: false });
   const [editingPasswords, setEditingPasswords] = useState<Record<string, string>>({});
   const [draftAdminRoles, setDraftAdminRoles] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(users.map((user) => [user.username, user.isAdmin])),
@@ -4248,9 +4248,9 @@ function UsersTab({ users, currentUser, onUsersReload }: {
 
     setSavingUser("new");
     try {
-      await createAppUser({ username, label, password });
+      await createAppUser({ username, label, password, isAdmin: newUser.isAdmin });
       await onUsersReload();
-      setNewUser({ username: "", label: "", password: "" });
+      setNewUser({ username: "", label: "", password: "", isAdmin: false });
       toast.success(`Usuário ${username} criado.`);
     } catch (e: any) { toast.error("Erro ao criar usuário: " + e.message); }
     finally { setSavingUser(null); }
@@ -4333,31 +4333,56 @@ function UsersTab({ users, currentUser, onUsersReload }: {
       </div>
 
       <div className="bg-card border border-border rounded-2xl p-5 shadow-sm">
-        <h3 className="font-semibold mb-4">Criar novo usuário</h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center"><UserPlus size={19} /></div>
           <div>
-            <label className="text-xs font-medium text-muted-foreground">Usuário *</label>
-            <input value={newUser.username} onChange={(e) => setNewUser((form) => ({ ...form, username: normalizeUsername(e.target.value) }))}
-              placeholder="ex: vendedor_2"
-              className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-muted-foreground">Nome exibido</label>
-            <input value={newUser.label} onChange={(e) => setNewUser((form) => ({ ...form, label: e.target.value }))}
-              placeholder="Ex: Vendedor 2"
-              className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-muted-foreground">Senha *</label>
-            <input type="password" value={newUser.password} onChange={(e) => setNewUser((form) => ({ ...form, password: e.target.value }))}
-              placeholder="Senha inicial"
-              className="w-full mt-1 border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+            <h3 className="font-semibold">Criar novo usuário</h3>
+            <p className="text-xs text-muted-foreground">Preencha os dados e escolha o nível de acesso.</p>
           </div>
         </div>
-        <button onClick={handleCreateUser} disabled={savingUser === "new"}
-          className="mt-4 bg-primary text-primary-foreground px-4 py-2.5 rounded-xl text-sm font-medium hover:opacity-90 transition-opacity flex items-center gap-2">
-          {savingUser === "new" ? <Spinner size={14} /> : <Plus size={14} />} Criar usuário
-        </button>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-foreground">Usuário <span className="text-destructive">*</span></label>
+            <input value={newUser.username} onChange={(e) => setNewUser((form) => ({ ...form, username: normalizeUsername(e.target.value) }))}
+              placeholder="ex: vendedor_2"
+              className="w-full h-11 border border-border rounded-xl px-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-foreground">Nome exibido</label>
+            <input value={newUser.label} onChange={(e) => setNewUser((form) => ({ ...form, label: e.target.value }))}
+              placeholder="Ex: Vendedor 2"
+              className="w-full h-11 border border-border rounded-xl px-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-foreground">Senha inicial <span className="text-destructive">*</span></label>
+            <input type="password" value={newUser.password} onChange={(e) => setNewUser((form) => ({ ...form, password: e.target.value }))}
+              placeholder="Senha inicial"
+              className="w-full h-11 border border-border rounded-xl px-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+          </div>
+        </div>
+        <div className="mt-5 pt-5 border-t border-border flex flex-col lg:flex-row lg:items-end justify-between gap-4">
+          <fieldset className="min-w-0">
+            <legend className="text-xs font-semibold mb-2">Perfil de acesso</legend>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button type="button" onClick={() => setNewUser((form) => ({ ...form, isAdmin: false }))}
+                aria-pressed={!newUser.isAdmin}
+                className={`flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors ${!newUser.isAdmin ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border hover:bg-muted/40"}`}>
+                <UserRound size={18} className={!newUser.isAdmin ? "text-primary" : "text-muted-foreground"} />
+                <span><span className="block text-sm font-semibold">Usuário</span><span className="block text-xs text-muted-foreground">Acesso aos próprios orçamentos</span></span>
+              </button>
+              <button type="button" onClick={() => setNewUser((form) => ({ ...form, isAdmin: true }))}
+                aria-pressed={newUser.isAdmin}
+                className={`flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors ${newUser.isAdmin ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border hover:bg-muted/40"}`}>
+                <ShieldCheck size={18} className={newUser.isAdmin ? "text-primary" : "text-muted-foreground"} />
+                <span><span className="block text-sm font-semibold">Administrador</span><span className="block text-xs text-muted-foreground">Acesso total ao sistema</span></span>
+              </button>
+            </div>
+          </fieldset>
+          <button onClick={handleCreateUser} disabled={savingUser === "new"}
+            className="h-11 bg-primary text-primary-foreground px-5 rounded-xl text-sm font-semibold hover:opacity-90 transition-opacity flex items-center justify-center gap-2 shrink-0 disabled:opacity-50">
+            {savingUser === "new" ? <Spinner size={15} /> : <UserPlus size={15} />} Criar usuário
+          </button>
+        </div>
       </div>
 
       <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-sm">
@@ -4370,36 +4395,49 @@ function UsersTab({ users, currentUser, onUsersReload }: {
         </div>
         <div className="divide-y divide-border">
           {users.map((user) => (
-            <div key={user.username} className="p-5 flex flex-col md:flex-row md:items-center gap-3 md:justify-between">
-              <div>
-                <p className="font-semibold text-sm">{user.label}</p>
-                <p className="text-xs text-muted-foreground font-mono">{user.username}{user.isAdmin ? " · administrador" : ""}</p>
+            <div key={user.username} className="p-5 grid grid-cols-1 xl:grid-cols-[minmax(180px,1fr)_auto] gap-4 xl:items-center">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${draftAdminRoles[user.username] ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
+                  {draftAdminRoles[user.username] ? <ShieldCheck size={18} /> : <UserRound size={18} />}
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="font-semibold text-sm truncate">{user.label}</p>
+                    {user.username === currentUser.username && <span className="text-[10px] rounded-full bg-primary/10 text-primary px-2 py-0.5 font-semibold">Você</span>}
+                  </div>
+                  <p className="text-xs text-muted-foreground font-mono truncate">@{user.username}</p>
+                </div>
               </div>
-              <div className="flex flex-col sm:flex-row gap-2 sm:items-center sm:justify-center">
-                <fieldset className="flex items-center justify-center gap-3 rounded-xl border border-border px-3 py-2" disabled={savingUser !== null}>
+              <div className="grid grid-cols-1 md:grid-cols-[auto_minmax(180px,1fr)_auto_auto] gap-2 md:items-end">
+                <fieldset className="grid grid-cols-2 rounded-xl bg-muted/60 p-1 h-10" disabled={savingUser !== null}>
                   <legend className="sr-only">Perfil de {user.label}</legend>
-                  <label className="flex cursor-pointer items-center gap-1.5 text-sm">
+                  <label className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition-colors ${!draftAdminRoles[user.username] ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
                     <input type="radio" name={`role-${user.username}`} value="user" checked={!draftAdminRoles[user.username]}
-                      onChange={() => handleDraftAdminRoleChange(user.username, false)} className="accent-primary" />
+                      onChange={() => handleDraftAdminRoleChange(user.username, false)} className="sr-only" />
+                    <UserRound size={13} />
                     Usuário
                   </label>
-                  <label className="flex cursor-pointer items-center gap-1.5 text-sm">
+                  <label className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition-colors ${draftAdminRoles[user.username] ? "bg-card text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
                     <input type="radio" name={`role-${user.username}`} value="admin" checked={draftAdminRoles[user.username] === true}
-                      onChange={() => handleDraftAdminRoleChange(user.username, true)} className="accent-primary" />
+                      onChange={() => handleDraftAdminRoleChange(user.username, true)} className="sr-only" />
+                    <ShieldCheck size={13} />
                     Admin
                   </label>
                 </fieldset>
-                <input type="password" value={editingPasswords[user.username] || ""}
-                  onChange={(e) => setEditingPasswords((prev) => ({ ...prev, [user.username]: e.target.value }))}
-                  onKeyDown={(e) => e.key === "Enter" && handleSavePassword(user.username)}
-                  placeholder="Nova senha"
-                  className="border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+                <div className="relative">
+                  <KeyRound size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                  <input type="password" value={editingPasswords[user.username] || ""}
+                    onChange={(e) => setEditingPasswords((prev) => ({ ...prev, [user.username]: e.target.value }))}
+                    onKeyDown={(e) => e.key === "Enter" && handleSavePassword(user.username)}
+                    placeholder="Nova senha"
+                    className="w-full h-10 border border-border rounded-xl pl-9 pr-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+                </div>
                 <button onClick={() => handleSavePassword(user.username)} disabled={savingUser === user.username}
-                  className="w-36 shrink-0 whitespace-nowrap border border-border rounded-xl px-3 py-2 text-sm hover:bg-muted transition-colors flex items-center justify-center gap-1.5">
+                  className="h-10 shrink-0 whitespace-nowrap border border-border rounded-xl px-3 text-sm hover:bg-muted transition-colors flex items-center justify-center gap-1.5">
                   {savingUser === user.username ? <Spinner size={13} /> : <Save size={13} />} Salvar senha
                 </button>
                 <button onClick={() => handleRemoveUser(user.username)} disabled={savingUser === user.username || user.username === "admin" || user.username === currentUser.username}
-                  className="border border-border rounded-xl px-3 py-2 text-sm text-muted-foreground hover:text-destructive hover:bg-red-50 transition-colors disabled:opacity-40 disabled:hover:text-muted-foreground disabled:hover:bg-transparent flex items-center justify-center gap-1.5">
+                  className="h-10 border border-border rounded-xl px-3 text-sm text-muted-foreground hover:text-destructive hover:bg-red-50 transition-colors disabled:opacity-40 disabled:hover:text-muted-foreground disabled:hover:bg-transparent flex items-center justify-center gap-1.5">
                   <Trash2 size={13} /> Remover
                 </button>
               </div>

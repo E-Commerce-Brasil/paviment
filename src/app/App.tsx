@@ -4246,6 +4246,16 @@ function UsersTab({ users, currentUser, onUsersReload }: {
     finally { setSavingUser(null); }
   }
 
+  function handleDraftAdminRoleChange(username: string, isAdmin: boolean) {
+    const nextRoles = { ...draftAdminRoles, [username]: isAdmin };
+    const activeAdminCount = users.filter((user) => user.active && nextRoles[user.username]).length;
+    if (activeAdminCount < 1) {
+      toast.error("O sistema precisa manter pelo menos um administrador ativo.");
+      return;
+    }
+    setDraftAdminRoles(nextRoles);
+  }
+
   async function handleSaveAdminRoles() {
     const activeAdminCount = users.filter((user) => user.active && draftAdminRoles[user.username]).length;
     if (activeAdminCount < 1) {
@@ -4346,12 +4356,12 @@ function UsersTab({ users, currentUser, onUsersReload }: {
                   <legend className="sr-only">Perfil de {user.label}</legend>
                   <label className="flex cursor-pointer items-center gap-1.5 text-sm">
                     <input type="radio" name={`role-${user.username}`} value="user" checked={!draftAdminRoles[user.username]}
-                      onChange={() => setDraftAdminRoles((roles) => ({ ...roles, [user.username]: false }))} className="accent-primary" />
+                      onChange={() => handleDraftAdminRoleChange(user.username, false)} className="accent-primary" />
                     Usuário
                   </label>
                   <label className="flex cursor-pointer items-center gap-1.5 text-sm">
                     <input type="radio" name={`role-${user.username}`} value="admin" checked={draftAdminRoles[user.username] === true}
-                      onChange={() => setDraftAdminRoles((roles) => ({ ...roles, [user.username]: true }))} className="accent-primary" />
+                      onChange={() => handleDraftAdminRoleChange(user.username, true)} className="accent-primary" />
                     Admin
                   </label>
                 </fieldset>
@@ -4361,7 +4371,7 @@ function UsersTab({ users, currentUser, onUsersReload }: {
                   placeholder="Nova senha"
                   className="border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                 <button onClick={() => handleSavePassword(user.username)} disabled={savingUser === user.username}
-                  className="border border-border rounded-xl px-3 py-2 text-sm hover:bg-muted transition-colors flex items-center justify-center gap-1.5">
+                  className="w-36 shrink-0 whitespace-nowrap border border-border rounded-xl px-3 py-2 text-sm hover:bg-muted transition-colors flex items-center justify-center gap-1.5">
                   {savingUser === user.username ? <Spinner size={13} /> : <Save size={13} />} Salvar senha
                 </button>
                 <button onClick={() => handleRemoveUser(user.username)} disabled={savingUser === user.username || user.username === "admin" || user.username === currentUser.username}

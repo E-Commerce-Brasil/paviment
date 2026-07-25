@@ -4199,7 +4199,14 @@ function UsersTab({ users, currentUser, onUsersReload }: {
 }) {
   const [newUser, setNewUser] = useState({ username: "", label: "", password: "" });
   const [editingPasswords, setEditingPasswords] = useState<Record<string, string>>({});
+  const [draftAdminRoles, setDraftAdminRoles] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(users.map((user) => [user.username, user.isAdmin])),
+  );
   const [savingUser, setSavingUser] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDraftAdminRoles(Object.fromEntries(users.map((user) => [user.username, user.isAdmin])));
+  }, [users]);
 
   function normalizeUsername(value: string): string {
     return value.trim().toLowerCase().replace(/\s+/g, "_");
@@ -4239,21 +4246,29 @@ function UsersTab({ users, currentUser, onUsersReload }: {
     finally { setSavingUser(null); }
   }
 
-  async function handleAdminRoleChange(user: AppUser, isAdmin: boolean) {
-    if (user.isAdmin === isAdmin) return;
-
-    const activeAdminCount = users.filter((candidate) => candidate.active && candidate.isAdmin).length;
-    if (!isAdmin && activeAdminCount <= 1) {
+  async function handleSaveAdminRoles() {
+    const activeAdminCount = users.filter((user) => user.active && draftAdminRoles[user.username]).length;
+    if (activeAdminCount < 1) {
       toast.error("O sistema precisa manter pelo menos um administrador ativo.");
       return;
     }
 
-    setSavingUser(user.username);
+    const changedUsers = users.filter((user) => user.isAdmin !== draftAdminRoles[user.username]);
+    if (changedUsers.length === 0) {
+      toast.info("Nenhuma alteração de perfil para salvar.");
+      return;
+    }
+
+    setSavingUser("roles");
     try {
-      await updateAppUserAdminRole(user.username, isAdmin);
+      // Promote first so role swaps never temporarily leave the system without an admin.
+      const orderedChanges = [...changedUsers].sort((a, b) => Number(draftAdminRoles[b.username]) - Number(draftAdminRoles[a.username]));
+      for (const user of orderedChanges) {
+        await updateAppUserAdminRole(user.username, draftAdminRoles[user.username]);
+      }
       await onUsersReload();
-      toast.success(`${user.label} agora é ${isAdmin ? "administrador" : "usuário"}.`);
-    } catch (e: any) { toast.error("Erro ao alterar perfil: " + e.message); }
+      toast.success("Perfis de acesso atualizados.");
+    } catch (e: any) { toast.error("Erro ao salvar perfis: " + e.message); }
     finally { setSavingUser(null); }
   }
 
@@ -4312,8 +4327,12 @@ function UsersTab({ users, currentUser, onUsersReload }: {
       </div>
 
       <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-sm">
-        <div className="px-5 py-3 border-b border-border bg-muted/30">
+        <div className="px-5 py-3 border-b border-border bg-muted/30 flex flex-col sm:flex-row items-center justify-between gap-2">
           <p className="text-xs text-muted-foreground">{users.length} usuário{users.length !== 1 ? "s" : ""} cadastrado{users.length !== 1 ? "s" : ""}</p>
+          <button onClick={handleSaveAdminRoles} disabled={savingUser !== null}
+            className="border border-border rounded-xl px-3 py-2 text-sm hover:bg-muted transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40">
+            {savingUser === "roles" ? <Spinner size={13} /> : <Save size={13} />} Salvar alterações
+          </button>
         </div>
         <div className="divide-y divide-border">
           {users.map((user) => (
@@ -4322,17 +4341,17 @@ function UsersTab({ users, currentUser, onUsersReload }: {
                 <p className="font-semibold text-sm">{user.label}</p>
                 <p className="text-xs text-muted-foreground font-mono">{user.username}{user.isAdmin ? " · administrador" : ""}</p>
               </div>
-              <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
-                <fieldset className="flex items-center gap-3 rounded-xl border border-border px-3 py-2" disabled={savingUser === user.username}>
+              <div className="flex flex-col sm:flex-row gap-2 sm:items-center sm:justify-center">
+                <fieldset className="flex items-center justify-center gap-3 rounded-xl border border-border px-3 py-2" disabled={savingUser !== null}>
                   <legend className="sr-only">Perfil de {user.label}</legend>
                   <label className="flex cursor-pointer items-center gap-1.5 text-sm">
-                    <input type="radio" name={`role-${user.username}`} value="user" checked={!user.isAdmin}
-                      onChange={() => handleAdminRoleChange(user, false)} className="accent-primary" />
+                    <input type="radio" name={`role-${user.username}`} value="user" checked={!draftAdminRoles[user.username]}
+                      onChange={() => setDraftAdminRoles((roles) => ({ ...roles, [user.username]: false }))} className="accent-primary" />
                     Usuário
                   </label>
                   <label className="flex cursor-pointer items-center gap-1.5 text-sm">
-                    <input type="radio" name={`role-${user.username}`} value="admin" checked={user.isAdmin}
-                      onChange={() => handleAdminRoleChange(user, true)} className="accent-primary" />
+                    <input type="radio" name={`role-${user.username}`} value="admin" checked={draftAdminRoles[user.username] === true}
+                      onChange={() => setDraftAdminRoles((roles) => ({ ...roles, [user.username]: true }))} className="accent-primary" />
                     Admin
                   </label>
                 </fieldset>

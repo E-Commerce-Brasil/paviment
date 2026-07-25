@@ -660,6 +660,25 @@ async function updateAppUserPassword(username: string, password: string): Promis
   if (error) throw error;
 }
 
+async function updateAppUserAdminRole(username: string, isAdmin: boolean): Promise<void> {
+  if (!isAdmin) {
+    const { count, error: countError } = await supabase
+      .from("app_users")
+      .select("id", { count: "exact", head: true })
+      .eq("is_admin", true)
+      .eq("active", true);
+    if (countError) throw countError;
+    if ((count ?? 0) <= 1) throw new Error("O sistema precisa manter pelo menos um administrador ativo.");
+  }
+
+  const { error } = await supabase
+    .from("app_users")
+    .update({ is_admin: isAdmin, updated_at: new Date().toISOString() })
+    .eq("username", username)
+    .eq("active", true);
+  if (error) throw error;
+}
+
 async function deactivateAppUser(username: string): Promise<void> {
   const { error } = await supabase
     .from("app_users")
@@ -4220,9 +4239,32 @@ function UsersTab({ users, currentUser, onUsersReload }: {
     finally { setSavingUser(null); }
   }
 
+  async function handleAdminRoleChange(user: AppUser, isAdmin: boolean) {
+    if (user.isAdmin === isAdmin) return;
+
+    const activeAdminCount = users.filter((candidate) => candidate.active && candidate.isAdmin).length;
+    if (!isAdmin && activeAdminCount <= 1) {
+      toast.error("O sistema precisa manter pelo menos um administrador ativo.");
+      return;
+    }
+
+    setSavingUser(user.username);
+    try {
+      await updateAppUserAdminRole(user.username, isAdmin);
+      await onUsersReload();
+      toast.success(`${user.label} agora é ${isAdmin ? "administrador" : "usuário"}.`);
+    } catch (e: any) { toast.error("Erro ao alterar perfil: " + e.message); }
+    finally { setSavingUser(null); }
+  }
+
   async function handleRemoveUser(username: string) {
     if (username === "admin") { toast.error("O usuário admin não pode ser removido."); return; }
     if (username === currentUser.username) { toast.error("Você não pode remover o usuário logado."); return; }
+    const user = users.find((candidate) => candidate.username === username);
+    if (user?.isAdmin && users.filter((candidate) => candidate.active && candidate.isAdmin).length <= 1) {
+      toast.error("O sistema precisa manter pelo menos um administrador ativo.");
+      return;
+    }
     if (!confirm(`Remover o usuário "${username}"? Os orçamentos criados por ele continuarão salvos, mas ficarão visíveis apenas para o admin.`)) return;
 
     setSavingUser(username);
@@ -4238,7 +4280,7 @@ function UsersTab({ users, currentUser, onUsersReload }: {
     <div className="space-y-5">
       <div>
         <h2 className="font-semibold mb-1">Usuários</h2>
-        <p className="text-sm text-muted-foreground">Somente o admin pode criar usuários, alterar senhas e remover acessos.</p>
+        <p className="text-sm text-muted-foreground">Administradores podem criar usuários, definir perfis, alterar senhas e remover acessos.</p>
       </div>
 
       <div className="bg-card border border-border rounded-2xl p-5 shadow-sm">
@@ -4278,9 +4320,22 @@ function UsersTab({ users, currentUser, onUsersReload }: {
             <div key={user.username} className="p-5 flex flex-col md:flex-row md:items-center gap-3 md:justify-between">
               <div>
                 <p className="font-semibold text-sm">{user.label}</p>
-                <p className="text-xs text-muted-foreground font-mono">{user.username}{user.username === "admin" ? " · administrador" : ""}</p>
+                <p className="text-xs text-muted-foreground font-mono">{user.username}{user.isAdmin ? " · administrador" : ""}</p>
               </div>
               <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                <fieldset className="flex items-center gap-3 rounded-xl border border-border px-3 py-2" disabled={savingUser === user.username}>
+                  <legend className="sr-only">Perfil de {user.label}</legend>
+                  <label className="flex cursor-pointer items-center gap-1.5 text-sm">
+                    <input type="radio" name={`role-${user.username}`} value="user" checked={!user.isAdmin}
+                      onChange={() => handleAdminRoleChange(user, false)} className="accent-primary" />
+                    Usuário
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-1.5 text-sm">
+                    <input type="radio" name={`role-${user.username}`} value="admin" checked={user.isAdmin}
+                      onChange={() => handleAdminRoleChange(user, true)} className="accent-primary" />
+                    Admin
+                  </label>
+                </fieldset>
                 <input type="password" value={editingPasswords[user.username] || ""}
                   onChange={(e) => setEditingPasswords((prev) => ({ ...prev, [user.username]: e.target.value }))}
                   onKeyDown={(e) => e.key === "Enter" && handleSavePassword(user.username)}
@@ -4417,7 +4472,7 @@ function CustomerSearch({ currentUser, users, onUsersReload, onSelect, allProduc
     { key: "orcamentos", label: "Orçamentos" },
     { key: "clientes", label: "Clientes" },
     { key: "produtos", label: "Produtos" },
-    ...(currentUser.username === "admin" ? [{ key: "usuarios" as const, label: "Usuários" }] : []),
+    ...(currentUser.isAdmin ? [{ key: "usuarios" as const, label: "Usuários" }] : []),
   ] as const;
 
   return (
@@ -4731,7 +4786,7 @@ function CustomerSearch({ currentUser, users, onUsersReload, onSelect, allProduc
 
         {tab === "clientes" && <AllCustomersTab onSelect={onSelect} />}
         {tab === "produtos" && <AllProductsTab allProducts={allProducts} pricingSettings={pricingSettings} onPricingSettingsChange={onPricingSettingsChange} onProductsChange={onProductsChange} />}
-        {tab === "usuarios" && currentUser.username === "admin" && <UsersTab users={users} currentUser={currentUser} onUsersReload={onUsersReload} />}
+        {tab === "usuarios" && currentUser.isAdmin && <UsersTab users={users} currentUser={currentUser} onUsersReload={onUsersReload} />}
       </div>
     </div>
   );

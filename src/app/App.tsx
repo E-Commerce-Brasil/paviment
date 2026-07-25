@@ -4363,41 +4363,45 @@ function UsersTab({ users, currentUser, onUsersReload }: {
             {savingUser === "roles" ? <Spinner size={13} /> : <Save size={13} />} Salvar alterações
           </button>
         </div>
+        <div className="hidden md:grid grid-cols-[minmax(0,1fr)_7rem_minmax(10rem,14rem)_9rem_7rem] items-center gap-3 px-5 py-2 border-b border-border bg-muted/10 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <span>Usuário</span>
+          <span className="text-center">Perfil</span>
+          <span>Nova senha</span>
+          <span className="text-center">Senha</span>
+          <span className="text-center">Acesso</span>
+        </div>
         <div className="divide-y divide-border">
           {users.map((user) => (
-            <div key={user.username} className="p-5 flex flex-col md:flex-row md:items-center gap-3 md:justify-between">
-              <div>
+            <div key={user.username} className="p-5 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_7rem_minmax(10rem,14rem)_9rem_7rem] items-center gap-3">
+              <div className="min-w-0">
                 <p className="font-semibold text-sm">{user.label}</p>
                 <p className="text-xs text-muted-foreground font-mono">{user.username}{user.isAdmin ? " · administrador" : ""}</p>
               </div>
-              <div className="flex flex-col sm:flex-row gap-2 sm:items-center sm:justify-center">
-                <fieldset className="flex items-center justify-center gap-3 rounded-xl border border-border px-3 py-2" disabled={savingUser !== null}>
-                  <legend className="sr-only">Perfil de {user.label}</legend>
-                  <label className="flex cursor-pointer items-center gap-1.5 text-sm">
-                    <input type="radio" name={`role-${user.username}`} value="user" checked={!draftAdminRoles[user.username]}
-                      onChange={() => handleDraftAdminRoleChange(user.username, false)} className="accent-primary" />
-                    Usuário
-                  </label>
-                  <label className="flex cursor-pointer items-center gap-1.5 text-sm">
-                    <input type="radio" name={`role-${user.username}`} value="admin" checked={draftAdminRoles[user.username] === true}
-                      onChange={() => handleDraftAdminRoleChange(user.username, true)} className="accent-primary" />
-                    Admin
-                  </label>
-                </fieldset>
-                <input type="password" value={editingPasswords[user.username] || ""}
-                  onChange={(e) => setEditingPasswords((prev) => ({ ...prev, [user.username]: e.target.value }))}
-                  onKeyDown={(e) => e.key === "Enter" && handleSavePassword(user.username)}
-                  placeholder="Nova senha"
-                  className="border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
-                <button onClick={() => handleSavePassword(user.username)} disabled={savingUser === user.username}
-                  className="w-36 shrink-0 whitespace-nowrap border border-border rounded-xl px-3 py-2 text-sm hover:bg-muted transition-colors flex items-center justify-center gap-1.5">
-                  {savingUser === user.username ? <Spinner size={13} /> : <Save size={13} />} Salvar senha
-                </button>
-                <button onClick={() => handleRemoveUser(user.username)} disabled={savingUser === user.username || user.username === "admin" || user.username === currentUser.username}
-                  className="border border-border rounded-xl px-3 py-2 text-sm text-muted-foreground hover:text-destructive hover:bg-red-50 transition-colors disabled:opacity-40 disabled:hover:text-muted-foreground disabled:hover:bg-transparent flex items-center justify-center gap-1.5">
-                  <Trash2 size={13} /> Remover
-                </button>
-              </div>
+              <label className="h-10 flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-border px-3 text-sm hover:bg-muted/50 transition-colors">
+                <input type="radio" name={`role-${user.username}`} value="admin"
+                  checked={draftAdminRoles[user.username] === true}
+                  disabled={savingUser !== null}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    handleDraftAdminRoleChange(user.username, !draftAdminRoles[user.username]);
+                  }}
+                  onChange={() => {}}
+                  className="accent-primary disabled:opacity-40" />
+                <span className={draftAdminRoles[user.username] ? "font-medium text-foreground" : "text-muted-foreground opacity-60"}>Admin</span>
+              </label>
+              <input type="password" value={editingPasswords[user.username] || ""}
+                onChange={(e) => setEditingPasswords((prev) => ({ ...prev, [user.username]: e.target.value }))}
+                onKeyDown={(e) => e.key === "Enter" && handleSavePassword(user.username)}
+                placeholder="Nova senha"
+                className="h-10 w-full min-w-0 border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+              <button onClick={() => handleSavePassword(user.username)} disabled={savingUser === user.username}
+                className="h-10 w-full whitespace-nowrap border border-border rounded-xl px-3 py-2 text-sm hover:bg-muted transition-colors flex items-center justify-center gap-1.5">
+                {savingUser === user.username ? <Spinner size={13} /> : <Save size={13} />} Salvar senha
+              </button>
+              <button onClick={() => handleRemoveUser(user.username)} disabled={savingUser === user.username || user.username === "admin" || user.username === currentUser.username}
+                className="h-10 w-full border border-border rounded-xl px-3 py-2 text-sm text-muted-foreground hover:text-destructive hover:bg-red-50 transition-colors disabled:opacity-40 disabled:hover:text-muted-foreground disabled:hover:bg-transparent flex items-center justify-center gap-1.5">
+                <Trash2 size={13} /> Remover
+              </button>
             </div>
           ))}
         </div>

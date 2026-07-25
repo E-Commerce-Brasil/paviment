@@ -1424,6 +1424,7 @@ function ProductModal({
               className="border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
               <option value="">Todas as marcas</option>
               <option value="Villagres">Villagres</option>
+              <option value="Villa Vinílicos">Villa Vinílicos</option>
               <option value="Villacol">Villacol</option>
             </select>
             <select value={categoriaFiltro} onChange={(e) => setCategoriaFiltro(e.target.value)}
@@ -3206,6 +3207,7 @@ function ProductEditModal({ product, onSave, onClose }: {
               <label className="text-xs font-medium text-muted-foreground mb-1 block">Marca</label>
               <select value={form.marca} onChange={(e) => handleMarcaChange(e.target.value)} className={inputCls}>
                 <option value="Villagres">Villagres</option>
+                <option value="Villa Vinílicos">Villa Vinílicos</option>
                 <option value="Villacol">Villacol</option>
               </select>
             </div>
@@ -3417,6 +3419,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ ok: number; total: number } | null>(null);
   const [showDescontinuados, setShowDescontinuados] = useState(false);
+  const [showTemplateExportModal, setShowTemplateExportModal] = useState(false);
   const [pricingForm, setPricingForm] = useState({
     imposto: String(pricingSettings.impostoPercentual || ""),
     taxa: String(pricingSettings.taxaCartaoPercentual || ""),
@@ -3447,6 +3450,19 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
   });
 
   const descontinuadosCount = products.filter((p) => p.descontinuado).length;
+
+  function exportProductTemplate(kind: ProductTemplateKind) {
+    const csv = buildProductTemplateCSV(kind);
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `template_produtos_${kind}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setShowTemplateExportModal(false);
+    toast.success(`Template ${PRODUCT_TEMPLATE_LABELS[kind]} baixado!`);
+  }
 
   const pk = priceKey(tabela);
 
@@ -3523,6 +3539,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
           className="border border-border rounded-xl px-3 py-2.5 text-xs bg-card focus:outline-none">
           <option value="">Todas as marcas</option>
           <option value="Villagres">Villagres</option>
+          <option value="Villa Vinílicos">Villa Vinílicos</option>
           <option value="Villacol">Villacol</option>
         </select>
         <select value={categoriaFiltro} onChange={(e) => setCategoriaFiltro(e.target.value)}
@@ -3595,6 +3612,39 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
           <Check size={14} className="text-green-600 shrink-0" />
           <span><strong>{importResult.ok}</strong> produtos importados/atualizados com sucesso.</span>
           <button onClick={() => setImportResult(null)} className="ml-auto text-green-600 hover:text-green-800"><X size={13} /></button>
+        </div>
+      )}
+
+      {/* Modal de Escolha do Template de Exportação */}
+      {showTemplateExportModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-card rounded-2xl shadow-2xl w-full max-w-md p-6 border border-border">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-semibold">Exportar template CSV</h3>
+                <p className="text-xs text-muted-foreground mt-1">Escolha a linha de produtos para baixar a planilha com as colunas corretas:</p>
+              </div>
+              <button onClick={() => setShowTemplateExportModal(false)} className="text-muted-foreground hover:text-foreground">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="grid gap-2 max-h-[60vh] overflow-y-auto pr-1">
+              {(Object.keys(PRODUCT_TEMPLATE_LABELS) as ProductTemplateKind[]).map((kind) => (
+                <button
+                  key={kind}
+                  type="button"
+                  onClick={() => exportProductTemplate(kind)}
+                  className="w-full border border-border rounded-xl px-4 py-3 text-left hover:bg-primary/10 hover:border-primary/40 transition-colors group flex items-center justify-between"
+                >
+                  <div>
+                    <span className="text-sm font-medium group-hover:text-primary transition-colors">{PRODUCT_TEMPLATE_LABELS[kind]}</span>
+                    <span className="block text-xs text-muted-foreground mt-0.5">Template CSV com os cabeçalhos específicos de {PRODUCT_TEMPLATE_LABELS[kind].toLowerCase()}.</span>
+                  </div>
+                  <ChevronRight size={16} className="text-muted-foreground group-hover:text-primary shrink-0 ml-2" />
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 

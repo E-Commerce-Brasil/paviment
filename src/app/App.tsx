@@ -2324,28 +2324,31 @@ ${budget.observacoes ? `
                         <td className="px-3 py-3 text-xs text-muted-foreground hidden md:table-cell">{itemIsLinear ? "Metro linear" : item.product?.formato}</td>
                         <td className="px-3 py-3 text-right">
                           {isEditing ? (
-                            <input type="text" value={editAreaInput} onChange={(e) => setEditAreaInput(e.target.value)}
-                              onKeyDown={(e) => { if (e.key === "Enter") confirmEditItem(item.id); if (e.key === "Escape") setEditingItemId(null); }}
-                              autoFocus
-                              className="w-20 border border-primary rounded-lg px-2 py-1 text-sm text-right font-mono bg-card focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                            <div className="flex items-center justify-end gap-1 font-mono">
+                              <input type="text" value={editAreaInput} onChange={(e) => setEditAreaInput(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === "Enter") confirmEditItem(item.id); if (e.key === "Escape") setEditingItemId(null); }}
+                                autoFocus
+                                className="w-20 border border-primary rounded-lg px-2 py-1 text-sm text-right font-mono bg-card focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                              <span className="text-xs text-muted-foreground">{itemIsLinear ? "ml" : "m²"}</span>
+                            </div>
                           ) : (
                             <button onClick={() => !isLocked && startEditItem(item)}
                               className={`font-mono text-sm group flex items-center gap-1 ml-auto transition-colors ${isLocked ? "cursor-default" : "hover:text-primary"}`}
                               title={isLocked ? "Orçamento bloqueado" : "Clique para editar"}>
-                              {item.areaM2.toFixed(2)} {itemIsLinear ? "ml" : ""}
+                              {item.areaM2.toFixed(2)} {itemIsLinear ? "ml" : "m²"}
                               {!isLocked && <Pencil size={10} className="opacity-0 group-hover:opacity-40 transition-opacity" />}
                             </button>
                           )}
                         </td>
                         <td className="px-3 py-3 text-right font-mono text-sm">
                           {isEditing && previewArea > 0
-                            ? <span className="text-primary font-semibold">{previewCx}</span>
-                            : item.caixas}
+                            ? <span className="text-primary font-semibold">{previewCx} cx</span>
+                            : <>{item.caixas} cx</>}
                         </td>
                         <td className="px-3 py-3 text-right font-mono text-sm hidden md:table-cell">
                           {isEditing && previewArea > 0
-                            ? <span className="text-primary font-semibold">{previewRealArea.toFixed(2)}{itemIsLinear ? " ml" : ""}</span>
-                            : <>{itemIsLinear ? calculateRealLinearMeters(item.product, item.areaM2, item.caixas).toFixed(2) : calculateItemRealAreaM2(item).toFixed(2)}{itemIsLinear ? " ml" : ""}</>}
+                            ? <span className="text-primary font-semibold">{previewRealArea.toFixed(2)} {itemIsLinear ? "ml" : "m²"}</span>
+                            : <>{itemIsLinear ? calculateRealLinearMeters(item.product, item.areaM2, item.caixas).toFixed(2) : calculateItemRealAreaM2(item).toFixed(2)} {itemIsLinear ? "ml" : "m²"}</>}
                         </td>
                         <td className="px-3 py-3 text-right text-sm hidden sm:table-cell">
                           {isEditing ? (

@@ -2063,16 +2063,20 @@ function BudgetEditor({
       const cor = p?.cor && p.cor !== "única" && p.cor !== "-" ? p.cor : "";
       const isVinilico = isVillaVinilicosProduct(p);
       const isLinear = isLinearMeterProduct(p);
+      const quantityUnit = isLinear ? "ml" : "m²";
+      const realQuantity = isLinear
+        ? calculateRealLinearMeters(p, item.areaM2, item.caixas)
+        : calculateItemRealAreaM2(item);
       return `<tr>
         <td>${p?.referencia ?? ""}</td>
         <td>${p?.linha ?? ""}</td>
         <td>${isVinilico ? "Villa Vinílicos" : p?.colecao ?? ""}${!isVinilico && cor ? " / " + cor : ""}</td>
         <td>${p?.formato || (isLinear ? "Metro linear" : "")}</td>
-        <td style="text-align:right">${fmtBRLStr(item.precoM2)}</td>
-        <td style="text-align:right">${item.areaM2.toFixed(2)}${isLinear ? " ml" : ""}</td>
-        <td style="text-align:right">${item.caixas} cx</td>
-        <td style="text-align:right">${isLinear ? `${calculateRealLinearMeters(p, item.areaM2, item.caixas).toFixed(2)} ml` : calculateItemRealAreaM2(item).toFixed(2)}</td>
-        <td style="text-align:right">${p?.m2PorCaixa ?? ""}${isLinear ? " ml/cx" : ""}</td>
+        <td style="text-align:right">${fmtBRLStr(item.precoM2)}/${quantityUnit}</td>
+        <td style="text-align:right">${item.areaM2.toFixed(2)} ${quantityUnit}</td>
+        <td style="text-align:right">${item.caixas} ${item.caixas === 1 ? "caixa" : "caixas"}</td>
+        <td style="text-align:right">${realQuantity.toFixed(2)} ${quantityUnit}</td>
+        <td style="text-align:right">${p?.m2PorCaixa ?? ""} ${quantityUnit}/caixa</td>
         <td style="text-align:right">${fmtKg(calculateItemWeightKg(item))}</td>
         <td style="text-align:right">${fmtBRLStr(item.subtotal)}</td>
       </tr>`;
@@ -2081,6 +2085,7 @@ function BudgetEditor({
     const complementaryRows = villacolItems.map((item) => {
       const p = item.product;
       const embalagem = p?.tipoEmbalagem || p?.tipoRejunte || p?.categoriaComplementar || "";
+      const unitLabel = getComplementaryUnitLabel(p);
       return `<tr>
         <td>${p?.referencia ?? ""}</td>
         <td>${p?.linha ?? ""}</td>
@@ -2088,7 +2093,7 @@ function BudgetEditor({
         <td>${embalagem}</td>
         <td style="text-align:right">${item.caixas} ${getComplementaryUnitLabel(p, item.caixas !== 1)}</td>
         <td style="text-align:right">${fmtKg(calculateItemWeightKg(item))}</td>
-        <td style="text-align:right">${fmtBRLStr(item.precoM2)}</td>
+        <td style="text-align:right">${fmtBRLStr(item.precoM2)}/${unitLabel}</td>
         <td style="text-align:right">${fmtBRLStr(item.subtotal)}</td>
       </tr>`;
     }).join("");
@@ -2153,7 +2158,7 @@ ${rows ? `<div class="section-header">PRODUTOS / ESPECIFICAÇÕES</div>
   <thead>
     <tr>
       <th>Ref</th><th>Linha</th><th>Cor</th><th>Formato</th>
-      <th>Valor m²/ml</th><th>Qnt m²/ml</th><th>Caixas</th><th>M² real</th><th>M²/cx</th><th>Peso total</th><th>Valor R$</th>
+      <th>Valor unit.</th><th>Quantidade</th><th>Caixas</th><th>Quantidade real</th><th>Por caixa</th><th>Peso total</th><th>Valor R$</th>
     </tr>
   </thead>
   <tbody>

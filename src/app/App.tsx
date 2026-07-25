@@ -3506,7 +3506,7 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
   const isNew = !product.id;
   const isVillacol = form.marca === "Villacol";
   const isVillaVinilicos = form.marca === "Villa Vinílicos";
-  const isVillaVinilicosLinear = isVillaVinilicos && hasVillaVinilicosRodapeSignature(form);
+  const isVillaVinilicosLinear = hasVillaVinilicosRodapeSignature(form);
   const isRejunte = isVillacol && form.categoriaComplementar === "Rejunte";
   const isArgamassa = isVillacol && form.categoriaComplementar === "Argamassa";
   const isNiveladorCunha = isVillacol && form.categoriaComplementar === "Niveladores/Cunhas";
@@ -3729,7 +3729,7 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">m²/caixa</label>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{isVillaVinilicosLinear ? "ml/caixa" : "m²/caixa"}</label>
                   <input {...field("m2PorCaixa")} inputMode="decimal" className={inputCls} />
                 </div>
                 <div>

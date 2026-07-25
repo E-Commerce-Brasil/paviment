@@ -2067,7 +2067,7 @@ function BudgetEditor({
         <td>${p?.referencia ?? ""}</td>
         <td>${p?.linha ?? ""}</td>
         <td>${isVinilico ? "Villa Vinílicos" : p?.colecao ?? ""}${!isVinilico && cor ? " / " + cor : ""}</td>
-        <td>${isLinear ? "Metro linear" : p?.formato ?? ""}</td>
+        <td>${p?.formato || (isLinear ? "Metro linear" : "")}</td>
         <td style="text-align:right">${fmtBRLStr(item.precoM2)}</td>
         <td style="text-align:right">${item.areaM2.toFixed(2)}${isLinear ? " ml" : ""}</td>
         <td style="text-align:right">${item.caixas} cx</td>
@@ -2321,7 +2321,7 @@ ${budget.observacoes ? `
                           </p>
                           <p className="text-xs text-muted-foreground font-mono">Ref: {item.product?.referencia}</p>
                         </td>
-                        <td className="px-3 py-3 text-xs text-muted-foreground hidden md:table-cell">{itemIsLinear ? "Metro linear" : item.product?.formato}</td>
+                        <td className="px-3 py-3 text-xs text-muted-foreground hidden md:table-cell">{item.product?.formato || (itemIsLinear ? "Metro linear" : "")}</td>
                         <td className="px-3 py-3 text-right">
                           {isEditing ? (
                             <div className="flex items-center justify-end gap-1 font-mono">

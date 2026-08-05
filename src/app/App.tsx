@@ -1158,6 +1158,10 @@ function shouldApplyProductCardFee(product?: Product | null): boolean {
   return !NO_CARD_FEE_CATEGORIES.includes(product?.categoriaComplementar || "");
 }
 
+function shouldIncludeProductInFreight(product?: Product | null): boolean {
+  return !NO_CARD_FEE_CATEGORIES.includes(product?.categoriaComplementar || "");
+}
+
 function hasVillaVinilicosSignature(product: Pick<Product, "referencia" | "linha" | "colecao" | "cor" | "formato" | "superficie" | "marca">): boolean {
   const referencia = (product.referencia || "").trim();
   const refUpper = referencia.toUpperCase();
@@ -1242,7 +1246,8 @@ function calculateBudgetWeightKg(items: BudgetItem[]): number {
 }
 
 function calculateFreightByWeight(items: BudgetItem[], fretePor100Kg: number | string | null | undefined): number {
-  return round2((calculateBudgetWeightKg(items) / 100) * parseDecimalInput(fretePor100Kg));
+  const freightItems = items.filter((item) => shouldIncludeProductInFreight(item.product));
+  return round2((calculateBudgetWeightKg(freightItems) / 100) * parseDecimalInput(fretePor100Kg));
 }
 
 function fmtDate(iso: string): string {

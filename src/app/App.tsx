@@ -1149,6 +1149,7 @@ function isVillacolProduct(product?: Product | null): boolean {
 }
 
 const NO_CARD_FEE_CATEGORIES = ["Rejunte", "Argamassa", "Niveladores/Cunhas"];
+const NO_FREIGHT_CATEGORIES = ["Rejunte", "Niveladores/Cunhas"];
 
 function shouldApplyProductTax(product?: Product | null): boolean {
   return (product?.marca || "Villagres") === "Villagres";
@@ -1159,7 +1160,7 @@ function shouldApplyProductCardFee(product?: Product | null): boolean {
 }
 
 function shouldIncludeProductInFreight(product?: Product | null): boolean {
-  return !NO_CARD_FEE_CATEGORIES.includes(product?.categoriaComplementar || "");
+  return !NO_FREIGHT_CATEGORIES.includes(product?.categoriaComplementar || "");
 }
 
 function hasVillaVinilicosSignature(product: Pick<Product, "referencia" | "linha" | "colecao" | "cor" | "formato" | "superficie" | "marca">): boolean {
@@ -1762,6 +1763,7 @@ function BudgetEditor({
   const cardInstallmentLabel = budget.formaPagamento === "cartao" && budget.parcelasCartao > 1
     ? `${budget.parcelasCartao} x ${fmtBRL(round2(topTotal / budget.parcelasCartao))}`
     : "";
+  const topInstallmentValueLabel = cardInstallmentLabel || fmtBRL(topTotal);
   const cardInstallmentLabelPrint = budget.formaPagamento === "cartao" && budget.parcelasCartao > 1
     ? `${budget.parcelasCartao} x ${fmtBRL(round2(topTotal / budget.parcelasCartao))}`
     : "";
@@ -2814,8 +2816,16 @@ ${budget.observacoes ? `
               <div className="rounded-xl border border-border p-3 space-y-2 bg-muted/10">
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Produtos Villagres / Villa Vinílicos</p>
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Produtos</span>
+                  <span className="text-muted-foreground">Total do item</span>
                   <span className="font-mono">{fmtBRL(villagresSubtotal)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Condição de pagamento</span>
+                  <span className="font-mono text-right">{paymentConditionLabel}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Valor das parcelas</span>
+                  <span className="font-mono text-right">{topInstallmentValueLabel}</span>
                 </div>
                 {topPixDiscount > 0 && (
                   <div className="flex justify-between text-sm text-green-700">
@@ -2824,7 +2834,7 @@ ${budget.observacoes ? `
                   </div>
                 )}
                 <div className="flex justify-between text-sm font-semibold pt-2 border-t border-border">
-                  <span>{topSubtotalLabel}{cardInstallmentLabel && <span className="ml-1 text-xs text-muted-foreground">({cardInstallmentLabel})</span>}</span>
+                  <span>{topSubtotalLabel}</span>
                   <span className="font-mono">{fmtBRL(topTotal)}</span>
                 </div>
               </div>
@@ -2844,9 +2854,13 @@ ${budget.observacoes ? `
                     <span className="text-muted-foreground">Valor das parcelas</span>
                     <span className="font-mono text-right">{argamassaInstallmentLabel}</span>
                   </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Informação</span>
+                    <span className="font-mono text-primary text-right">Cliente receberá um Link de Pagamento</span>
+                  </div>
                   <div className="flex justify-between text-sm font-semibold pt-2 border-t border-border">
-                    <span>Método</span>
-                    <span className="font-mono text-primary">Link de pagamento</span>
+                    <span>Subtotal</span>
+                    <span className="font-mono">{fmtBRL(argamassaTotal)}</span>
                   </div>
                 </div>
               )}
@@ -2854,7 +2868,7 @@ ${budget.observacoes ? `
               <div className="rounded-xl border border-border p-3 space-y-2 bg-muted/10">
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Frete + Rejuntes/Niveladores Villacol (PIX)</p>
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Rejuntes/Niveladores</span>
+                  <span className="text-muted-foreground">Total do item</span>
                   <span className="font-mono">{fmtBRL(pixOnlyProductsSubtotal)}</span>
                 </div>
                 {budget.frete > 0 && (
@@ -2863,6 +2877,14 @@ ${budget.observacoes ? `
                     <span className="font-mono">{fmtBRL(budget.frete)}</span>
                   </div>
                 )}
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Condição de pagamento</span>
+                  <span className="font-mono text-right">PIX</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Valor das parcelas</span>
+                  <span className="font-mono text-right">{fmtBRL(pixOnlySubtotal)}</span>
+                </div>
                 <div className="flex justify-between text-sm font-semibold pt-2 border-t border-border">
                   <span>Subtotal PIX</span>
                   <span className="font-mono">{fmtBRL(pixOnlySubtotal)}</span>

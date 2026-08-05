@@ -1103,6 +1103,10 @@ function isVillacolProduct(product?: Product | null): boolean {
   return product?.marca === "Villacol";
 }
 
+function shouldApplyProductTax(product?: Product | null): boolean {
+  return (product?.marca || "Villagres") === "Villagres";
+}
+
 function getComplementaryUnitLabel(product?: Product | null, plural = false): string {
   if (product?.categoriaComplementar === "Rejunte") return plural ? "potes" : "pote";
   if (product?.categoriaComplementar === "Argamassa") return plural ? "sacos" : "saco";
@@ -1176,6 +1180,27 @@ function calculateFinalPrice(
   const imposto = parseDecimalInput(impostoPercentual);
   const taxa = parseDecimalInput(taxaCartaoPercentual);
   return round2(base * (1 + (imposto + taxa) / 100));
+}
+
+function calculateProductFinalPrice(
+  product: Product | null | undefined,
+  precoBase: number | null | undefined,
+  impostoPercentual: number | string | null | undefined,
+  taxaCartaoPercentual: number | string | null | undefined
+): number {
+  return calculateFinalPrice(
+    precoBase,
+    shouldApplyProductTax(product) ? impostoPercentual : 0,
+    taxaCartaoPercentual
+  );
+}
+
+function calculatePixPaymentFactor(product: Product | null | undefined, pricingSettings: PricingSettings): number {
+  const taxa = parseDecimalInput(pricingSettings.taxaCartaoPercentual);
+  const imposto = shouldApplyProductTax(product) ? parseDecimalInput(pricingSettings.impostoPercentual) : 0;
+  const cardFactor = 1 + (imposto + taxa) / 100;
+  const pixFactor = 1 + imposto / 100;
+  return cardFactor > 0 ? pixFactor / cardFactor : 1;
 }
 
 function Spinner({ size = 20 }: { size?: number }) {
@@ -1302,7 +1327,7 @@ function ProductModal({
 
   if (selected) {
     const priceBase = selected[pk] as number | null;
-    const price = priceBase != null ? calculateFinalPrice(priceBase, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
+    const price = priceBase != null ? calculateProductFinalPrice(selected, priceBase, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
     const area = parseFloat(areaInput.replace(",", ".")) || 0;
     const caixas = selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : 0;
     const selectedIsVillacol = isVillacolProduct(selected);
@@ -1463,7 +1488,7 @@ function ProductModal({
             <div className="divide-y divide-border">
               {results.map((p) => {
                 const price = p[pk] as number | null;
-                const finalPrice = price != null ? calculateFinalPrice(price, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
+                const finalPrice = price != null ? calculateProductFinalPrice(p, price, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
                 return (
                   <button key={p.id} onClick={() => setSelected(p)}
                     className="w-full text-left px-5 py-3 hover:bg-muted/50 transition-colors group">
@@ -1558,15 +1583,17 @@ function BudgetEditor({
   const pixOnlyCategories = ["Rejunte", "Niveladores/Cunhas"];
   const topFinancialItems = budget.items.filter((item) => !pixOnlyCategories.includes(item.product?.categoriaComplementar || ""));
   const pixOnlyItems = budget.items.filter((item) => pixOnlyCategories.includes(item.product?.categoriaComplementar || ""));
-  const cardFactor = 1 + (pricingSettings.impostoPercentual + pricingSettings.taxaCartaoPercentual) / 100;
-  const taxOnlyFactor = 1 + pricingSettings.impostoPercentual / 100;
-  const pixPriceFactor = cardFactor > 0 ? taxOnlyFactor / cardFactor : 1;
-  const noTaxOrCardFactor = cardFactor > 0 ? 1 / cardFactor : 1;
-  const paymentPriceFactor = budget.formaPagamento === "avista_pix" ? pixPriceFactor : 1;
-  const villagresSubtotal = round2(villagresItems.reduce((sum, item) => sum + item.subtotal * paymentPriceFactor, 0));
+  const paymentAdjustedSubtotal = (item: BudgetItem) => round2(item.subtotal * (budget.formaPagamento === "avista_pix" ? calculatePixPaymentFactor(item.product, pricingSettings) : 1));
+  const removeAllSettingsFactor = (item: BudgetItem) => {
+    const taxa = parseDecimalInput(pricingSettings.taxaCartaoPercentual);
+    const imposto = shouldApplyProductTax(item.product) ? parseDecimalInput(pricingSettings.impostoPercentual) : 0;
+    const cardFactor = 1 + (imposto + taxa) / 100;
+    return cardFactor > 0 ? 1 / cardFactor : 1;
+  };
+  const villagresSubtotal = round2(villagresItems.reduce((sum, item) => sum + paymentAdjustedSubtotal(item), 0));
   const argamassaSubtotal = round2(topFinancialItems
     .filter((item) => item.product?.categoriaComplementar === "Argamassa")
-    .reduce((sum, item) => sum + item.subtotal * paymentPriceFactor, 0));
+    .reduce((sum, item) => sum + paymentAdjustedSubtotal(item), 0));
   const topSubtotalBeforeDiscount = round2(villagresSubtotal + argamassaSubtotal);
   const topSubtotalLabel = budget.formaPagamento === "cartao"
     ? `Subtotal Cartão ${budget.parcelasCartao}x`
@@ -1575,7 +1602,7 @@ function BudgetEditor({
       : "Subtotal Débito";
   const topPixDiscount = budget.formaPagamento === "avista_pix" ? round2(topSubtotalBeforeDiscount * Math.min(budget.descontoPixPercentual, 3) / 100) : 0;
   const topTotal = round2(topSubtotalBeforeDiscount - topPixDiscount);
-  const pixOnlyProductsSubtotal = round2(pixOnlyItems.reduce((sum, item) => sum + item.subtotal * noTaxOrCardFactor, 0));
+  const pixOnlyProductsSubtotal = round2(pixOnlyItems.reduce((sum, item) => sum + item.subtotal * removeAllSettingsFactor(item), 0));
   const pixOnlySubtotal = round2(pixOnlyProductsSubtotal + budget.frete);
   const generalTotal = round2(topTotal + pixOnlySubtotal);
   const totalWeightKg = calculateBudgetWeightKg(budget.items);
@@ -1665,7 +1692,7 @@ function BudgetEditor({
       toast.error("Produto sem m²/caixa válido. Corrija o cadastro antes de adicionar.");
       return;
     }
-    const precoM2 = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
+    const precoM2 = calculateProductFinalPrice(product, precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
     if (!Number.isFinite(precoM2) || precoM2 <= 0) {
       toast.error("Não foi possível calcular o preço final do produto.");
       return;
@@ -1702,7 +1729,7 @@ function BudgetEditor({
     for (const t of [1, 2, 3, 4] as const) {
       const precoBase = item.product[priceKey(t)] as number | null;
       if (precoBase == null) continue;
-      const precoTabela = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
+      const precoTabela = calculateProductFinalPrice(item.product, precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
       if (Math.abs(precoTabela - item.precoM2) < 0.01) return t;
     }
     return budget.tabelaPreco;
@@ -1724,7 +1751,7 @@ function BudgetEditor({
       toast.error(`Preço não disponível para a tabela ${editTabela}.`);
       return;
     }
-    const newPrecoM2 = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
+    const newPrecoM2 = calculateProductFinalPrice(item.product, precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
     if (!Number.isFinite(newPrecoM2) || newPrecoM2 <= 0) {
       toast.error("Não foi possível calcular o preço final do produto.");
       return;
@@ -2142,7 +2169,7 @@ ${budget.observacoes ? `
                     const previewRealArea = round2(previewCx * (item.product.m2PorCaixa || 0));
                     const previewWeight = round2(previewCx * (item.product.pesoBrutoCx || 0));
                     const editPrecoBase = item.product[priceKey(editTabela)] as number | null;
-                    const editPrecoM2 = editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
+                    const editPrecoM2 = editPrecoBase != null ? calculateProductFinalPrice(item.product, editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
                     return (
                       <tr key={item.id} className={`transition-colors ${isEditing ? "bg-primary/4" : "hover:bg-muted/20"}`}>
                         <td className="px-5 py-3">
@@ -2256,7 +2283,7 @@ ${budget.observacoes ? `
                         const previewCx = item.product.m2PorCaixa > 0 ? Math.ceil(previewQty / item.product.m2PorCaixa) : Math.ceil(previewQty);
                         const previewWeight = round2(previewCx * (item.product.pesoBrutoCx || 0));
                         const editPrecoBase = item.product[priceKey(editTabela)] as number | null;
-                        const editPrecoM2 = editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
+                        const editPrecoM2 = editPrecoBase != null ? calculateProductFinalPrice(item.product, editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
                         const embalagem = item.product.tipoEmbalagem || item.product.tipoRejunte || item.product.categoriaComplementar || "—";
                         const unitLabel = getComplementaryUnitLabel(item.product, item.caixas !== 1);
                         const previewUnitLabel = getComplementaryUnitLabel(item.product, previewCx !== 1);

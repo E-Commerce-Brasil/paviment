@@ -2881,10 +2881,6 @@ ${budget.observacoes ? `
                   <span className="text-muted-foreground">Condição de pagamento</span>
                   <span className="font-mono text-right">PIX</span>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Valor das parcelas</span>
-                  <span className="font-mono text-right">{fmtBRL(pixOnlySubtotal)}</span>
-                </div>
                 <div className="flex justify-between text-sm font-semibold pt-2 border-t border-border">
                   <span>Subtotal PIX</span>
                   <span className="font-mono">{fmtBRL(pixOnlySubtotal)}</span>

@@ -1148,8 +1148,14 @@ function isVillacolProduct(product?: Product | null): boolean {
   return product?.marca === "Villacol";
 }
 
+const NO_CARD_FEE_CATEGORIES = ["Rejunte", "Argamassa", "Niveladores/Cunhas"];
+
 function shouldApplyProductTax(product?: Product | null): boolean {
   return (product?.marca || "Villagres") === "Villagres";
+}
+
+function shouldApplyProductCardFee(product?: Product | null): boolean {
+  return !NO_CARD_FEE_CATEGORIES.includes(product?.categoriaComplementar || "");
 }
 
 function hasVillaVinilicosSignature(product: Pick<Product, "referencia" | "linha" | "colecao" | "cor" | "formato" | "superficie" | "marca">): boolean {
@@ -1296,13 +1302,13 @@ function calculateProductFinalPrice(
   return calculateFinalPrice(
     precoBase,
     shouldApplyProductTax(product) ? impostoPercentual : 0,
-    taxaCartaoPercentual
+    shouldApplyProductCardFee(product) ? taxaCartaoPercentual : 0
   );
 }
 
 function getProductPricingFactor(product: Product | null | undefined, pricingSettings: PricingSettings): number {
   const imposto = shouldApplyProductTax(product) ? parseDecimalInput(pricingSettings.impostoPercentual) : 0;
-  const taxa = parseDecimalInput(pricingSettings.taxaCartaoPercentual);
+  const taxa = shouldApplyProductCardFee(product) ? parseDecimalInput(pricingSettings.taxaCartaoPercentual) : 0;
   return 1 + (imposto + taxa) / 100;
 }
 

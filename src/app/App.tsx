@@ -1195,12 +1195,17 @@ function calculateProductFinalPrice(
   );
 }
 
-function calculatePixPaymentFactor(product: Product | null | undefined, pricingSettings: PricingSettings): number {
-  const taxa = parseDecimalInput(pricingSettings.taxaCartaoPercentual);
+function getProductPricingFactor(product: Product | null | undefined, pricingSettings: PricingSettings): number {
   const imposto = shouldApplyProductTax(product) ? parseDecimalInput(pricingSettings.impostoPercentual) : 0;
-  const cardFactor = 1 + (imposto + taxa) / 100;
+  const taxa = parseDecimalInput(pricingSettings.taxaCartaoPercentual);
+  return 1 + (imposto + taxa) / 100;
+}
+
+function getProductPixPaymentFactor(product: Product | null | undefined, pricingSettings: PricingSettings): number {
+  const pricingFactor = getProductPricingFactor(product, pricingSettings);
+  const imposto = shouldApplyProductTax(product) ? parseDecimalInput(pricingSettings.impostoPercentual) : 0;
   const pixFactor = 1 + imposto / 100;
-  return cardFactor > 0 ? pixFactor / cardFactor : 1;
+  return pricingFactor > 0 ? pixFactor / pricingFactor : 1;
 }
 
 function Spinner({ size = 20 }: { size?: number }) {
@@ -1583,12 +1588,10 @@ function BudgetEditor({
   const pixOnlyCategories = ["Rejunte", "Niveladores/Cunhas"];
   const topFinancialItems = budget.items.filter((item) => !pixOnlyCategories.includes(item.product?.categoriaComplementar || ""));
   const pixOnlyItems = budget.items.filter((item) => pixOnlyCategories.includes(item.product?.categoriaComplementar || ""));
-  const paymentAdjustedSubtotal = (item: BudgetItem) => round2(item.subtotal * (budget.formaPagamento === "avista_pix" ? calculatePixPaymentFactor(item.product, pricingSettings) : 1));
-  const removeAllSettingsFactor = (item: BudgetItem) => {
-    const taxa = parseDecimalInput(pricingSettings.taxaCartaoPercentual);
-    const imposto = shouldApplyProductTax(item.product) ? parseDecimalInput(pricingSettings.impostoPercentual) : 0;
-    const cardFactor = 1 + (imposto + taxa) / 100;
-    return cardFactor > 0 ? 1 / cardFactor : 1;
+  const paymentAdjustedSubtotal = (item: BudgetItem) => round2(item.subtotal * (budget.formaPagamento === "avista_pix" ? getProductPixPaymentFactor(item.product, pricingSettings) : 1));
+  const removePricingFactor = (item: BudgetItem) => {
+    const pricingFactor = getProductPricingFactor(item.product, pricingSettings);
+    return pricingFactor > 0 ? 1 / pricingFactor : 1;
   };
   const villagresSubtotal = round2(villagresItems.reduce((sum, item) => sum + paymentAdjustedSubtotal(item), 0));
   const argamassaSubtotal = round2(topFinancialItems
@@ -1602,7 +1605,7 @@ function BudgetEditor({
       : "Subtotal Débito";
   const topPixDiscount = budget.formaPagamento === "avista_pix" ? round2(topSubtotalBeforeDiscount * Math.min(budget.descontoPixPercentual, 3) / 100) : 0;
   const topTotal = round2(topSubtotalBeforeDiscount - topPixDiscount);
-  const pixOnlyProductsSubtotal = round2(pixOnlyItems.reduce((sum, item) => sum + item.subtotal * removeAllSettingsFactor(item), 0));
+  const pixOnlyProductsSubtotal = round2(pixOnlyItems.reduce((sum, item) => sum + item.subtotal * removePricingFactor(item), 0));
   const pixOnlySubtotal = round2(pixOnlyProductsSubtotal + budget.frete);
   const generalTotal = round2(topTotal + pixOnlySubtotal);
   const totalWeightKg = calculateBudgetWeightKg(budget.items);

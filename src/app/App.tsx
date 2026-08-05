@@ -1750,7 +1750,8 @@ function BudgetEditor({
   const argamassaSubtotal = round2(topFinancialItems
     .filter((item) => item.product?.categoriaComplementar === "Argamassa")
     .reduce((sum, item) => sum + paymentAdjustedSubtotal(item), 0));
-  const topSubtotalBeforeDiscount = round2(villagresSubtotal + argamassaSubtotal);
+  const topSubtotalBeforeDiscount = villagresSubtotal;
+  const argamassaTotal = argamassaSubtotal;
   const topSubtotalLabel = budget.formaPagamento === "cartao"
     ? `Subtotal Cartão ${budget.parcelasCartao}x`
     : budget.formaPagamento === "avista_pix"
@@ -1764,9 +1765,17 @@ function BudgetEditor({
   const cardInstallmentLabelPrint = budget.formaPagamento === "cartao" && budget.parcelasCartao > 1
     ? `${budget.parcelasCartao} x ${fmtBRL(round2(topTotal / budget.parcelasCartao))}`
     : "";
+  const paymentConditionLabel = budget.formaPagamento === "cartao"
+    ? `Cartão ${budget.parcelasCartao}x`
+    : budget.formaPagamento === "avista_pix"
+      ? "À vista PIX"
+      : "Débito";
+  const argamassaInstallmentLabel = budget.formaPagamento === "cartao" && budget.parcelasCartao > 1
+    ? `${budget.parcelasCartao} x ${fmtBRL(round2(argamassaTotal / budget.parcelasCartao))}`
+    : fmtBRL(argamassaTotal);
   const pixOnlyProductsSubtotal = round2(pixOnlyItems.reduce((sum, item) => sum + item.subtotal * removePricingFactor(item), 0));
   const pixOnlySubtotal = round2(pixOnlyProductsSubtotal + budget.frete);
-  const generalTotal = round2(topTotal + pixOnlySubtotal);
+  const generalTotal = round2(topTotal + argamassaTotal + pixOnlySubtotal);
   const totalWeightKg = calculateBudgetWeightKg(budget.items);
   const suggestedFreightByWeight = calculateFreightByWeight(budget.items, pricingSettings.fretePor100Kg);
 
@@ -2223,9 +2232,9 @@ ${complementaryRows ? `<div class="section-header">PRODUTOS COMPLEMENTARES</div>
 <div class="clearfix">
   <table class="totals-box">
     <tr><td>Produtos Villagres / Villa Vinílicos</td><td>${fmtBRLStr(villagresSubtotal)}</td></tr>
-    <tr><td>Argamassas</td><td>${fmtBRLStr(argamassaSubtotal)}</td></tr>
     ${topPixDiscount > 0 ? `<tr><td>Desconto PIX (${budget.descontoPixPercentual}%)</td><td>- ${fmtBRLStr(topPixDiscount)}</td></tr>` : ""}
     <tr><td>${topSubtotalLabel}${cardInstallmentLabelPrint ? ` (${cardInstallmentLabelPrint})` : ""}</td><td>${fmtBRLStr(topTotal)}</td></tr>
+    ${argamassaTotal > 0 ? `<tr><td>Argamassas - Link de pagamento (${paymentConditionLabel}${budget.formaPagamento === "cartao" && budget.parcelasCartao > 1 ? ` · ${argamassaInstallmentLabel}` : ""})</td><td>${fmtBRLStr(argamassaTotal)}</td></tr>` : ""}
     <tr><td>Rejuntes/Niveladores Villacol (PIX)</td><td>${fmtBRLStr(pixOnlyProductsSubtotal)}</td></tr>
     ${budget.frete > 0 ? `<tr><td>Frete (PIX)</td><td>${fmtBRLStr(budget.frete)}</td></tr>` : ""}
     <tr><td>Subtotal PIX</td><td>${fmtBRLStr(pixOnlySubtotal)}</td></tr>
@@ -2803,14 +2812,10 @@ ${budget.observacoes ? `
             <h3 className="font-semibold text-sm mb-4">Resumo Financeiro</h3>
             <div className="space-y-3">
               <div className="rounded-xl border border-border p-3 space-y-2 bg-muted/10">
-                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Villagres + Argamassas</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Produtos Villagres / Villa Vinílicos</p>
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Produtos Villagres</span>
+                  <span className="text-muted-foreground">Produtos</span>
                   <span className="font-mono">{fmtBRL(villagresSubtotal)}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Argamassas</span>
-                  <span className="font-mono">{fmtBRL(argamassaSubtotal)}</span>
                 </div>
                 {topPixDiscount > 0 && (
                   <div className="flex justify-between text-sm text-green-700">
@@ -2823,6 +2828,28 @@ ${budget.observacoes ? `
                   <span className="font-mono">{fmtBRL(topTotal)}</span>
                 </div>
               </div>
+
+              {argamassaTotal > 0 && (
+                <div className="rounded-xl border border-primary/20 p-3 space-y-2 bg-primary/5">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Argamassas</p>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Total do item</span>
+                    <span className="font-mono">{fmtBRL(argamassaTotal)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Condição de pagamento</span>
+                    <span className="font-mono text-right">{paymentConditionLabel}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Valor das parcelas</span>
+                    <span className="font-mono text-right">{argamassaInstallmentLabel}</span>
+                  </div>
+                  <div className="flex justify-between text-sm font-semibold pt-2 border-t border-border">
+                    <span>Método</span>
+                    <span className="font-mono text-primary">Link de pagamento</span>
+                  </div>
+                </div>
+              )}
 
               <div className="rounded-xl border border-border p-3 space-y-2 bg-muted/10">
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Frete + Rejuntes/Niveladores Villacol (PIX)</p>

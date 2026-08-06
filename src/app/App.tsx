@@ -2158,13 +2158,14 @@ function BudgetEditor({
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: Arial, sans-serif; font-size: 11px; color: #111; padding: 24px 28px; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
-  .logo img { height: 60px; }
-  .logo-text { font-size: 22px; font-weight: 900; letter-spacing: 4px; }
-  .logo-sub { font-size: 9px; letter-spacing: 2px; color: #555; }
-  .box-title { border: 1.5px solid #111; padding: 6px 12px; text-align: center; }
-  .box-title h2 { font-size: 12px; font-weight: 700; }
-  .box-title p { font-size: 11px; }
+  .header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 18px; margin-bottom: 18px; }
+  .brand-tagline { font-size: 15px; font-weight: 700; line-height: 1.25; }
+  .logo { justify-self: center; text-align: center; }
+  .logo img { display: block; height: 90px; width: auto; object-fit: contain; }
+  .logo-fallback { font-size: 25px; font-weight: 900; letter-spacing: 4px; }
+  .box-title { justify-self: end; border: 2px solid #111; padding: 9px 16px; text-align: center; min-width: 250px; }
+  .box-title h2 { font-size: 15px; font-weight: 800; margin-bottom: 4px; }
+  .box-title p { font-size: 13px; font-weight: 600; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
   .info-table td { border: 1px solid #333; padding: 4px 8px; }
   .info-table td:first-child { font-weight: 700; width: 38%; background: #f0f0f0; }
@@ -2187,8 +2188,9 @@ function BudgetEditor({
 </head>
 <body>
 <div class="header">
+  <div class="brand-tagline">Paviment Porcelanatos Premium</div>
   <div class="logo">
-    ${logoSrc ? `<img src="${logoSrc}" style="height:70px;width:auto;object-fit:contain;" />` : "<strong style='font-size:20px;letter-spacing:4px'>PAVIMENT</strong>"}
+    ${logoSrc ? `<img src="${logoSrc}" />` : `<strong class="logo-fallback">PAVIMENT</strong>`}
   </div>
   <div class="box-title">
     <h2>SALA TÉCNICA - VILLAGRES</h2>

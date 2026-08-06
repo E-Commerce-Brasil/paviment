@@ -5169,7 +5169,7 @@ function LoginScreen({ users, onLogin }: { users: AppUser[]; onLogin: (username:
           <h1 className="text-3xl md:text-5xl font-semibold leading-tight tracking-tight"
             style={{ fontFamily: "var(--font-serif)" }}>
             Sistema de Orçamentos
-            <span className="block mt-2 text-lg md:text-2xl font-medium opacity-90">- Paviment Porcelanatos Premium</span>
+            <span className="block mt-2 text-2xl md:text-3xl font-medium opacity-90">Paviment Porcelanatos Premium</span>
           </h1>
           <div className="mx-auto mt-5 h-px w-16 bg-white/35" />
         </div>

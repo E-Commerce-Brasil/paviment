@@ -4305,7 +4305,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
                       </p>
                       <p className="text-xs text-muted-foreground font-mono">Ref: {p.referencia}</p>
                     </td>
-                    <td className="px-3 py-2.5 text-xs text-muted-foreground hidden md:table-cell">{isLinearMeterProduct(p) ? "Metro linear" : p.formato}</td>
+                    <td className="px-3 py-2.5 text-xs text-muted-foreground hidden md:table-cell">{p.formato || (isLinearMeterProduct(p) ? "Metro linear" : "—")}</td>
                     <td className="px-3 py-2.5 text-xs text-muted-foreground hidden lg:table-cell">{isVillaVinilicosProduct(p) ? `Villa Vinílicos · ${isLinearMeterProduct(p) ? "metro linear" : "m²"}` : `${p.superficie} · ${LOCAL_USO[p.localUso]}`}</td>
                     <td className="px-3 py-2.5 text-right text-xs font-mono hidden sm:table-cell">{isLinearMeterProduct(p) ? "m linear" : p.m2PorCaixa}</td>
                     <td className="px-3 py-2.5 text-right">

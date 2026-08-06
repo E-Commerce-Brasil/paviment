@@ -1343,6 +1343,37 @@ function Spinner({ size = 20 }: { size?: number }) {
   );
 }
 
+function BudgetDeleteDialog({ budgetNumber, deleting, onCancel, onConfirm }: {
+  budgetNumber: number;
+  deleting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-4">
+      <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-2xl">
+        <div className="flex items-start gap-3">
+          <div className="rounded-full bg-red-100 text-red-700 p-2"><Trash2 size={18} /></div>
+          <div>
+            <h3 className="font-semibold">Excluir orçamento #{budgetNumber}?</h3>
+            <p className="mt-1 text-sm text-muted-foreground">Esta ação não pode ser desfeita.</p>
+          </div>
+        </div>
+        <div className="mt-6 flex justify-end gap-2">
+          <button onClick={onCancel} disabled={deleting}
+            className="rounded-xl border border-border px-4 py-2 text-sm hover:bg-muted disabled:opacity-50">
+            Cancelar
+          </button>
+          <button onClick={onConfirm} disabled={deleting}
+            className="rounded-xl bg-destructive px-4 py-2 text-sm text-destructive-foreground hover:opacity-90 disabled:opacity-50 flex items-center gap-2">
+            {deleting ? <Spinner size={13} /> : <Trash2 size={13} />} Excluir
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StatusPill({ status }: { status: BudgetStatus }) {
   return (
     <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${STATUS_PILL[status]}`}>
@@ -2993,6 +3024,7 @@ function CustomerView({
   const [creating, setCreating] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [deletingBudgetId, setDeletingBudgetId] = useState<string | null>(null);
+  const [budgetToDelete, setBudgetToDelete] = useState<Budget | null>(null);
   const [editForm, setEditForm] = useState({
     ...initCustomer,
     cpf: formatCPF(initCustomer.cpf || ""),
@@ -3061,7 +3093,6 @@ function CustomerView({
       toast.error("Somente orçamentos em rascunho ou cancelados podem ser excluídos.");
       return;
     }
-    if (!confirm(`Excluir orçamento #${b.numero}? Esta ação não pode ser desfeita.`)) return;
     setDeletingBudgetId(b.id);
     try {
       await deleteBudget(b.id);
@@ -3071,6 +3102,7 @@ function CustomerView({
       toast.error("Erro ao excluir orçamento: " + e.message);
     } finally {
       setDeletingBudgetId(null);
+      setBudgetToDelete(null);
     }
   }
 
@@ -3196,7 +3228,7 @@ function CustomerView({
                 </button>
                 {canDeleteBudget && (
                   <button
-                    onClick={() => handleDeleteBudget(b)}
+                    onClick={() => setBudgetToDelete(b)}
                     disabled={deletingBudgetId === b.id}
                     className="px-4 flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-red-50 transition-colors border-l border-border disabled:opacity-50"
                     title={`Excluir orçamento ${b.status === "rascunho" ? "em rascunho" : "cancelado"}`}
@@ -3212,6 +3244,15 @@ function CustomerView({
       </div>
 
 
+
+      {budgetToDelete && (
+        <BudgetDeleteDialog
+          budgetNumber={budgetToDelete.numero}
+          deleting={deletingBudgetId === budgetToDelete.id}
+          onCancel={() => setBudgetToDelete(null)}
+          onConfirm={() => handleDeleteBudget(budgetToDelete)}
+        />
+      )}
 
       {showEdit && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 overflow-y-auto">
@@ -4675,6 +4716,7 @@ function CustomerSearch({ currentUser, users, onUsersReload, onSelect, allProduc
   const [filterDataFim, setFilterDataFim] = useState("");
   const [isFiltering, setIsFiltering] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [budgetToDelete, setBudgetToDelete] = useState<BudgetSummary | null>(null);
 
   const hasFilter = !!(filterStatus || filterCliente || filterDataInicio || filterDataFim);
 
@@ -5040,17 +5082,9 @@ function CustomerSearch({ currentUser, users, onUsersReload, onSelect, allProduc
                                 {canDelete && (
                                   <button
                                     disabled={deletingId === b.id}
-                                    onClick={async (e) => {
+                                    onClick={(e) => {
                                       e.stopPropagation();
-                                      if (!confirm(`Excluir orçamento #${b.numero}? Esta ação não pode ser desfeita.`)) return;
-                                      setDeletingId(b.id);
-                                      try {
-                                        await deleteBudget(b.id);
-                                        setRecentBudgets((prev) => prev.filter((x) => x.id !== b.id));
-                                        setFilteredBudgets((prev) => prev.filter((x) => x.id !== b.id));
-                                        toast.success(`Orçamento #${b.numero} excluído.`);
-                                      } catch (e: any) { toast.error("Erro: " + e.message); }
-                                      finally { setDeletingId(null); }
+                                      setBudgetToDelete(b);
                                     }}
                                     className="px-3 flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-red-50 transition-colors border-l border-border"
                                     title={`Excluir orçamento ${b.status === "rascunho" ? "em rascunho" : "cancelado"}`}>
@@ -5073,6 +5107,25 @@ function CustomerSearch({ currentUser, users, onUsersReload, onSelect, allProduc
         {tab === "produtos" && <AllProductsTab allProducts={allProducts} pricingSettings={pricingSettings} onPricingSettingsChange={onPricingSettingsChange} onProductsChange={onProductsChange} />}
         {tab === "usuarios" && currentUser.isAdmin && <UsersTab users={users} currentUser={currentUser} onUsersReload={onUsersReload} />}
       </div>
+
+      {budgetToDelete && (
+        <BudgetDeleteDialog
+          budgetNumber={budgetToDelete.numero}
+          deleting={deletingId === budgetToDelete.id}
+          onCancel={() => setBudgetToDelete(null)}
+          onConfirm={async () => {
+            setDeletingId(budgetToDelete.id);
+            try {
+              await deleteBudget(budgetToDelete.id);
+              setRecentBudgets((prev) => prev.filter((x) => x.id !== budgetToDelete.id));
+              setFilteredBudgets((prev) => prev.filter((x) => x.id !== budgetToDelete.id));
+              toast.success(`Orçamento #${budgetToDelete.numero} excluído.`);
+              setBudgetToDelete(null);
+            } catch (e: any) { toast.error("Erro: " + e.message); }
+            finally { setDeletingId(null); }
+          }}
+        />
+      )}
     </div>
   );
 }

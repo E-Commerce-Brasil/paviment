@@ -2159,7 +2159,7 @@ function BudgetEditor({
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: Arial, sans-serif; font-size: 11px; color: #111; padding: 24px 28px; }
   .header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 18px; margin-bottom: 18px; }
-  .brand-tagline { font-size: 15px; font-weight: 700; line-height: 1.25; }
+  .brand-tagline { font-size: 20px; font-weight: 900; line-height: 1.15; letter-spacing: 0.6px; }
   .logo { justify-self: center; text-align: center; }
   .logo img { display: block; height: 90px; width: auto; object-fit: contain; }
   .logo-fallback { font-size: 25px; font-weight: 900; letter-spacing: 4px; }
@@ -2188,7 +2188,7 @@ function BudgetEditor({
 </head>
 <body>
 <div class="header">
-  <div class="brand-tagline">Paviment Porcelanatos Premium</div>
+  <div class="brand-tagline">PAVIMENT PORCELANATOS PREMIUM</div>
   <div class="logo">
     ${logoSrc ? `<img src="${logoSrc}" />` : `<strong class="logo-fallback">PAVIMENT</strong>`}
   </div>

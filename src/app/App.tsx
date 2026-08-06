@@ -2992,6 +2992,7 @@ function CustomerView({
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
+  const [deletingBudgetId, setDeletingBudgetId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({
     ...initCustomer,
     cpf: formatCPF(initCustomer.cpf || ""),
@@ -3053,6 +3054,24 @@ function CustomerView({
       const full = await getBudgetWithItems(b.id);
       onOpenBudget(full, customer);
     } catch (e: any) { toast.error("Erro ao abrir orçamento: " + e.message); }
+  }
+
+  async function handleDeleteBudget(b: Budget) {
+    if (b.status !== "rascunho" && b.status !== "cancelado") {
+      toast.error("Somente orçamentos em rascunho ou cancelados podem ser excluídos.");
+      return;
+    }
+    if (!confirm(`Excluir orçamento #${b.numero}? Esta ação não pode ser desfeita.`)) return;
+    setDeletingBudgetId(b.id);
+    try {
+      await deleteBudget(b.id);
+      setBudgets((current) => current.filter((budget) => budget.id !== b.id));
+      toast.success(`Orçamento #${b.numero} excluído.`);
+    } catch (e: any) {
+      toast.error("Erro ao excluir orçamento: " + e.message);
+    } finally {
+      setDeletingBudgetId(null);
+    }
   }
 
   async function saveEdit() {
@@ -3150,29 +3169,44 @@ function CustomerView({
           </div>
         ) : (
           <div className="space-y-3">
-            {budgets.map((b) => (
-              <button key={b.id} onClick={() => handleOpenBudget(b)}
-                className="w-full bg-card border border-border rounded-2xl p-4 text-left hover:border-primary/30 hover:shadow-sm transition-all group">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-semibold text-sm">Orçamento #{b.numero}</span>
-                      <StatusPill status={b.status} />
-                      <BudgetOwnerPill createdBy={b.createdBy} />
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {fmtDate(b.createdAt)} · Tabela {b.tabelaPreco}
-                    </p>
-                  </div>
-                  <div className="text-right flex items-center gap-2">
+            {budgets.map((b) => {
+              const canDeleteBudget = b.status === "rascunho" || b.status === "cancelado";
+              return (
+              <div key={b.id}
+                className="w-full bg-card border border-border rounded-2xl text-left hover:border-primary/30 hover:shadow-sm transition-all group flex items-stretch overflow-hidden">
+                <button onClick={() => handleOpenBudget(b)} className="flex-1 p-4 text-left">
+                  <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="font-semibold font-mono text-lg">{fmtBRL(b.totalFinal)}</p>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="font-semibold text-sm">Orçamento #{b.numero}</span>
+                        <StatusPill status={b.status} />
+                        <BudgetOwnerPill createdBy={b.createdBy} />
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {fmtDate(b.createdAt)} · Tabela {b.tabelaPreco}
+                      </p>
                     </div>
-                    <ChevronRight size={16} className="text-muted-foreground group-hover:text-primary transition-colors" />
+                    <div className="text-right flex items-center gap-2">
+                      <div>
+                        <p className="font-semibold font-mono text-lg">{fmtBRL(b.totalFinal)}</p>
+                      </div>
+                      <ChevronRight size={16} className="text-muted-foreground group-hover:text-primary transition-colors" />
+                    </div>
                   </div>
-                </div>
-              </button>
-            ))}
+                </button>
+                {canDeleteBudget && (
+                  <button
+                    onClick={() => handleDeleteBudget(b)}
+                    disabled={deletingBudgetId === b.id}
+                    className="px-4 flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-red-50 transition-colors border-l border-border disabled:opacity-50"
+                    title={`Excluir orçamento ${b.status === "rascunho" ? "em rascunho" : "cancelado"}`}
+                  >
+                    {deletingBudgetId === b.id ? <Spinner size={14} /> : <Trash2 size={15} />}
+                  </button>
+                )}
+              </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -4977,7 +5011,7 @@ function CustomerSearch({ currentUser, users, onUsersReload, onSelect, allProduc
                       ? <div className="py-10 text-center text-sm text-muted-foreground">Nenhum orçamento encontrado</div>
                       : <div className="divide-y divide-border">
                           {list.map((b) => {
-                            const canDelete = b.status === "rascunho";
+                            const canDelete = b.status === "rascunho" || b.status === "cancelado";
                             const locked = b.status === "enviado_fabrica" || b.status === "fechado";
                             return (
                               <div key={b.id} className="flex items-stretch group">
@@ -5019,7 +5053,7 @@ function CustomerSearch({ currentUser, users, onUsersReload, onSelect, allProduc
                                       finally { setDeletingId(null); }
                                     }}
                                     className="px-3 flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-red-50 transition-colors border-l border-border"
-                                    title="Excluir rascunho">
+                                    title={`Excluir orçamento ${b.status === "rascunho" ? "em rascunho" : "cancelado"}`}>
                                     {deletingId === b.id ? <Spinner size={13} /> : <Trash2 size={14} />}
                                   </button>
                                 )}

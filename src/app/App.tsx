@@ -3981,7 +3981,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
       (!categoriaFiltro || p.categoriaComplementar === categoriaFiltro) &&
       (!superficie || p.superficie === superficie) &&
       (!localUso || String(p.localUso) === localUso) &&
-      (showDescontinuados || !p.descontinuado);
+      (showDescontinuados ? p.descontinuado : !p.descontinuado);
   });
 
   const descontinuadosCount = products.filter((p) => p.descontinuado).length;

@@ -4824,10 +4824,10 @@ function CustomerSearch({ currentUser, users, onUsersReload, onSelect, allProduc
             <div className="w-6 h-px bg-white/25 mb-3" />
             <h1 className="text-2xl md:text-3xl whitespace-nowrap tracking-tight"
               style={{ fontFamily: "var(--font-serif)" }}>
-              Sistema de Orçamentos
+              Sistema de Orçamentos - Paviment Porcelanatos Premium
             </h1>
             <p className="mt-1.5 text-xs tracking-[0.18em] uppercase opacity-35 font-light">
-              Sala Técnica · Representante Comercial
+              Sala Técnica Villagres
             </p>
             <div className="w-6 h-px bg-white/25 mt-3" />
           </div>

@@ -3596,10 +3596,13 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [villaVinilicosTipo, setVillaVinilicosTipo] = useState<"pisos" | "rodapes">(
+    hasVillaVinilicosRodapeSignature(product) ? "rodapes" : "pisos",
+  );
   const isNew = !product.id;
   const isVillacol = form.marca === "Villacol";
   const isVillaVinilicos = form.marca === "Villa Vinílicos";
-  const isVillaVinilicosLinear = hasVillaVinilicosRodapeSignature(form);
+  const isVillaVinilicosLinear = isVillaVinilicos && villaVinilicosTipo === "rodapes";
   const isRejunte = isVillacol && form.categoriaComplementar === "Rejunte";
   const isArgamassa = isVillacol && form.categoriaComplementar === "Argamassa";
   const isNiveladorCunha = isVillacol && form.categoriaComplementar === "Niveladores/Cunhas";
@@ -3631,6 +3634,19 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
       cor: categoria === "Argamassa" || categoria === "Niveladores/Cunhas" ? "" : f.cor,
       tipoRejunte: categoria === "Rejunte" ? f.tipoRejunte : "",
       tipoEmbalagem: f.tipoEmbalagem,
+    }));
+  }
+
+  function handleVillaVinilicosTipoChange(tipo: "pisos" | "rodapes") {
+    setVillaVinilicosTipo(tipo);
+    setForm((f) => ({
+      ...f,
+      derivacao: tipo === "rodapes" ? "Rodapé" : f.derivacao === "Rodapé" ? "" : f.derivacao,
+      colecao: tipo === "rodapes" ? "" : f.colecao,
+      faces: tipo === "rodapes" ? 0 : f.faces,
+      variacao: tipo === "rodapes" ? "" : f.variacao,
+      m2PorPallet: tipo === "rodapes" ? 0 : f.m2PorPallet,
+      cxPorPallet: tipo === "rodapes" ? 0 : f.cxPorPallet,
     }));
   }
 
@@ -3719,6 +3735,23 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
             </div>
           </div>
 
+          {isVillaVinilicos && (
+            <div className="rounded-xl border border-border p-4 bg-muted/20">
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Produto Villa Vinílicos</label>
+              <select
+                value={villaVinilicosTipo}
+                onChange={(e) => handleVillaVinilicosTipoChange(e.target.value as "pisos" | "rodapes")}
+                className={inputCls}
+              >
+                <option value="pisos">Pisos — vendidos em m²</option>
+                <option value="rodapes">Rodapés — vendidos em metros lineares</option>
+              </select>
+              <p className="text-xs text-muted-foreground mt-2">
+                A opção escolhida define os campos de cadastro e a unidade utilizada no orçamento.
+              </p>
+            </div>
+          )}
+
           {isVillacol ? (
             <div className="space-y-3 rounded-xl border border-border p-4 bg-muted/20">
               <div className="grid grid-cols-2 gap-3">
@@ -3787,7 +3820,7 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
           ) : (
             <>
               <div className="grid grid-cols-2 gap-3">
-                {([ ["Linha", "linha"], ["Coleção", "colecao"], ["Cor", "cor"], ["Formato", "formato"], ["Superfície", "superficie"] ] as const).map(([label, key]) => (
+                {([ ["Linha", "linha"], ...(!isVillaVinilicosLinear ? [["Coleção", "colecao"]] : []), ["Cor", "cor"], ["Formato", "formato"], ["Superfície", "superficie"] ] as [string, keyof Product][]).map(([label, key]) => (
                   <div key={key}>
                     <label className="text-xs font-medium text-muted-foreground mb-1 block">{label}</label>
                     <input {...field(key)} className={inputCls} />
@@ -3795,26 +3828,28 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
                 ))}
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Faces</label>
-                  <input {...field("faces")} inputMode="numeric" className={inputCls} />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{isVillaVinilicos ? "Capa Desgaste" : "Variação"}</label>
-                  <input {...field("variacao")} placeholder={isVillaVinilicos ? "Ex.: 0,30" : "Ex.: V1, V2, V3"} className={inputCls} />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Local de uso</label>
-                  <select
-                    value={String(form.localUso ?? 3)}
-                    onChange={(e) => setForm((f) => ({ ...f, localUso: Number(e.target.value) }))}
-                    className={inputCls}
-                  >
-                    {Object.entries(LOCAL_USO).map(([value, label]) => (
-                      <option key={value} value={value}>{value} - {label}</option>
-                    ))}
-                  </select>
-                </div>
+                {!isVillaVinilicosLinear && <>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Faces</label>
+                    <input {...field("faces")} inputMode="numeric" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">{isVillaVinilicos ? "Capa Desgaste" : "Variação"}</label>
+                    <input {...field("variacao")} placeholder={isVillaVinilicos ? "Ex.: 0,30" : "Ex.: V1, V2, V3"} className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Local de uso</label>
+                    <select
+                      value={String(form.localUso ?? 3)}
+                      onChange={(e) => setForm((f) => ({ ...f, localUso: Number(e.target.value) }))}
+                      className={inputCls}
+                    >
+                      {Object.entries(LOCAL_USO).map(([value, label]) => (
+                        <option key={value} value={value}>{value} - {label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </>}
                 <div>
                   <label className="text-xs font-medium text-muted-foreground mb-1 block">Derivação</label>
                   <input {...field("derivacao")} className={inputCls} />
@@ -3829,16 +3864,18 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
                   <label className="text-xs font-medium text-muted-foreground mb-1 block">Peças/caixa</label>
                   <input {...field("pecasPorCaixa")} inputMode="numeric" className={inputCls} />
                 </div>
+                {!isVillaVinilicosLinear && <>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">m²/pallet</label>
+                    <input {...field("m2PorPallet")} inputMode="decimal" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Caixas/pallet</label>
+                    <input {...field("cxPorPallet")} inputMode="numeric" className={inputCls} />
+                  </div>
+                </>}
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">m²/pallet</label>
-                  <input {...field("m2PorPallet")} inputMode="decimal" className={inputCls} />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Caixas/pallet</label>
-                  <input {...field("cxPorPallet")} inputMode="numeric" className={inputCls} />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Peso bruto/m² (kg)</label>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{isVillaVinilicosLinear ? "Peso bruto/metro linear (kg)" : "Peso bruto/m² (kg)"}</label>
                   <input {...field("pesoBrutoM2")} inputMode="decimal" className={inputCls} />
                 </div>
                 <div>
@@ -3860,7 +3897,9 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
           )}
           {isVillaVinilicos && (
             <p className="text-xs text-muted-foreground rounded-xl bg-blue-50 border border-blue-100 px-3 py-2">
-              Produtos Villa Vinílicos são classificados pela marca; somente rodapés (RP/rodapé) são vendidos e calculados por metro linear.
+              {isVillaVinilicosLinear
+                ? "Rodapés Villa Vinílicos são vendidos e calculados por metro linear."
+                : "Pisos Villa Vinílicos são vendidos e calculados por metro quadrado."}
             </p>
           )}
 

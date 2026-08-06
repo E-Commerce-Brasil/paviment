@@ -1194,8 +1194,19 @@ function isVillaVinilicosProduct(product?: Product | null): boolean {
   return product?.marca === "Villa Vinílicos" || (product ? hasVillaVinilicosSignature(product) : false);
 }
 
+function isCantoneiraProduct(product?: Product | null): boolean {
+  const normalizedLine = (product?.linha || "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  return normalizedLine === "cantoneira";
+}
+
 function isLinearMeterProduct(product?: Product | null): boolean {
-  return product ? isVillaVinilicosProduct(product) && hasVillaVinilicosRodapeSignature(product) : false;
+  return product
+    ? isCantoneiraProduct(product) || (isVillaVinilicosProduct(product) && hasVillaVinilicosRodapeSignature(product))
+    : false;
 }
 
 function getProductQuantityLabel(product?: Product | null, plural = false): string {
@@ -1779,6 +1790,12 @@ function BudgetEditor({
   const pixOnlySubtotal = round2(pixOnlyProductsSubtotal + budget.frete);
   const generalTotal = round2(topTotal + argamassaTotal + pixOnlySubtotal);
   const totalWeightKg = calculateBudgetWeightKg(budget.items);
+  const totalAreaM2 = round2(budget.items
+    .filter((item) => !isLinearMeterProduct(item.product) && !isVillacolProduct(item.product))
+    .reduce((sum, item) => sum + item.areaM2, 0));
+  const totalLinearMeters = round2(budget.items
+    .filter((item) => isLinearMeterProduct(item.product))
+    .reduce((sum, item) => sum + calculateRealLinearMeters(item.product, item.areaM2, item.caixas), 0));
   const suggestedFreightByWeight = calculateFreightByWeight(budget.items, pricingSettings.fretePor100Kg);
 
   function formatFreightInput(value: number): string {
@@ -2906,10 +2923,18 @@ ${budget.observacoes ? `
                     <span>Total de caixas</span>
                     <span className="font-mono">{budget.items.reduce((s, i) => s + i.caixas, 0)} cx</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span>Total de m²</span>
-                    <span className="font-mono">{budget.items.reduce((s, i) => s + i.areaM2, 0).toFixed(2)} m²</span>
-                  </div>
+                  {totalAreaM2 > 0 && (
+                    <div className="flex justify-between">
+                      <span>Total de m²</span>
+                      <span className="font-mono">{totalAreaM2.toFixed(2)} m²</span>
+                    </div>
+                  )}
+                  {totalLinearMeters > 0 && (
+                    <div className="flex justify-between">
+                      <span>Total de metros lineares</span>
+                      <span className="font-mono">{totalLinearMeters.toFixed(2)} ml</span>
+                    </div>
+                  )}
                   <div className="flex justify-between">
                     <span>Peso total</span>
                     <span className="font-mono">{fmtKg(totalWeightKg)}</span>
@@ -3603,6 +3628,7 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
   const isVillacol = form.marca === "Villacol";
   const isVillaVinilicos = form.marca === "Villa Vinílicos";
   const isVillaVinilicosLinear = isVillaVinilicos && villaVinilicosTipo === "rodapes";
+  const isLinearProductForm = isVillaVinilicosLinear || isCantoneiraProduct(form);
   const isRejunte = isVillacol && form.categoriaComplementar === "Rejunte";
   const isArgamassa = isVillacol && form.categoriaComplementar === "Argamassa";
   const isNiveladorCunha = isVillacol && form.categoriaComplementar === "Niveladores/Cunhas";
@@ -3857,7 +3883,7 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{isVillaVinilicosLinear ? "ml/caixa" : "m²/caixa"}</label>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{isLinearProductForm ? "ml/caixa" : "m²/caixa"}</label>
                   <input {...field("m2PorCaixa")} inputMode="decimal" className={inputCls} />
                 </div>
                 <div>
@@ -3875,7 +3901,7 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
                   </div>
                 </>}
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{isVillaVinilicosLinear ? "Peso bruto/metro linear (kg)" : "Peso bruto/m² (kg)"}</label>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{isLinearProductForm ? "Peso bruto/metro linear (kg)" : "Peso bruto/m² (kg)"}</label>
                   <input {...field("pesoBrutoM2")} inputMode="decimal" className={inputCls} />
                 </div>
                 <div>
@@ -3902,9 +3928,14 @@ function ProductEditModal({ product, onSave, onDelete, onClose }: {
                 : "Pisos Villa Vinílicos são vendidos e calculados por metro quadrado."}
             </p>
           )}
+          {isCantoneiraProduct(form) && (
+            <p className="text-xs text-muted-foreground rounded-xl bg-blue-50 border border-blue-100 px-3 py-2">
+              Produtos da linha CANTONEIRA são vendidos e calculados por metro linear.
+            </p>
+          )}
 
           <div>
-            <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Tabelas de Preço {isVillaVinilicosLinear ? "(R$/metro linear)" : isVillacol ? "(R$/unidade ou embalagem)" : "(R$/m²)"}</p>
+            <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Tabelas de Preço {isLinearProductForm ? "(R$/metro linear)" : isVillacol ? "(R$/unidade ou embalagem)" : "(R$/m²)"}</p>
             <div className="grid grid-cols-5 gap-2">
               {([1, 2, 3, 4, 5] as const).map((t) => (
                 <div key={t}>

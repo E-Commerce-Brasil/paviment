@@ -3154,7 +3154,7 @@ function CustomerView({
               </p>
             )}
           </div>
-          <div className="flex gap-2 shrink-0">
+          <div className="flex gap-2 shrink-0 mt-3">
             <button onClick={() => setShowEdit(true)}
               className="border border-white/20 px-3 py-1.5 rounded-lg text-xs hover:bg-white/10 transition-colors flex items-center gap-1">
               <Pencil size={11} /> Editar

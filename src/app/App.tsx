@@ -5159,8 +5159,22 @@ function LoginScreen({ users, onLogin }: { users: AppUser[]; onLogin: (username:
   }
 
   return (
-    <div className="min-h-screen bg-primary flex items-center justify-center px-4 py-8">
-      <div className="w-full max-w-sm bg-card border border-white/10 rounded-3xl p-7 shadow-2xl">
+    <div className="relative min-h-screen overflow-hidden bg-primary flex items-center justify-center px-4 py-10">
+      <div className="pointer-events-none absolute -left-32 -top-32 h-80 w-80 rounded-full bg-white/5" />
+      <div className="pointer-events-none absolute -bottom-40 -right-24 h-96 w-96 rounded-full border border-white/10" />
+
+      <main className="relative z-10 w-full max-w-3xl">
+        <div className="text-center text-primary-foreground mb-8">
+          <p className="text-xs font-semibold uppercase tracking-[0.3em] opacity-60 mb-3">Sala Técnica Villagres</p>
+          <h1 className="text-3xl md:text-5xl font-semibold leading-tight tracking-tight"
+            style={{ fontFamily: "var(--font-serif)" }}>
+            Sistema de Orçamentos
+            <span className="block mt-2 text-lg md:text-2xl font-medium opacity-90">- Paviment Porcelanatos Premium</span>
+          </h1>
+          <div className="mx-auto mt-5 h-px w-16 bg-white/35" />
+        </div>
+
+      <div className="w-full max-w-sm mx-auto bg-card border border-white/10 rounded-3xl p-7 shadow-2xl">
         <div className="text-center mb-6">
           <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-4">
             <LockKeyhole size={25} className="text-primary" />
@@ -5189,6 +5203,7 @@ function LoginScreen({ users, onLogin }: { users: AppUser[]; onLogin: (username:
         </form>
 
       </div>
+      </main>
       <Toaster position="bottom-right" richColors />
     </div>
   );

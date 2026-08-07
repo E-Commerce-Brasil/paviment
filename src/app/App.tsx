@@ -5182,7 +5182,7 @@ function CustomerSearch({ currentUser, users, onUsersReload, onSelect, allProduc
                                     </div>
                                   </div>
                                 </button>
-                                <button
+                                {currentUser.isAdmin && <button
                                   disabled={exportingId === b.id}
                                   onClick={async (e) => {
                                     e.stopPropagation();
@@ -5200,7 +5200,7 @@ function CustomerSearch({ currentUser, users, onUsersReload, onSelect, allProduc
                                   title="Exportar orçamento para Excel"
                                 >
                                   {exportingId === b.id ? <Spinner size={13} /> : <Download size={14} />}
-                                </button>
+                                </button>}
                                 {canDelete && (
                                   <button
                                     disabled={deletingId === b.id}

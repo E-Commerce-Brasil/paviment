@@ -1159,6 +1159,15 @@ function shouldApplyProductCardFee(product?: Product | null): boolean {
   return !NO_CARD_FEE_CATEGORIES.includes(product?.categoriaComplementar || "");
 }
 
+function shouldApplyArgamassaCardFee(product: Product | null | undefined, paymentMethod: FormaPagamento): boolean {
+  return product?.categoriaComplementar === "Argamassa" && paymentMethod === "cartao";
+}
+
+function applyArgamassaCardFee(value: number, product: Product | null | undefined, paymentMethod: FormaPagamento, pricingSettings: PricingSettings): number {
+  if (!shouldApplyArgamassaCardFee(product, paymentMethod)) return round2(value);
+  return round2(value * (1 + parseDecimalInput(pricingSettings.taxaCartaoPercentual) / 100));
+}
+
 function shouldIncludeProductInFreight(product?: Product | null): boolean {
   return !NO_FREIGHT_CATEGORIES.includes(product?.categoriaComplementar || "");
 }
@@ -1275,7 +1284,8 @@ function inferExportItemPriceTable(item: BudgetItem, pricingSettings: PricingSet
 async function exportBudgetToExcel(budgetSummary: BudgetSummary, pricingSettings: PricingSettings): Promise<void> {
   const XLSX = await import("xlsx");
   const budget = await getBudgetWithItems(budgetSummary.id);
-  const productSubtotal = round2(budget.items.reduce((sum, item) => sum + item.subtotal, 0));
+  const productSubtotal = round2(budget.items.reduce((sum, item) =>
+    sum + applyArgamassaCardFee(item.subtotal, item.product, budget.formaPagamento, pricingSettings), 0));
   const rows: (string | number)[][] = [
     ["ORÇAMENTO", `#${budget.numero}`],
     ["Cliente", budgetSummary.customerNome],
@@ -1298,7 +1308,9 @@ async function exportBudgetToExcel(budgetSummary: BudgetSummary, pricingSettings
     const table = inferExportItemPriceTable(item, pricingSettings);
     const basePrice = table === "TE" ? item.precoM2 : Number(item.product[priceKey(table)] || 0);
     const taxPercent = table !== "TE" && shouldApplyProductTax(item.product) ? pricingSettings.impostoPercentual : 0;
-    const cardFeePercent = table !== "TE" && shouldApplyProductCardFee(item.product) ? pricingSettings.taxaCartaoPercentual : 0;
+    const appliesStandardCardFee = table !== "TE" && shouldApplyProductCardFee(item.product);
+    const appliesArgamassaCardFee = shouldApplyArgamassaCardFee(item.product, budget.formaPagamento);
+    const cardFeePercent = appliesStandardCardFee || appliesArgamassaCardFee ? pricingSettings.taxaCartaoPercentual : 0;
     const isLinear = isLinearMeterProduct(item.product);
     const isComplementary = isVillacolProduct(item.product);
     const realQuantity = isLinear
@@ -1319,12 +1331,12 @@ async function exportBudgetToExcel(budgetSummary: BudgetSummary, pricingSettings
       round2(basePrice * taxPercent / 100),
       cardFeePercent,
       round2(basePrice * cardFeePercent / 100),
-      item.precoM2,
+      applyArgamassaCardFee(item.precoM2, item.product, budget.formaPagamento, pricingSettings),
       item.areaM2,
       item.caixas,
       realQuantity,
       calculateItemWeightKg(item),
-      item.subtotal,
+      applyArgamassaCardFee(item.subtotal, item.product, budget.formaPagamento, pricingSettings),
     ]);
   });
 
@@ -1886,7 +1898,10 @@ function BudgetEditor({
   const pixOnlyCategories = ["Rejunte", "Niveladores/Cunhas"];
   const topFinancialItems = budget.items.filter((item) => !pixOnlyCategories.includes(item.product?.categoriaComplementar || ""));
   const pixOnlyItems = budget.items.filter((item) => pixOnlyCategories.includes(item.product?.categoriaComplementar || ""));
-  const paymentAdjustedSubtotal = (item: BudgetItem) => round2(item.subtotal * (budget.formaPagamento === "avista_pix" ? getProductPixPaymentFactor(item.product, pricingSettings) : 1));
+  const paymentAdjustedSubtotal = (item: BudgetItem) => {
+    const subtotalWithArgamassaCardFee = applyArgamassaCardFee(item.subtotal, item.product, budget.formaPagamento, pricingSettings);
+    return round2(subtotalWithArgamassaCardFee * (budget.formaPagamento === "avista_pix" ? getProductPixPaymentFactor(item.product, pricingSettings) : 1));
+  };
   const removePricingFactor = (item: BudgetItem) => {
     const pricingFactor = getProductPricingFactor(item.product, pricingSettings);
     return pricingFactor > 0 ? 1 / pricingFactor : 1;
@@ -1972,7 +1987,8 @@ function BudgetEditor({
 
   function updateLocal(patch: Partial<Budget>) {
     const updated = { ...budget, ...patch };
-    const subtotal = updated.items.reduce((s, i) => s + i.subtotal, 0);
+    const subtotal = updated.items.reduce((sum, item) =>
+      sum + applyArgamassaCardFee(item.subtotal, item.product, updated.formaPagamento, pricingSettings), 0);
     const totalFinal = calculateBudgetTotal(subtotal, updated.frete, updated.formaPagamento, updated.descontoPixPercentual, updated.descontoPixIncluiFrete);
     const final = { ...updated, subtotal: round2(subtotal), totalFinal: round2(totalFinal) };
     if (Object.prototype.hasOwnProperty.call(patch, "frete")) {
@@ -2288,6 +2304,8 @@ function BudgetEditor({
       const p = item.product;
       const embalagem = p?.tipoEmbalagem || p?.tipoRejunte || p?.categoriaComplementar || "";
       const unitLabel = getComplementaryUnitLabel(p);
+      const unitPrice = applyArgamassaCardFee(item.precoM2, p, budget.formaPagamento, pricingSettings);
+      const subtotal = applyArgamassaCardFee(item.subtotal, p, budget.formaPagamento, pricingSettings);
       return `<tr>
         <td>${p?.referencia ?? ""}</td>
         <td>${p?.linha ?? ""}</td>
@@ -2295,8 +2313,8 @@ function BudgetEditor({
         <td>${embalagem}</td>
         <td style="text-align:right">${item.caixas} ${getComplementaryUnitLabel(p, item.caixas !== 1)}</td>
         <td style="text-align:right">${fmtKg(calculateItemWeightKg(item))}</td>
-        <td style="text-align:right">${fmtBRLStr(item.precoM2)}/${unitLabel}</td>
-        <td style="text-align:right">${fmtBRLStr(item.subtotal)}</td>
+        <td style="text-align:right">${fmtBRLStr(unitPrice)}/${unitLabel}</td>
+        <td style="text-align:right">${fmtBRLStr(subtotal)}</td>
       </tr>`;
     }).join("");
 
@@ -2646,6 +2664,9 @@ ${budget.observacoes ? `
                         const editPrecoBase = editTabela === "TE" ? null : item.product[priceKey(editTabela)] as number | null;
                         const editSpecialPrice = parseDecimalInput(editSpecialPriceInput);
                         const editPrecoM2 = editTabela === "TE" ? editSpecialPrice : editPrecoBase != null ? calculateProductFinalPrice(item.product, editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
+                        const displayedUnitPrice = applyArgamassaCardFee(item.precoM2, item.product, budget.formaPagamento, pricingSettings);
+                        const displayedSubtotal = applyArgamassaCardFee(item.subtotal, item.product, budget.formaPagamento, pricingSettings);
+                        const displayedEditPrice = applyArgamassaCardFee(editPrecoM2, item.product, budget.formaPagamento, pricingSettings);
                         const embalagem = item.product.tipoEmbalagem || item.product.tipoRejunte || item.product.categoriaComplementar || "—";
                         const unitLabel = getComplementaryUnitLabel(item.product, item.caixas !== 1);
                         const previewUnitLabel = getComplementaryUnitLabel(item.product, previewCx !== 1);
@@ -2696,14 +2717,14 @@ ${budget.observacoes ? `
                                       placeholder="Valor especial"
                                       className="w-24 border border-primary rounded-lg px-2 py-1 text-xs text-right font-mono bg-card focus:outline-none focus:ring-2 focus:ring-primary/30" />
                                   )}
-                                  <p className="font-mono text-primary font-semibold">{fmtBRL(editPrecoM2)}</p>
+                                  <p className="font-mono text-primary font-semibold">{fmtBRL(displayedEditPrice)}</p>
                                 </div>
-                              ) : <span className="font-mono">{fmtBRL(item.precoM2)}</span>}
+                              ) : <span className="font-mono">{fmtBRL(displayedUnitPrice)}</span>}
                             </td>
                             <td className="px-3 py-3 text-right font-mono font-semibold text-sm">
                               {isEditing && previewQty > 0
-                                ? <span className="text-primary">{fmtBRL(calculateItemSubtotal(item.product, previewQty, previewCx, editPrecoM2))}</span>
-                                : fmtBRL(item.subtotal)}
+                                ? <span className="text-primary">{fmtBRL(applyArgamassaCardFee(calculateItemSubtotal(item.product, previewQty, previewCx, editPrecoM2), item.product, budget.formaPagamento, pricingSettings))}</span>
+                                : fmtBRL(displayedSubtotal)}
                             </td>
                             <td className="px-3 py-3">
                               {isEditing ? (

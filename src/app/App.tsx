@@ -4,7 +4,7 @@ import csvRaw from "../imports/tabela_vilagres.csv?raw";
 import pavimentLogoPrint from "../imports/WhatsApp_Image_2026-07-11_at_10.17.07-3.jpeg";
 import {
   Search, Plus, ArrowLeft, Package, FileText,
-  Trash2, Send, Save, X, ChevronRight,
+  Trash2, Send, Save, X, ChevronRight, Download,
   RotateCcw, AlertTriangle, Pencil, Check, Copy, Printer,
   LogOut, LockKeyhole, UserPlus, UserRound, ShieldCheck, KeyRound,
 } from "lucide-react";
@@ -1255,6 +1255,108 @@ function calculateItemWeightKg(item: BudgetItem): number {
 
 function calculateBudgetWeightKg(items: BudgetItem[]): number {
   return round2(items.reduce((sum, item) => sum + calculateItemWeightKg(item), 0));
+}
+
+function inferExportItemPriceTable(item: BudgetItem, pricingSettings: PricingSettings): PriceTableOption {
+  for (const table of [1, 2, 3, 4, 5] as const) {
+    const basePrice = item.product[priceKey(table)] as number | null;
+    if (basePrice == null) continue;
+    const tablePrice = calculateProductFinalPrice(
+      item.product,
+      basePrice,
+      pricingSettings.impostoPercentual,
+      pricingSettings.taxaCartaoPercentual,
+    );
+    if (Math.abs(tablePrice - item.precoM2) < 0.01) return table;
+  }
+  return "TE";
+}
+
+async function exportBudgetToExcel(budgetSummary: BudgetSummary, pricingSettings: PricingSettings): Promise<void> {
+  const XLSX = await import("xlsx");
+  const budget = await getBudgetWithItems(budgetSummary.id);
+  const productSubtotal = round2(budget.items.reduce((sum, item) => sum + item.subtotal, 0));
+  const rows: (string | number)[][] = [
+    ["ORÇAMENTO", `#${budget.numero}`],
+    ["Cliente", budgetSummary.customerNome],
+    ["Data", fmtDate(budget.createdAt)],
+    ["Status", STATUS_LABELS[budget.status]],
+    ["Condição de pagamento", budget.formaPagamento === "cartao" ? `Cartão ${budget.parcelasCartao}x` : budget.formaPagamento === "avista_pix" ? "PIX" : "Débito"],
+    ["Tabela padrão do orçamento", `Tabela ${budget.tabelaPreco}`],
+    ["Imposto configurado (%)", pricingSettings.impostoPercentual],
+    ["Taxa de cartão configurada (%)", pricingSettings.taxaCartaoPercentual],
+    [],
+    [
+      "Referência", "Produto", "Marca", "Categoria", "Formato", "Superfície", "Unidade",
+      "Tabela utilizada", "Preço-base", "Imposto (%)", "Valor do imposto", "Taxa cartão (%)",
+      "Valor taxa cartão", "Preço unitário final", "Quantidade solicitada", "Caixas/embalagens",
+      "Quantidade real", "Peso total (kg)", "Subtotal",
+    ],
+  ];
+
+  budget.items.forEach((item) => {
+    const table = inferExportItemPriceTable(item, pricingSettings);
+    const basePrice = table === "TE" ? item.precoM2 : Number(item.product[priceKey(table)] || 0);
+    const taxPercent = table !== "TE" && shouldApplyProductTax(item.product) ? pricingSettings.impostoPercentual : 0;
+    const cardFeePercent = table !== "TE" && shouldApplyProductCardFee(item.product) ? pricingSettings.taxaCartaoPercentual : 0;
+    const isLinear = isLinearMeterProduct(item.product);
+    const isComplementary = isVillacolProduct(item.product);
+    const realQuantity = isLinear
+      ? calculateRealLinearMeters(item.product, item.areaM2, item.caixas)
+      : isComplementary ? item.areaM2 : calculateItemRealAreaM2(item);
+    const unit = isLinear ? "metro linear" : isComplementary ? getComplementaryUnitLabel(item.product) : "m²";
+    rows.push([
+      item.product.referencia,
+      item.product.linha,
+      item.product.marca || "Villagres",
+      item.product.categoriaComplementar || item.product.colecao || "-",
+      item.product.formato || "-",
+      item.product.superficie || "-",
+      unit,
+      table === "TE" ? "Tabela Especial" : `Tabela ${table}`,
+      round2(basePrice),
+      taxPercent,
+      round2(basePrice * taxPercent / 100),
+      cardFeePercent,
+      round2(basePrice * cardFeePercent / 100),
+      item.precoM2,
+      item.areaM2,
+      item.caixas,
+      realQuantity,
+      calculateItemWeightKg(item),
+      item.subtotal,
+    ]);
+  });
+
+  rows.push(
+    [],
+    [...Array(17).fill(""), "SUBTOTAL DOS PRODUTOS", productSubtotal],
+    [...Array(17).fill(""), "FRETE", budget.frete],
+    [...Array(17).fill(""), "DESCONTO PIX (%)", budget.descontoPixPercentual],
+    [...Array(17).fill(""), "TOTAL FINAL", budget.totalFinal],
+  );
+
+  const worksheet = XLSX.utils.aoa_to_sheet(rows);
+  worksheet["!cols"] = [
+    { wch: 16 }, { wch: 30 }, { wch: 18 }, { wch: 22 }, { wch: 14 }, { wch: 18 }, { wch: 16 },
+    { wch: 18 }, { wch: 14 }, { wch: 13 }, { wch: 17 }, { wch: 16 }, { wch: 18 }, { wch: 20 },
+    { wch: 21 }, { wch: 18 }, { wch: 17 }, { wch: 17 }, { wch: 16 },
+  ];
+  worksheet["!autofilter"] = { ref: `A10:S${Math.max(10, 10 + budget.items.length)}` };
+  for (let row = 11; row <= 10 + budget.items.length; row += 1) {
+    for (const column of ["I", "K", "M", "N", "S"]) {
+      const cell = worksheet[`${column}${row}`];
+      if (cell) cell.z = 'R$ #,##0.00';
+    }
+  }
+  for (const row of [12 + budget.items.length, 13 + budget.items.length, 15 + budget.items.length]) {
+    const cell = worksheet[`S${row}`];
+    if (cell) cell.z = 'R$ #,##0.00';
+  }
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Orçamento");
+  XLSX.writeFile(workbook, `orcamento-${budget.numero}.xlsx`);
 }
 
 function calculateFreightByWeight(items: BudgetItem[], fretePor100Kg: number | string | null | undefined): number {
@@ -4716,6 +4818,7 @@ function CustomerSearch({ currentUser, users, onUsersReload, onSelect, allProduc
   const [filterDataFim, setFilterDataFim] = useState("");
   const [isFiltering, setIsFiltering] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [exportingId, setExportingId] = useState<string | null>(null);
   const [budgetToDelete, setBudgetToDelete] = useState<BudgetSummary | null>(null);
 
   const hasFilter = !!(filterStatus || filterCliente || filterDataInicio || filterDataFim);
@@ -5078,6 +5181,25 @@ function CustomerSearch({ currentUser, users, onUsersReload, onSelect, allProduc
                                       <ChevronRight size={14} className="text-muted-foreground group-hover:text-primary transition-colors" />
                                     </div>
                                   </div>
+                                </button>
+                                <button
+                                  disabled={exportingId === b.id}
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    setExportingId(b.id);
+                                    try {
+                                      await exportBudgetToExcel(b, pricingSettings);
+                                      toast.success(`Orçamento #${b.numero} exportado para Excel.`);
+                                    } catch (error: any) {
+                                      toast.error("Erro ao exportar orçamento: " + error.message);
+                                    } finally {
+                                      setExportingId(null);
+                                    }
+                                  }}
+                                  className="px-3 flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-primary/5 transition-colors border-l border-border disabled:opacity-50"
+                                  title="Exportar orçamento para Excel"
+                                >
+                                  {exportingId === b.id ? <Spinner size={13} /> : <Download size={14} />}
                                 </button>
                                 {canDelete && (
                                   <button

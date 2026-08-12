@@ -4,9 +4,9 @@ import csvRaw from "../imports/tabela_vilagres.csv?raw";
 import pavimentLogoPrint from "../imports/WhatsApp_Image_2026-07-11_at_10.17.07-3.jpeg";
 import {
   Search, Plus, ArrowLeft, Package, FileText,
-  Trash2, Send, Save, X, ChevronRight,
+  Trash2, Send, Save, X, ChevronRight, Download,
   RotateCcw, AlertTriangle, Pencil, Check, Copy, Printer,
-  Shield, Lock, LogOut,
+  LogOut, LockKeyhole, UserPlus, UserRound, ShieldCheck, KeyRound,
 } from "lucide-react";
 import { Toaster, toast } from "sonner";
 import { projectId, publicAnonKey } from "../../utils/supabase/info";
@@ -43,11 +43,31 @@ interface Product {
   preco2: number | null;
   preco3: number | null;
   preco4: number | null;
+  preco5: number | null;
   descontinuado: boolean;
   marca: string;
   categoriaComplementar: string;
   tipoRejunte: string;
   tipoEmbalagem: string;
+}
+
+type PriceTableOption = 1 | 2 | 3 | 4 | 5 | "TE";
+
+interface AppUser {
+  id?: string;
+  username: string;
+  label: string;
+  isAdmin: boolean;
+  active: boolean;
+}
+
+const DEFAULT_PASSWORD_HASHES = {
+  admin: "79416c9685c6baf019b311c43844d8d13e1b1c05c8bfcd814048b8719ddf2ee1",
+  vendas: "e95677a8dc1e007ad2de15c4a87042c39592c8d358a26b5d0130b9e6440297f4",
+};
+
+function canAccessBudget(user: AppUser, budgetOwner: string): boolean {
+  return user.isAdmin || budgetOwner === user.username;
 }
 
 interface PricingSettings {
@@ -73,14 +93,6 @@ interface Customer {
   createdAt: string;
 }
 
-export interface AppUser {
-  id: string;
-  username: string;
-  label: string;
-  isAdmin: boolean;
-  active: boolean;
-}
-
 interface BudgetItem {
   id: string;
   productId: string;
@@ -100,7 +112,7 @@ interface Budget {
   numero: number;
   customerId: string;
   status: BudgetStatus;
-  tabelaPreco: 1 | 2 | 3 | 4;
+  tabelaPreco: 1 | 2 | 3 | 4 | 5;
   frete: number;
   percentualImposto: number;
   formaPagamento: FormaPagamento;
@@ -122,13 +134,14 @@ interface Budget {
   totalFinal: number;
   createdAt: string;
   updatedAt: string;
+  createdBy: string;
 }
 
 
 // ── Mappers (DB snake_case → JS camelCase) ────────────────────────
 
 function mapProduct(r: any): Product {
-  return {
+  return normalizeProductBrand({
     id: r.id,
     referencia: r.referencia || "",
     formato: r.formato || "",
@@ -151,12 +164,13 @@ function mapProduct(r: any): Product {
     preco2: r.preco2 != null ? parseFloat(r.preco2) : null,
     preco3: r.preco3 != null ? parseFloat(r.preco3) : null,
     preco4: r.preco4 != null ? parseFloat(r.preco4) : null,
+    preco5: r.preco5 != null ? parseFloat(r.preco5) : null,
     descontinuado: r.descontinuado ?? false,
     marca: r.marca || "Villagres",
     categoriaComplementar: r.categoria_complementar || "",
     tipoRejunte: r.tipo_rejunte || "",
     tipoEmbalagem: r.tipo_embalagem || "",
-  };
+  });
 }
 
 function mapCustomer(r: any): Customer {
@@ -175,87 +189,6 @@ function mapCustomer(r: any): Customer {
     estado: r.estado || "",
     createdAt: r.created_at,
   };
-}
-
-function mapUser(r: any): AppUser {
-  return {
-    id: r.id,
-    username: r.username || "",
-    label: r.display_name || r.username || "",
-    isAdmin: r.is_admin === true,
-    active: r.active !== false,
-  };
-}
-
-async function fetchAppUsers(includeInactive = false): Promise<AppUser[]> {
-  let q = supabase.from("app_users").select("id, username, display_name, is_admin, active").order("username");
-  if (!includeInactive) q = q.eq("active", true);
-  const { data, error } = await q;
-  if (error) throw error;
-  return (data || []).map(mapUser);
-}
-
-async function hashPassword(username: string, pass: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(`paviment:${username.trim().toLowerCase()}:${pass}`);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function loginUser(username: string, pass: string): Promise<AppUser | null> {
-  const normUser = username.trim().toLowerCase();
-  const pwdHash = await hashPassword(normUser, pass);
-  const { data, error } = await supabase
-    .from("app_users")
-    .select("id, username, display_name, is_admin, active")
-    .eq("username", normUser)
-    .eq("password_hash", pwdHash)
-    .eq("active", true)
-    .maybeSingle();
-  if (error) throw error;
-  return data ? mapUser(data) : null;
-}
-
-async function createUser(user: { username: string; label: string; password: string; isAdmin?: boolean }): Promise<void> {
-  const normUser = user.username.trim().toLowerCase();
-  const pwdHash = await hashPassword(normUser, user.password);
-  const { error } = await supabase.from("app_users").insert({
-    username: normUser,
-    display_name: user.label || normUser,
-    password_hash: pwdHash,
-    is_admin: user.isAdmin ?? false,
-    active: true,
-  });
-  if (error) throw error;
-}
-
-async function updateUserPassword(username: string, newPass: string): Promise<void> {
-  const normUser = username.trim().toLowerCase();
-  const pwdHash = await hashPassword(normUser, newPass);
-  const { error } = await supabase
-    .from("app_users")
-    .update({ password_hash: pwdHash, updated_at: new Date().toISOString() })
-    .eq("username", normUser);
-  if (error) throw error;
-}
-
-async function updateUserAdminStatus(username: string, isAdmin: boolean): Promise<void> {
-  const normUser = username.trim().toLowerCase();
-  const { error } = await supabase
-    .from("app_users")
-    .update({ is_admin: isAdmin, updated_at: new Date().toISOString() })
-    .eq("username", normUser);
-  if (error) throw error;
-}
-
-async function deactivateUser(username: string): Promise<void> {
-  const normUser = username.trim().toLowerCase();
-  const { error } = await supabase
-    .from("app_users")
-    .update({ active: false, updated_at: new Date().toISOString() })
-    .eq("username", normUser);
-  if (error) throw error;
 }
 
 function mapItem(r: any): BudgetItem {
@@ -299,6 +232,7 @@ function mapBudget(r: any, items: BudgetItem[] = []): Budget {
     totalFinal: parseFloat(r.total_final) || 0,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    createdBy: r.created_by || "admin",
   };
 }
 
@@ -322,6 +256,7 @@ CREATE TABLE IF NOT EXISTS products (
   espessura_mm DECIMAL(10,2) DEFAULT 0,
   preco1 DECIMAL(12,4), preco2 DECIMAL(12,4),
   preco3 DECIMAL(12,4), preco4 DECIMAL(12,4),
+  preco5 DECIMAL(12,4),
   marca TEXT DEFAULT 'Villagres',
   categoria_complementar TEXT,
   tipo_rejunte TEXT,
@@ -330,23 +265,7 @@ CREATE TABLE IF NOT EXISTS products (
 );
 ALTER TABLE products DISABLE ROW LEVEL SECURITY;
 
-CREATE TABLE IF NOT EXISTS app_users (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        username TEXT NOT NULL UNIQUE,
-        display_name TEXT NOT NULL,
-        password_hash TEXT NOT NULL,
-        is_admin BOOLEAN NOT NULL DEFAULT FALSE,
-        active BOOLEAN NOT NULL DEFAULT TRUE,
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        updated_at TIMESTAMPTZ DEFAULT NOW()
-      );
-      ALTER TABLE app_users DISABLE ROW LEVEL SECURITY;
-      INSERT INTO app_users (username, display_name, password_hash, is_admin, active)
-      VALUES
-        ('admin', 'Administrador', '79416c9685c6baf019b311c43844d8d13e1b1c05c8bfcd814048b8719ddf2ee1', TRUE, TRUE),
-        ('vendas', 'Vendas', 'e95677a8dc1e007ad2de15c4a87042c39592c8d358a26b5d0130b9e6440297f4', FALSE, TRUE)
-      ON CONFLICT (username) DO NOTHING;
-      CREATE TABLE IF NOT EXISTS pricing_settings (
+CREATE TABLE IF NOT EXISTS pricing_settings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   imposto_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
   taxa_cartao_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
@@ -397,6 +316,7 @@ CREATE TABLE IF NOT EXISTS budgets (
   desconto_pix_inclui_frete BOOLEAN DEFAULT FALSE,
   observacoes TEXT, subtotal DECIMAL(12,2) DEFAULT 0,
   total_final DECIMAL(12,2) DEFAULT 0,
+  created_by TEXT NOT NULL DEFAULT 'admin',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -418,7 +338,19 @@ ALTER TABLE budget_items DISABLE ROW LEVEL SECURITY;
 -- Migrações (execute se já tiver as tabelas criadas)
 ALTER TABLE budgets ADD COLUMN IF NOT EXISTS tecnico TEXT;
 ALTER TABLE budgets ADD COLUMN IF NOT EXISTS endereco_entrega TEXT;
+ALTER TABLE budgets ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT 'admin';
+UPDATE budgets SET created_by = 'admin' WHERE created_by IS NULL;
+ALTER TABLE budgets DROP CONSTRAINT IF EXISTS budgets_created_by_check;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS preco5 DECIMAL(12,4);
 ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS marca TEXT DEFAULT 'Villagres';
+UPDATE products
+SET marca = 'Villa Vinílicos'
+WHERE marca IS DISTINCT FROM 'Villa Vinílicos'
+  AND (
+    referencia ~* '^(SPC|LVT|RP)([[:space:]._/-]|$)'
+    OR (COALESCE(referencia, '') || ' ' || COALESCE(linha, '') || ' ' || COALESCE(colecao, '') || ' ' || COALESCE(cor, '') || ' ' || COALESCE(formato, '') || ' ' || COALESCE(superficie, '')) ~* 'vin[ií]lic'
+  );
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS logradouro TEXT;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS numero_end TEXT;
@@ -492,6 +424,7 @@ function buildProductsFromCSV(csvText: string): Omit<Product, "id">[] {
       preco2: parsePrice(row[18]),
       preco3: parsePrice(row[19]),
       preco4: parsePrice(row[20]),
+      preco5: parsePrice(row[21]),
     });
   }
   return products;
@@ -510,7 +443,9 @@ async function getProductCount(): Promise<number> {
 }
 
 async function seedProducts(products: Omit<Product, "id">[]): Promise<void> {
-  const rows = products.map((p) => ({
+  const rows = products.map((product) => {
+    const p = normalizeProductBrand(product);
+    return ({
     referencia: p.referencia,
     formato: p.formato,
     linha: p.linha,
@@ -532,7 +467,10 @@ async function seedProducts(products: Omit<Product, "id">[]): Promise<void> {
     preco2: p.preco2,
     preco3: p.preco3,
     preco4: p.preco4,
-  }));
+    preco5: p.preco5,
+    marca: p.marca || "Villagres",
+  });
+  });
   // Insert in batches of 50
   for (let i = 0; i < rows.length; i += 50) {
     const batch = rows.slice(i, i + 50);
@@ -550,12 +488,14 @@ function mapBudgetSummary(r: any): BudgetSummary {
   return { ...mapBudget(r, []), customerNome: r.customers?.nome || "", customerCidade: r.customers?.cidade || "" };
 }
 
-async function fetchRecentBudgets(limit = 5): Promise<BudgetSummary[]> {
-  const { data, error } = await supabase
+async function fetchRecentBudgets(currentUser: AppUser, limit = 5): Promise<BudgetSummary[]> {
+  let q = supabase
     .from("budgets")
     .select("*, customers(nome, cidade)")
     .order("created_at", { ascending: false })
     .limit(limit);
+  if (currentUser.username !== "admin") q = q.eq("created_by", currentUser.username);
+  const { data, error } = await q;
   if (error) throw error;
   return (data || []).map(mapBudgetSummary);
 }
@@ -563,8 +503,9 @@ async function fetchRecentBudgets(limit = 5): Promise<BudgetSummary[]> {
 async function fetchBudgetsFiltered(filters: {
   status?: string; customerQ?: string;
   dataInicio?: string; dataFim?: string;
-}): Promise<BudgetSummary[]> {
+}, currentUser: AppUser): Promise<BudgetSummary[]> {
   let q = supabase.from("budgets").select("*, customers(nome, cidade)");
+  if (currentUser.username !== "admin") q = q.eq("created_by", currentUser.username);
   if (filters.status) q = q.eq("status", filters.status);
   if (filters.dataInicio) q = q.gte("created_at", filters.dataInicio);
   if (filters.dataFim) q = q.lte("created_at", filters.dataFim + "T23:59:59");
@@ -654,6 +595,95 @@ async function savePricingSettings(settings: PricingSettings): Promise<PricingSe
     taxaCartaoPercentual: parseDecimalInput(data.taxa_cartao_percentual),
     fretePor100Kg: data.frete_por_100kg == null ? 4 : parseDecimalInput(data.frete_por_100kg),
   };
+}
+
+
+function mapAppUser(r: any): AppUser {
+  return {
+    id: r.id,
+    username: r.username || "",
+    label: r.display_name || r.username || "",
+    isAdmin: r.is_admin === true,
+    active: r.active !== false,
+  };
+}
+
+async function hashUserPassword(username: string, password: string): Promise<string> {
+  const normalizedUsername = username.trim().toLowerCase();
+  const bytes = new TextEncoder().encode(`paviment:${normalizedUsername}:${password}`);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function fetchAppUsers(includeInactive = false): Promise<AppUser[]> {
+  let q = supabase
+    .from("app_users")
+    .select("id, username, display_name, is_admin, active")
+    .order("username");
+  if (!includeInactive) q = q.eq("active", true);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapAppUser);
+}
+
+async function authenticateAppUser(username: string, password: string): Promise<AppUser | null> {
+  const normalizedUsername = username.trim().toLowerCase();
+  const passwordHash = await hashUserPassword(normalizedUsername, password);
+  const { data, error } = await supabase
+    .from("app_users")
+    .select("id, username, display_name, is_admin, active")
+    .eq("username", normalizedUsername)
+    .eq("password_hash", passwordHash)
+    .eq("active", true)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? mapAppUser(data) : null;
+}
+
+async function createAppUser(user: { username: string; label: string; password: string; isAdmin: boolean }): Promise<void> {
+  const username = user.username.trim().toLowerCase();
+  const passwordHash = await hashUserPassword(username, user.password);
+  const { error } = await supabase
+    .from("app_users")
+    .insert({ username, display_name: user.label, password_hash: passwordHash, is_admin: user.isAdmin, active: true });
+  if (error) throw error;
+}
+
+async function updateAppUserPassword(username: string, password: string): Promise<void> {
+  const normalizedUsername = username.trim().toLowerCase();
+  const passwordHash = await hashUserPassword(normalizedUsername, password);
+  const { error } = await supabase
+    .from("app_users")
+    .update({ password_hash: passwordHash, updated_at: new Date().toISOString() })
+    .eq("username", normalizedUsername);
+  if (error) throw error;
+}
+
+async function updateAppUserAdminRole(username: string, isAdmin: boolean): Promise<void> {
+  if (!isAdmin) {
+    const { count, error: countError } = await supabase
+      .from("app_users")
+      .select("id", { count: "exact", head: true })
+      .eq("is_admin", true)
+      .eq("active", true);
+    if (countError) throw countError;
+    if ((count ?? 0) <= 1) throw new Error("O sistema precisa manter pelo menos um administrador ativo.");
+  }
+
+  const { error } = await supabase
+    .from("app_users")
+    .update({ is_admin: isAdmin, updated_at: new Date().toISOString() })
+    .eq("username", username)
+    .eq("active", true);
+  if (error) throw error;
+}
+
+async function deactivateAppUser(username: string): Promise<void> {
+  const { error } = await supabase
+    .from("app_users")
+    .update({ active: false, updated_at: new Date().toISOString() })
+    .eq("username", username);
+  if (error) throw error;
 }
 
 async function searchCustomers(q: string): Promise<Customer[]> {
@@ -868,12 +898,14 @@ async function deleteCustomer(id: string): Promise<void> {
   if (error) throw error;
 }
 
-async function getBudgetsForCustomer(customerId: string): Promise<Budget[]> {
-  const { data, error } = await supabase
+async function getBudgetsForCustomer(customerId: string, currentUser: AppUser): Promise<Budget[]> {
+  let q = supabase
     .from("budgets")
     .select("*")
     .eq("customer_id", customerId)
     .order("numero", { ascending: false });
+  if (currentUser.username !== "admin") q = q.eq("created_by", currentUser.username);
+  const { data, error } = await q;
   if (error) throw error;
   return (data || []).map((r) => mapBudget(r, []));
 }
@@ -888,10 +920,10 @@ async function getBudgetWithItems(budgetId: string): Promise<Budget> {
   return mapBudget(b, (items || []).map(mapItem));
 }
 
-async function createBudget(customerId: string): Promise<Budget> {
+async function createBudget(customerId: string, currentUser: AppUser): Promise<Budget> {
   const { data, error } = await supabase
     .from("budgets")
-    .insert({ customer_id: customerId, status: "rascunho", tabela_preco: 1, frete: 0, percentual_imposto: 0, forma_pagamento: "avista", parcelas_cartao: 1, desconto_pix_percentual: 0, desconto_pix_inclui_frete: false })
+    .insert({ customer_id: customerId, status: "rascunho", tabela_preco: 1, frete: 0, percentual_imposto: 0, forma_pagamento: "avista", parcelas_cartao: 1, desconto_pix_percentual: 0, desconto_pix_inclui_frete: false, created_by: currentUser.username })
     .select()
     .single();
   if (error) throw error;
@@ -911,14 +943,33 @@ async function runMigrations(): Promise<void> {
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_cidade TEXT;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS entrega_estado TEXT;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS forma_pagamento TEXT DEFAULT 'avista';
+      ALTER TABLE budgets ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT 'admin';
+      UPDATE budgets SET created_by = 'admin' WHERE created_by IS NULL;
+      ALTER TABLE budgets DROP CONSTRAINT IF EXISTS budgets_created_by_check;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS parcelas_cartao INTEGER DEFAULT 1;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS desconto_pix_percentual NUMERIC(5,2) DEFAULT 0;
       ALTER TABLE budgets ADD COLUMN IF NOT EXISTS desconto_pix_inclui_frete BOOLEAN DEFAULT FALSE;
-      ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS preco5 DECIMAL(12,4);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS descontinuado BOOLEAN DEFAULT FALSE;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS marca TEXT DEFAULT 'Villagres';
+      UPDATE products
+      SET marca = 'Villa Vinílicos'
+      WHERE marca IS DISTINCT FROM 'Villa Vinílicos'
+        AND (
+          referencia ~* '^(SPC|LVT|RP)([[:space:]._/-]|$)'
+          OR (COALESCE(referencia, '') || ' ' || COALESCE(linha, '') || ' ' || COALESCE(colecao, '') || ' ' || COALESCE(cor, '') || ' ' || COALESCE(formato, '') || ' ' || COALESCE(superficie, '')) ~* 'vin[ií]lic'
+        );
       ALTER TABLE products ADD COLUMN IF NOT EXISTS categoria_complementar TEXT;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS tipo_rejunte TEXT;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS tipo_embalagem TEXT;
+      CREATE TABLE IF NOT EXISTS pricing_settings (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        imposto_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
+        taxa_cartao_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
+        frete_por_100kg NUMERIC(10,2) NOT NULL DEFAULT 4,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      ALTER TABLE pricing_settings ADD COLUMN IF NOT EXISTS frete_por_100kg NUMERIC(10,2) NOT NULL DEFAULT 4;
       CREATE TABLE IF NOT EXISTS app_users (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         username TEXT NOT NULL UNIQUE,
@@ -932,17 +983,9 @@ async function runMigrations(): Promise<void> {
       ALTER TABLE app_users DISABLE ROW LEVEL SECURITY;
       INSERT INTO app_users (username, display_name, password_hash, is_admin, active)
       VALUES
-        ('admin', 'Administrador', '79416c9685c6baf019b311c43844d8d13e1b1c05c8bfcd814048b8719ddf2ee1', TRUE, TRUE),
-        ('vendas', 'Vendas', 'e95677a8dc1e007ad2de15c4a87042c39592c8d358a26b5d0130b9e6440297f4', FALSE, TRUE)
+        ('admin', 'Administrador', '${DEFAULT_PASSWORD_HASHES.admin}', TRUE, TRUE),
+        ('vendas', 'Vendas', '${DEFAULT_PASSWORD_HASHES.vendas}', FALSE, TRUE)
       ON CONFLICT (username) DO NOTHING;
-      CREATE TABLE IF NOT EXISTS pricing_settings (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        imposto_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
-        taxa_cartao_percentual NUMERIC(8,4) NOT NULL DEFAULT 0,
-        frete_por_100kg NUMERIC(10,2) NOT NULL DEFAULT 4,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-      ALTER TABLE pricing_settings ADD COLUMN IF NOT EXISTS frete_por_100kg NUMERIC(10,2) NOT NULL DEFAULT 4;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS cep TEXT;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS logradouro TEXT;
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS numero_end TEXT;
@@ -1023,10 +1066,10 @@ async function addBudgetItem(budgetId: string, item: {
   };
 }
 
-async function updateBudgetItem(id: string, areaM2: number, caixas: number, precoM2: number): Promise<void> {
+async function updateBudgetItem(id: string, areaM2: number, caixas: number, precoM2: number, subtotal: number): Promise<void> {
   const { error } = await supabase
     .from("budget_items")
-    .update({ area_m2: areaM2, caixas, subtotal: round2(areaM2 * precoM2) })
+    .update({ area_m2: areaM2, caixas, subtotal })
     .eq("id", id);
   if (error) throw error;
 }
@@ -1041,7 +1084,7 @@ async function deleteBudget(id: string): Promise<void> {
   if (error) throw error;
 }
 
-async function duplicateBudget(original: Budget): Promise<Budget> {
+async function duplicateBudget(original: Budget, currentUser: AppUser): Promise<Budget> {
   const { data, error } = await supabase
     .from("budgets")
     .insert({
@@ -1065,6 +1108,7 @@ async function duplicateBudget(original: Budget): Promise<Budget> {
       entrega_estado: original.entregaEstado || null,
       subtotal: original.subtotal,
       total_final: original.totalFinal,
+      created_by: currentUser.username,
     })
     .select()
     .single();
@@ -1103,6 +1147,82 @@ function isVillacolProduct(product?: Product | null): boolean {
   return product?.marca === "Villacol";
 }
 
+const NO_CARD_FEE_CATEGORIES = ["Rejunte", "Argamassa", "Niveladores/Cunhas"];
+const NO_FREIGHT_CATEGORIES = ["Rejunte", "Niveladores/Cunhas"];
+
+function shouldApplyProductTax(product?: Product | null): boolean {
+  return (product?.marca || "Villagres") === "Villagres";
+}
+
+function shouldApplyProductCardFee(product?: Product | null): boolean {
+  return !NO_CARD_FEE_CATEGORIES.includes(product?.categoriaComplementar || "");
+}
+
+function shouldApplyArgamassaCardFee(product: Product | null | undefined, paymentMethod: FormaPagamento): boolean {
+  return product?.categoriaComplementar === "Argamassa" && paymentMethod === "cartao";
+}
+
+function applyArgamassaCardFee(value: number, product: Product | null | undefined, paymentMethod: FormaPagamento, pricingSettings: PricingSettings): number {
+  if (!shouldApplyArgamassaCardFee(product, paymentMethod)) return round2(value);
+  return round2(value * (1 + parseDecimalInput(pricingSettings.taxaCartaoPercentual) / 100));
+}
+
+function shouldIncludeProductInFreight(product?: Product | null): boolean {
+  return !NO_FREIGHT_CATEGORIES.includes(product?.categoriaComplementar || "");
+}
+
+function hasVillaVinilicosSignature(product: Pick<Product, "referencia" | "linha" | "colecao" | "cor" | "formato" | "superficie" | "marca">): boolean {
+  const referencia = (product.referencia || "").trim();
+  const refUpper = referencia.toUpperCase();
+  const normalizedText = [product.referencia, product.linha, product.colecao, product.cor, product.formato, product.superficie, product.marca]
+    .filter(Boolean)
+    .join(" ")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  return /^(SPC|LVT|RP)[\s._/-]?/.test(refUpper) || refUpper === "SPC" || refUpper === "LVT" || refUpper === "RP" || normalizedText.includes("vinilico");
+}
+
+function hasVillaVinilicosRodapeSignature(product: Pick<Product, "referencia" | "linha" | "colecao" | "cor" | "formato" | "superficie" | "marca">): boolean {
+  const referencia = (product.referencia || "").trim().toUpperCase();
+  const normalizedText = [product.referencia, product.linha, product.colecao, product.cor, product.formato, product.superficie, product.marca]
+    .filter(Boolean)
+    .join(" ")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  return /^(RP)[\s._/-]?/.test(referencia) || referencia === "RP" || normalizedText.includes("rodape");
+}
+
+function normalizeProductBrand<T extends Product | Omit<Product, "id">>(product: T): T {
+  return hasVillaVinilicosSignature(product) ? { ...product, marca: "Villa Vinílicos" } : product;
+}
+
+function isVillaVinilicosProduct(product?: Product | null): boolean {
+  return product?.marca === "Villa Vinílicos" || (product ? hasVillaVinilicosSignature(product) : false);
+}
+
+function isCantoneiraProduct(product?: Product | null): boolean {
+  const normalizedLine = (product?.linha || "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  return normalizedLine === "cantoneira";
+}
+
+function isLinearMeterProduct(product?: Product | null): boolean {
+  return product
+    ? isCantoneiraProduct(product) || (isVillaVinilicosProduct(product) && hasVillaVinilicosRodapeSignature(product))
+    : false;
+}
+
+function getProductQuantityLabel(product?: Product | null, plural = false): string {
+  if (isLinearMeterProduct(product)) return plural ? "metros lineares" : "metro linear";
+  if (isVillacolProduct(product)) return getComplementaryUnitLabel(product, plural);
+  return plural ? "m²" : "m²";
+}
+
 function getComplementaryUnitLabel(product?: Product | null, plural = false): string {
   if (product?.categoriaComplementar === "Rejunte") return plural ? "potes" : "pote";
   if (product?.categoriaComplementar === "Argamassa") return plural ? "sacos" : "saco";
@@ -1116,9 +1236,28 @@ function calculateItemRealAreaM2(item: BudgetItem): number {
   return round2(caixas * m2PorCaixa);
 }
 
+function calculateRealLinearMeters(product: Product, requestedMeters: number, caixas: number): number {
+  const linearMetersPerBox = Number.isFinite(product.m2PorCaixa) ? product.m2PorCaixa : 0;
+  return linearMetersPerBox > 0 ? round2(caixas * linearMetersPerBox) : round2(requestedMeters);
+}
+
+function calculateItemSubtotal(product: Product, areaM2: number, caixas: number, precoM2: number): number {
+  const quantityBase = isLinearMeterProduct(product)
+    ? calculateRealLinearMeters(product, areaM2, caixas)
+    : isVillacolProduct(product) ? areaM2 : caixas * (product.m2PorCaixa || 0);
+  return round2(quantityBase * precoM2);
+}
+
 function calculateItemWeightKg(item: BudgetItem): number {
   const caixas = Number.isFinite(item.caixas) ? item.caixas : 0;
   const pesoPorCaixa = Number.isFinite(item.product?.pesoBrutoCx) ? item.product.pesoBrutoCx : 0;
+  const pesoPorMetroLinear = Number.isFinite(item.product?.pesoBrutoM2) ? item.product.pesoBrutoM2 : 0;
+  if (isLinearMeterProduct(item.product)) {
+    if (pesoPorCaixa > 0) return round2(caixas * pesoPorCaixa);
+    if (pesoPorMetroLinear > 0) {
+      return round2(calculateRealLinearMeters(item.product, item.areaM2, caixas) * pesoPorMetroLinear);
+    }
+  }
   return round2(caixas * pesoPorCaixa);
 }
 
@@ -1126,8 +1265,217 @@ function calculateBudgetWeightKg(items: BudgetItem[]): number {
   return round2(items.reduce((sum, item) => sum + calculateItemWeightKg(item), 0));
 }
 
+function inferExportItemPriceTable(item: BudgetItem, pricingSettings: PricingSettings): PriceTableOption {
+  for (const table of [1, 2, 3, 4, 5] as const) {
+    const basePrice = item.product[priceKey(table)] as number | null;
+    if (basePrice == null) continue;
+    const tablePrice = calculateProductFinalPrice(
+      item.product,
+      basePrice,
+      pricingSettings.impostoPercentual,
+      pricingSettings.taxaCartaoPercentual,
+    );
+    if (Math.abs(tablePrice - item.precoM2) < 0.01) return table;
+  }
+  return "TE";
+}
+
+async function exportBudgetToExcel(budgetSummary: Budget, customerName: string, pricingSettings: PricingSettings): Promise<void> {
+  const XLSX = await import("xlsx");
+  const budget = await getBudgetWithItems(budgetSummary.id);
+  const { data: customerData } = await supabase.from("customers").select("*").eq("id", budget.customerId).maybeSingle();
+  const customer = customerData ? mapCustomer(customerData) : null;
+  const pixOnlyCategories = ["Rejunte", "Niveladores/Cunhas"];
+  const villagresItems = budget.items.filter((item) => !isVillacolProduct(item.product));
+  const argamassaItems = budget.items.filter((item) => item.product?.categoriaComplementar === "Argamassa");
+  const pixOnlyItems = budget.items.filter((item) => pixOnlyCategories.includes(item.product?.categoriaComplementar || ""));
+  const paymentAdjustedSubtotal = (item: BudgetItem) => {
+    const subtotalWithCardFee = applyArgamassaCardFee(item.subtotal, item.product, budget.formaPagamento, pricingSettings);
+    return round2(subtotalWithCardFee * (budget.formaPagamento === "avista_pix" ? getProductPixPaymentFactor(item.product, pricingSettings) : 1));
+  };
+  const removePricingFactor = (item: BudgetItem) => {
+    const factor = getProductPricingFactor(item.product, pricingSettings);
+    return factor > 0 ? 1 / factor : 1;
+  };
+  const villagresSubtotal = round2(villagresItems.reduce((sum, item) => sum + paymentAdjustedSubtotal(item), 0));
+  const argamassaSubtotal = round2(argamassaItems.reduce((sum, item) => sum + paymentAdjustedSubtotal(item), 0));
+  const pixOnlyProductsSubtotal = round2(pixOnlyItems.reduce((sum, item) => sum + item.subtotal * removePricingFactor(item), 0));
+  const pixDiscount = budget.formaPagamento === "avista_pix"
+    ? round2(villagresSubtotal * Math.min(budget.descontoPixPercentual, 3) / 100)
+    : 0;
+  const villagresTotal = round2(villagresSubtotal - pixDiscount);
+  const pixOnlyTotal = round2(pixOnlyProductsSubtotal + budget.frete);
+  const generalTotal = round2(villagresTotal + argamassaSubtotal + pixOnlyTotal);
+  const paymentLabel = budget.formaPagamento === "cartao"
+    ? `Cartão de crédito - ${budget.parcelasCartao}x`
+    : budget.formaPagamento === "avista_pix" ? "À vista PIX" : "Débito";
+  const installmentLabel = (total: number) => budget.formaPagamento === "cartao" && budget.parcelasCartao > 1
+    ? `${budget.parcelasCartao} x ${fmtBRL(round2(total / budget.parcelasCartao))}`
+    : fmtBRL(total);
+  const totalWeight = calculateBudgetWeightKg(budget.items);
+  const totalBoxes = budget.items.reduce((sum, item) => sum + item.caixas, 0);
+  const totalAreaM2 = round2(budget.items
+    .filter((item) => !isLinearMeterProduct(item.product) && !isVillacolProduct(item.product))
+    .reduce((sum, item) => sum + item.areaM2, 0));
+  const totalLinearMeters = round2(budget.items
+    .filter((item) => isLinearMeterProduct(item.product))
+    .reduce((sum, item) => sum + calculateRealLinearMeters(item.product, item.areaM2, item.caixas), 0));
+  const deliveryAddress = budget.enderecoEntrega || [
+    budget.entregaLogradouro, budget.entregaNumero, budget.entregaComplemento, budget.entregaBairro,
+    budget.entregaCidade, budget.entregaEstado, budget.entregaCep,
+  ].filter(Boolean).join(", ");
+  const rows: (string | number)[][] = [
+    ["ORÇAMENTO", `#${budget.numero}`],
+    ["Cliente", customerName],
+    ["CPF", customer?.cpf || "-"],
+    ["Telefone", customer?.telefone || "-"],
+    ["E-mail", customer?.email || "-"],
+    ["Data", fmtDate(budget.createdAt)],
+    ["Status", STATUS_LABELS[budget.status]],
+    ["Condição de pagamento", paymentLabel],
+    ["Tabela padrão do orçamento", `Tabela ${budget.tabelaPreco}`],
+    ["Imposto configurado (%)", pricingSettings.impostoPercentual],
+    ["Taxa de cartão configurada (%)", pricingSettings.taxaCartaoPercentual],
+    [],
+    [
+      "Referência", "Produto", "Marca", "Categoria", "Formato", "Superfície", "Unidade",
+      "Tabela utilizada", "Preço-base", "Imposto (%)", "Valor do imposto", "Taxa cartão (%)",
+      "Valor taxa cartão", "Preço unitário final", "Quantidade solicitada", "Caixas/embalagens",
+      "Quantidade real", "Peso total (kg)", "Subtotal",
+    ],
+  ];
+
+  budget.items.forEach((item) => {
+    const table = inferExportItemPriceTable(item, pricingSettings);
+    const basePrice = table === "TE" ? item.precoM2 : Number(item.product[priceKey(table)] || 0);
+    const taxPercent = table !== "TE" && shouldApplyProductTax(item.product) ? pricingSettings.impostoPercentual : 0;
+    const appliesStandardCardFee = table !== "TE" && shouldApplyProductCardFee(item.product);
+    const appliesArgamassaCardFee = shouldApplyArgamassaCardFee(item.product, budget.formaPagamento);
+    const cardFeePercent = appliesStandardCardFee || appliesArgamassaCardFee ? pricingSettings.taxaCartaoPercentual : 0;
+    const isLinear = isLinearMeterProduct(item.product);
+    const isComplementary = isVillacolProduct(item.product);
+    const realQuantity = isLinear
+      ? calculateRealLinearMeters(item.product, item.areaM2, item.caixas)
+      : isComplementary ? item.areaM2 : calculateItemRealAreaM2(item);
+    const unit = isLinear ? "metro linear" : isComplementary ? getComplementaryUnitLabel(item.product) : "m²";
+    rows.push([
+      item.product.referencia,
+      item.product.linha,
+      item.product.marca || "Villagres",
+      item.product.categoriaComplementar || item.product.colecao || "-",
+      item.product.formato || "-",
+      item.product.superficie || "-",
+      unit,
+      table === "TE" ? "Tabela Especial" : `Tabela ${table}`,
+      round2(basePrice),
+      taxPercent,
+      round2(basePrice * taxPercent / 100),
+      cardFeePercent,
+      round2(basePrice * cardFeePercent / 100),
+      applyArgamassaCardFee(item.precoM2, item.product, budget.formaPagamento, pricingSettings),
+      item.areaM2,
+      item.caixas,
+      realQuantity,
+      calculateItemWeightKg(item),
+      applyArgamassaCardFee(item.subtotal, item.product, budget.formaPagamento, pricingSettings),
+    ]);
+  });
+
+  rows.push(
+    [],
+    [...Array(17).fill(""), "SUBTOTAL DOS PRODUTOS", round2(villagresSubtotal + argamassaSubtotal + pixOnlyProductsSubtotal)],
+    [...Array(17).fill(""), "FRETE", budget.frete],
+    [...Array(17).fill(""), `DESCONTO PIX (${budget.descontoPixPercentual}%)`, -pixDiscount],
+    [...Array(17).fill(""), "TOTAL FINAL", generalTotal],
+  );
+
+  const worksheet = XLSX.utils.aoa_to_sheet(rows);
+  worksheet["!cols"] = [
+    { wch: 16 }, { wch: 30 }, { wch: 18 }, { wch: 22 }, { wch: 14 }, { wch: 18 }, { wch: 16 },
+    { wch: 18 }, { wch: 14 }, { wch: 13 }, { wch: 17 }, { wch: 16 }, { wch: 18 }, { wch: 20 },
+    { wch: 21 }, { wch: 18 }, { wch: 17 }, { wch: 17 }, { wch: 16 },
+  ];
+  const productHeaderRow = 13;
+  worksheet["!autofilter"] = { ref: `A${productHeaderRow}:S${Math.max(productHeaderRow, productHeaderRow + budget.items.length)}` };
+  for (let row = productHeaderRow + 1; row <= productHeaderRow + budget.items.length; row += 1) {
+    for (const column of ["I", "K", "M", "N", "S"]) {
+      const cell = worksheet[`${column}${row}`];
+      if (cell) cell.z = 'R$ #,##0.00';
+    }
+  }
+  for (const row of [productHeaderRow + budget.items.length + 2, productHeaderRow + budget.items.length + 3, productHeaderRow + budget.items.length + 5]) {
+    const cell = worksheet[`S${row}`];
+    if (cell) cell.z = 'R$ #,##0.00';
+  }
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Orçamento");
+
+  const financialRows: (string | number)[][] = [
+    ["RESUMO DO ORÇAMENTO", `#${budget.numero}`],
+    ["Cliente", customerName],
+    ["CPF", customer?.cpf || "-"],
+    ["Telefone", customer?.telefone || "-"],
+    ["E-mail", customer?.email || "-"],
+    ["Vendedor", budget.createdBy || "-"],
+    ["Data", fmtDate(budget.createdAt)],
+    ["Status", STATUS_LABELS[budget.status]],
+    ["Tabela padrão", `Tabela ${budget.tabelaPreco}`],
+    ["Endereço de entrega", deliveryAddress || "-"],
+    ["Observações", budget.observacoes || "-"],
+    [],
+    ["RESUMO FINANCEIRO"],
+    [],
+    ["PRODUTOS VILLAGRES / VILLA VINÍLICOS"],
+    ["Total do item", villagresSubtotal],
+    ["Condição de pagamento", paymentLabel],
+    ["Valor das parcelas", installmentLabel(villagresTotal)],
+    ...(pixDiscount > 0 ? [[`Desconto PIX (${budget.descontoPixPercentual}%)`, -pixDiscount] as (string | number)[]] : []),
+    [budget.formaPagamento === "cartao" ? `Subtotal Cartão ${budget.parcelasCartao}x` : budget.formaPagamento === "avista_pix" ? "Subtotal PIX" : "Subtotal Débito", villagresTotal],
+    [],
+    ...(argamassaSubtotal > 0 ? [
+      ["ARGAMASSAS"],
+      ["Total do item", argamassaSubtotal],
+      ["Condição de pagamento", paymentLabel],
+      ["Valor das parcelas", installmentLabel(argamassaSubtotal)],
+      ["Informação", "Cliente receberá um Link de Pagamento"],
+      ["Subtotal", argamassaSubtotal],
+      [],
+    ] as (string | number)[][] : []),
+    ["FRETE + REJUNTES/NIVELADORES VILLACOL (PIX)"],
+    ["Total do item", pixOnlyProductsSubtotal],
+    ["Frete", budget.frete],
+    ["Condição de pagamento", "PIX"],
+    ["Subtotal PIX", pixOnlyTotal],
+    [],
+    ["TOTAL GERAL", generalTotal],
+    [],
+    ["RESUMO DE ENTREGA"],
+    ["Total de caixas/embalagens", totalBoxes],
+    ["Total de m²", totalAreaM2],
+    ["Total de metros lineares", totalLinearMeters],
+    ["Peso total da carga (kg)", totalWeight],
+    [],
+    ["PARÂMETROS APLICADOS"],
+    ["Imposto configurado (%)", pricingSettings.impostoPercentual],
+    ["Taxa de cartão configurada (%)", pricingSettings.taxaCartaoPercentual],
+    ["Desconto PIX configurado (%)", budget.descontoPixPercentual],
+  ];
+  const financialWorksheet = XLSX.utils.aoa_to_sheet(financialRows);
+  financialWorksheet["!cols"] = [{ wch: 42 }, { wch: 42 }];
+  financialRows.forEach((row, index) => {
+    if (typeof row[1] === "number" && !String(row[0]).includes("(%)") && !String(row[0]).includes("caixas") && !String(row[0]).includes("m²") && !String(row[0]).includes("metros") && !String(row[0]).includes("kg")) {
+      const cell = financialWorksheet[`B${index + 1}`];
+      if (cell) cell.z = 'R$ #,##0.00';
+    }
+  });
+  XLSX.utils.book_append_sheet(workbook, financialWorksheet, "Resumo Financeiro");
+  XLSX.writeFile(workbook, `orcamento-${budget.numero}.xlsx`);
+}
+
 function calculateFreightByWeight(items: BudgetItem[], fretePor100Kg: number | string | null | undefined): number {
-  return round2((calculateBudgetWeightKg(items) / 100) * parseDecimalInput(fretePor100Kg));
+  const freightItems = items.filter((item) => shouldIncludeProductInFreight(item.product));
+  return round2((calculateBudgetWeightKg(freightItems) / 100) * parseDecimalInput(fretePor100Kg));
 }
 
 function fmtDate(iso: string): string {
@@ -1156,7 +1504,7 @@ const LOCAL_USO: Record<number, string> = {
   1: "Parede/Piso", 2: "Parede", 3: "Piso Interno", 4: "Piso Externo",
 };
 
-function priceKey(t: 1 | 2 | 3 | 4): keyof Product {
+function priceKey(t: 1 | 2 | 3 | 4 | 5): keyof Product {
   return `preco${t}` as keyof Product;
 }
 
@@ -1178,6 +1526,32 @@ function calculateFinalPrice(
   return round2(base * (1 + (imposto + taxa) / 100));
 }
 
+function calculateProductFinalPrice(
+  product: Product | null | undefined,
+  precoBase: number | null | undefined,
+  impostoPercentual: number | string | null | undefined,
+  taxaCartaoPercentual: number | string | null | undefined
+): number {
+  return calculateFinalPrice(
+    precoBase,
+    shouldApplyProductTax(product) ? impostoPercentual : 0,
+    shouldApplyProductCardFee(product) ? taxaCartaoPercentual : 0
+  );
+}
+
+function getProductPricingFactor(product: Product | null | undefined, pricingSettings: PricingSettings): number {
+  const imposto = shouldApplyProductTax(product) ? parseDecimalInput(pricingSettings.impostoPercentual) : 0;
+  const taxa = shouldApplyProductCardFee(product) ? parseDecimalInput(pricingSettings.taxaCartaoPercentual) : 0;
+  return 1 + (imposto + taxa) / 100;
+}
+
+function getProductPixPaymentFactor(product: Product | null | undefined, pricingSettings: PricingSettings): number {
+  const pricingFactor = getProductPricingFactor(product, pricingSettings);
+  const imposto = shouldApplyProductTax(product) ? parseDecimalInput(pricingSettings.impostoPercentual) : 0;
+  const pixFactor = 1 + imposto / 100;
+  return pricingFactor > 0 ? pixFactor / pricingFactor : 1;
+}
+
 function Spinner({ size = 20 }: { size?: number }) {
   return (
     <div style={{ width: size, height: size }}
@@ -1185,10 +1559,49 @@ function Spinner({ size = 20 }: { size?: number }) {
   );
 }
 
+function BudgetDeleteDialog({ budgetNumber, deleting, onCancel, onConfirm }: {
+  budgetNumber: number;
+  deleting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-4">
+      <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-2xl">
+        <div className="flex items-start gap-3">
+          <div className="rounded-full bg-red-100 text-red-700 p-2"><Trash2 size={18} /></div>
+          <div>
+            <h3 className="font-semibold">Excluir orçamento #{budgetNumber}?</h3>
+            <p className="mt-1 text-sm text-muted-foreground">Esta ação não pode ser desfeita.</p>
+          </div>
+        </div>
+        <div className="mt-6 flex justify-end gap-2">
+          <button onClick={onCancel} disabled={deleting}
+            className="rounded-xl border border-border px-4 py-2 text-sm hover:bg-muted disabled:opacity-50">
+            Cancelar
+          </button>
+          <button onClick={onConfirm} disabled={deleting}
+            className="rounded-xl bg-destructive px-4 py-2 text-sm text-destructive-foreground hover:opacity-90 disabled:opacity-50 flex items-center gap-2">
+            {deleting ? <Spinner size={13} /> : <Trash2 size={13} />} Excluir
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StatusPill({ status }: { status: BudgetStatus }) {
   return (
     <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${STATUS_PILL[status]}`}>
       {STATUS_LABELS[status]}
+    </span>
+  );
+}
+
+function BudgetOwnerPill({ createdBy }: { createdBy: string }) {
+  return (
+    <span className="text-[10px] text-muted-foreground border border-border rounded px-1">
+      {createdBy || "admin"}
     </span>
   );
 }
@@ -1259,9 +1672,9 @@ function ProductModal({
   allProducts, tabelaPreco, pricingSettings, onSelect, onClose,
 }: {
   allProducts: Product[];
-  tabelaPreco: 1 | 2 | 3 | 4;
+  tabelaPreco: 1 | 2 | 3 | 4 | 5;
   pricingSettings?: PricingSettings;
-  onSelect: (product: Product, areaM2: number, tabelaPreco: 1 | 2 | 3 | 4) => void;
+  onSelect: (product: Product, areaM2: number, tabelaPreco: PriceTableOption, specialPrice?: number) => void;
   onClose: () => void;
 }) {
   const [q, setQ] = useState("");
@@ -1272,8 +1685,9 @@ function ProductModal({
   const [localUso, setLocalUso] = useState("");
   const [selected, setSelected] = useState<Product | null>(null);
   const [areaInput, setAreaInput] = useState("");
-  const [selectedTabela, setSelectedTabela] = useState<1 | 2 | 3 | 4>(tabelaPreco);
-  const pk = priceKey(selectedTabela);
+  const [selectedTabela, setSelectedTabela] = useState<PriceTableOption>(tabelaPreco);
+  const [specialPriceInput, setSpecialPriceInput] = useState("");
+  const pk = selectedTabela === "TE" ? null : priceKey(selectedTabela);
   const safeProducts = Array.isArray(allProducts) ? allProducts : [];
   const effectivePricingSettings = pricingSettings || { impostoPercentual: 0, taxaCartaoPercentual: 0, fretePor100Kg: 4 };
 
@@ -1293,20 +1707,24 @@ function ProductModal({
   function confirmAdd() {
     if (!selected) return;
     const area = parseFloat(areaInput.replace(",", "."));
-    if (!area || area <= 0) { toast.error(isVillacolProduct(selected) ? "Informe a quantidade" : "Informe a área em m²"); return; }
-    onSelect(selected, area, selectedTabela);
+    if (!area || area <= 0) { toast.error(isVillacolProduct(selected) || isLinearMeterProduct(selected) ? "Informe a quantidade" : "Informe a área em m²"); return; }
+    const specialPrice = selectedTabela === "TE" ? parseDecimalInput(specialPriceInput) : undefined;
+    if (selectedTabela === "TE" && (!specialPrice || specialPrice <= 0)) { toast.error("Informe um valor válido para a Tabela Especial."); return; }
+    onSelect(selected, area, selectedTabela, specialPrice);
   }
 
   const superficies = [...new Set(safeProducts.map((p) => p.superficie).filter(Boolean))].sort();
   const formatos = [...new Set(safeProducts.map((p) => p.formato).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true }));
 
   if (selected) {
-    const priceBase = selected[pk] as number | null;
-    const price = priceBase != null ? calculateFinalPrice(priceBase, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
+    const priceBase = pk ? selected[pk] as number | null : null;
+    const specialPrice = parseDecimalInput(specialPriceInput);
+    const price = selectedTabela === "TE" ? (specialPrice > 0 ? specialPrice : null) : priceBase != null ? calculateProductFinalPrice(selected, priceBase, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
     const area = parseFloat(areaInput.replace(",", ".")) || 0;
-    const caixas = selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : 0;
     const selectedIsVillacol = isVillacolProduct(selected);
-    const selectedUnitLabel = getComplementaryUnitLabel(selected, caixas !== 1);
+    const selectedIsLinearMeter = isLinearMeterProduct(selected);
+    const caixas = selectedIsLinearMeter ? (selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : Math.ceil(area)) : selected.m2PorCaixa > 0 ? Math.ceil(area / selected.m2PorCaixa) : 0;
+    const selectedUnitLabel = selectedIsLinearMeter ? getProductQuantityLabel(selected, area !== 1) : getComplementaryUnitLabel(selected, caixas !== 1);
 
     return (
       <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
@@ -1329,45 +1747,63 @@ function ProductModal({
               <>
                 <p className="text-sm text-muted-foreground mt-0.5">{selected.colecao} · {selected.superficie}</p>
                 <p className="text-xs text-muted-foreground mt-0.5 font-mono">{selected.formato} · Ref: {selected.referencia}</p>
-                <p className="text-xs text-muted-foreground">{LOCAL_USO[selected.localUso]} · {selected.m2PorCaixa} m²/cx · {selected.espessuraMm}mm</p>
+                <p className="text-xs text-muted-foreground">{selectedIsLinearMeter ? "Venda por metro linear" : `${LOCAL_USO[selected.localUso]} · ${selected.m2PorCaixa} m²/cx · ${selected.espessuraMm}mm`}</p>
               </>
             )}
           </div>
           <div className="mb-4">
             <p className="text-xs font-medium text-muted-foreground mb-1.5">Tabela de preço deste produto</p>
-            <div className="grid grid-cols-4 gap-1.5">
-              {([1, 2, 3, 4] as const).map((t) => (
+            <div className="grid grid-cols-6 gap-1.5">
+              {([1, 2, 3, 4, 5] as const).map((t) => (
                 <button key={t} type="button" onClick={() => setSelectedTabela(t)}
                   className={`rounded-lg py-1.5 text-xs font-semibold border transition-colors ${selectedTabela === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
                   Tabela {t}
                 </button>
               ))}
+              <button type="button" onClick={() => setSelectedTabela("TE")}
+                className={`rounded-lg py-1.5 text-xs font-semibold border transition-colors ${selectedTabela === "TE" ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                TE
+              </button>
             </div>
+            {selectedTabela === "TE" && (
+              <div className="mt-2">
+                <label className="block text-xs font-medium text-muted-foreground mb-1">Valor especial {selectedIsLinearMeter ? "por metro linear" : selectedIsVillacol ? "por unidade" : "por m²"}</label>
+                <input type="text" value={specialPriceInput} onChange={(e) => setSpecialPriceInput(e.target.value)}
+                  placeholder="Ex: 129,90"
+                  className="w-full border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono" />
+              </div>
+            )}
           </div>
           {price ? (
             <div className="bg-primary/8 rounded-xl p-3 mb-4 flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Tabela {selectedTabela}</span>
+              <span className="text-sm text-muted-foreground">{selectedTabela === "TE" ? "Tabela Especial" : `Tabela ${selectedTabela}`}</span>
               <span className="text-xl font-semibold text-primary font-mono">
-                {fmtBRL(price)}<span className="text-sm font-normal text-muted-foreground">{selectedIsVillacol ? "/un." : "/m²"}</span>
+                {fmtBRL(price)}<span className="text-sm font-normal text-muted-foreground">{selectedIsLinearMeter ? "/m linear" : selectedIsVillacol ? "/un." : "/m²"}</span>
               </span>
             </div>
           ) : (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 flex items-center gap-2 text-sm text-amber-700">
-              <AlertTriangle size={14} /> Preço não disponível para tabela {selectedTabela}
+              <AlertTriangle size={14} /> {selectedTabela === "TE" ? "Informe o valor da Tabela Especial" : `Preço não disponível para tabela ${selectedTabela}`}
             </div>
           )}
-          <label className="block text-xs font-medium text-muted-foreground mb-1">{selectedIsVillacol ? `Quantidade de ${getComplementaryUnitLabel(selected, true)}` : "Área necessária (m²)"}</label>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">{selectedIsLinearMeter ? "Quantidade em metros lineares" : selectedIsVillacol ? `Quantidade de ${getComplementaryUnitLabel(selected, true)}` : "Área necessária (m²)"}</label>
           <input type="text" value={areaInput} onChange={(e) => setAreaInput(e.target.value)}
-            placeholder={selectedIsVillacol ? "Ex: 10" : "Ex: 45,50"} autoFocus
+            placeholder={selectedIsVillacol || selectedIsLinearMeter ? "Ex: 10" : "Ex: 45,50"} autoFocus
             onKeyDown={(e) => e.key === "Enter" && confirmAdd()}
             className="w-full border border-border rounded-xl px-4 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 mb-3 font-mono" />
           {area > 0 && selected.m2PorCaixa > 0 && (
             <div className="bg-muted rounded-xl p-3 mb-4 text-sm space-y-1.5">
               <div className="flex justify-between text-muted-foreground">
-                <span>{selectedIsVillacol ? "Quantidade calculada" : "Caixas necessárias"}</span>
-                <span className="font-mono font-medium text-foreground">{caixas} {selectedIsVillacol ? selectedUnitLabel : "cx"}</span>
+                <span>{selectedIsVillacol ? "Quantidade" : "Caixas necessárias"}</span>
+                <span className="font-mono font-medium text-foreground">{`${caixas} ${selectedIsVillacol ? selectedUnitLabel : "cx"}`}</span>
               </div>
-              {!selectedIsVillacol && (
+              {selectedIsLinearMeter && (
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Metragem linear real</span>
+                  <span className="font-mono text-foreground">{calculateRealLinearMeters(selected, area, caixas).toFixed(2)} ml</span>
+                </div>
+              )}
+              {!selectedIsVillacol && !selectedIsLinearMeter && (
                 <div className="flex justify-between text-muted-foreground">
                   <span>m² real (arredondado)</span>
                   <span className="font-mono text-foreground">{(caixas * selected.m2PorCaixa).toFixed(2)} m²</span>
@@ -1376,7 +1812,7 @@ function ProductModal({
               {price && (
                 <div className="flex justify-between pt-1.5 border-t border-border font-medium">
                   <span>Subtotal estimado</span>
-                  <span className="font-mono text-primary">{fmtBRL(area * price)}</span>
+                  <span className="font-mono text-primary">{fmtBRL(calculateItemSubtotal(selected, area, caixas, price))}</span>
                 </div>
               )}
             </div>
@@ -1412,20 +1848,24 @@ function ProductModal({
           </div>
           <div className="flex items-center gap-1.5 border border-border rounded-xl px-3 py-2 bg-muted/30">
             <span className="text-xs text-muted-foreground mr-1">Tabela do produto:</span>
-            {([1, 2, 3, 4] as const).map((t) => (
+            {([1, 2, 3, 4, 5] as const).map((t) => (
               <button key={t} type="button" onClick={() => setSelectedTabela(t)}
                 className={`w-7 h-6 rounded text-xs font-semibold transition-all ${selectedTabela === t ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>
                 {t}
               </button>
             ))}
+            <button type="button" onClick={() => setSelectedTabela("TE")}
+              className={`w-8 h-6 rounded text-xs font-semibold transition-all ${selectedTabela === "TE" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>
+              TE
+            </button>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
             <select value={marcaFiltro} onChange={(e) => setMarcaFiltro(e.target.value)}
               className="border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
               <option value="">Todas as marcas</option>
               <option value="Villagres">Villagres</option>
-              <option value="Villa Vinílicos">Villa Vinílicos</option>
               <option value="Villacol">Villacol</option>
+              <option value="Villa Vinílicos">Villa Vinílicos</option>
             </select>
             <select value={categoriaFiltro} onChange={(e) => setCategoriaFiltro(e.target.value)}
               className="border border-border rounded-lg px-3 py-2 text-xs bg-input-background focus:outline-none">
@@ -1462,8 +1902,8 @@ function ProductModal({
           ) : (
             <div className="divide-y divide-border">
               {results.map((p) => {
-                const price = p[pk] as number | null;
-                const finalPrice = price != null ? calculateFinalPrice(price, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
+                const price = pk ? p[pk] as number | null : null;
+                const finalPrice = selectedTabela === "TE" ? null : price != null ? calculateProductFinalPrice(p, price, effectivePricingSettings.impostoPercentual, effectivePricingSettings.taxaCartaoPercentual) : null;
                 return (
                   <button key={p.id} onClick={() => setSelected(p)}
                     className="w-full text-left px-5 py-3 hover:bg-muted/50 transition-colors group">
@@ -1475,14 +1915,14 @@ function ProductModal({
                           {p.cor && p.cor !== "única" && p.cor !== "-"
                             ? <span className="text-muted-foreground font-normal"> · {p.cor}</span> : null}
                         </p>
-                        <p className="text-xs text-muted-foreground mt-0.5">{p.marca === "Villacol" ? [p.categoriaComplementar, p.tipoRejunte || p.tipoEmbalagem].filter(Boolean).join(" · ") : `${p.formato} · ${p.superficie} · ${LOCAL_USO[p.localUso]}`}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">{p.marca === "Villacol" ? [p.categoriaComplementar, p.tipoRejunte || p.tipoEmbalagem].filter(Boolean).join(" · ") : isVillaVinilicosProduct(p) ? [p.colecao, p.formato || "Metro linear"].filter(Boolean).join(" · ") : `${p.formato} · ${p.superficie} · ${LOCAL_USO[p.localUso]}`}</p>
                         <p className="text-xs text-muted-foreground font-mono">{p.referencia} · {p.colecao}</p>
                       </div>
                       <div className="text-right shrink-0">
                         {finalPrice != null
-                          ? <p className="text-sm font-semibold text-primary font-mono">{fmtBRL(finalPrice)}/m²</p>
+                          ? <p className="text-sm font-semibold text-primary font-mono">{fmtBRL(finalPrice)}/{isLinearMeterProduct(p) ? "m linear" : "m²"}</p>
                           : <p className="text-xs text-amber-600">Consultar</p>}
-                        <p className="text-xs text-muted-foreground">{p.m2PorCaixa} m²/cx</p>
+                        <p className="text-xs text-muted-foreground">{isLinearMeterProduct(p) ? "Venda por metro linear" : `${p.m2PorCaixa} m²/cx`}</p>
                       </div>
                     </div>
                   </button>
@@ -1499,9 +1939,9 @@ function ProductModal({
 // ── Budget Editor ─────────────────────────────────────────────────
 
 function BudgetEditor({
-  budget: initBudget, allProducts, pricingSettings, customer, onBack, onGoHome, onBudgetChange, onOpenBudget,
+  budget: initBudget, allProducts, pricingSettings, customer, currentUser, onBack, onGoHome, onBudgetChange, onOpenBudget,
 }: {
-  budget: Budget; allProducts: Product[]; pricingSettings: PricingSettings; customer: Customer;
+  budget: Budget; allProducts: Product[]; pricingSettings: PricingSettings; customer: Customer; currentUser: AppUser;
   onBack: () => void; onGoHome: () => void; onBudgetChange: (b: Budget) => void;
   onOpenBudget?: (b: Budget) => void;
 }) {
@@ -1518,7 +1958,8 @@ function BudgetEditor({
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [editAreaInput, setEditAreaInput] = useState("");
-  const [editTabela, setEditTabela] = useState<1 | 2 | 3 | 4>(initBudget.tabelaPreco);
+  const [editTabela, setEditTabela] = useState<PriceTableOption>(initBudget.tabelaPreco);
+  const [editSpecialPriceInput, setEditSpecialPriceInput] = useState("");
   const [showSaveDialog, setShowSaveDialog] = useState(false); // unused but kept for type safety
   const [isDirty, setIsDirty] = useState(false);
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
@@ -1554,20 +1995,25 @@ function BudgetEditor({
 
   const isLocked = budget.status === "fechado";
   const villagresItems = budget.items.filter((item) => !isVillacolProduct(item.product));
+  const villaVinilicosItems = budget.items.filter((item) => isVillaVinilicosProduct(item.product));
   const villacolItems = budget.items.filter((item) => isVillacolProduct(item.product));
   const pixOnlyCategories = ["Rejunte", "Niveladores/Cunhas"];
   const topFinancialItems = budget.items.filter((item) => !pixOnlyCategories.includes(item.product?.categoriaComplementar || ""));
   const pixOnlyItems = budget.items.filter((item) => pixOnlyCategories.includes(item.product?.categoriaComplementar || ""));
-  const cardFactor = 1 + (pricingSettings.impostoPercentual + pricingSettings.taxaCartaoPercentual) / 100;
-  const taxOnlyFactor = 1 + pricingSettings.impostoPercentual / 100;
-  const pixPriceFactor = cardFactor > 0 ? taxOnlyFactor / cardFactor : 1;
-  const noTaxOrCardFactor = cardFactor > 0 ? 1 / cardFactor : 1;
-  const paymentPriceFactor = budget.formaPagamento === "avista_pix" ? pixPriceFactor : 1;
-  const villagresSubtotal = round2(villagresItems.reduce((sum, item) => sum + item.subtotal * paymentPriceFactor, 0));
+  const paymentAdjustedSubtotal = (item: BudgetItem) => {
+    const subtotalWithArgamassaCardFee = applyArgamassaCardFee(item.subtotal, item.product, budget.formaPagamento, pricingSettings);
+    return round2(subtotalWithArgamassaCardFee * (budget.formaPagamento === "avista_pix" ? getProductPixPaymentFactor(item.product, pricingSettings) : 1));
+  };
+  const removePricingFactor = (item: BudgetItem) => {
+    const pricingFactor = getProductPricingFactor(item.product, pricingSettings);
+    return pricingFactor > 0 ? 1 / pricingFactor : 1;
+  };
+  const villagresSubtotal = round2(villagresItems.reduce((sum, item) => sum + paymentAdjustedSubtotal(item), 0));
   const argamassaSubtotal = round2(topFinancialItems
     .filter((item) => item.product?.categoriaComplementar === "Argamassa")
-    .reduce((sum, item) => sum + item.subtotal * paymentPriceFactor, 0));
-  const topSubtotalBeforeDiscount = round2(villagresSubtotal + argamassaSubtotal);
+    .reduce((sum, item) => sum + paymentAdjustedSubtotal(item), 0));
+  const topSubtotalBeforeDiscount = villagresSubtotal;
+  const argamassaTotal = argamassaSubtotal;
   const topSubtotalLabel = budget.formaPagamento === "cartao"
     ? `Subtotal Cartão ${budget.parcelasCartao}x`
     : budget.formaPagamento === "avista_pix"
@@ -1575,10 +2021,31 @@ function BudgetEditor({
       : "Subtotal Débito";
   const topPixDiscount = budget.formaPagamento === "avista_pix" ? round2(topSubtotalBeforeDiscount * Math.min(budget.descontoPixPercentual, 3) / 100) : 0;
   const topTotal = round2(topSubtotalBeforeDiscount - topPixDiscount);
-  const pixOnlyProductsSubtotal = round2(pixOnlyItems.reduce((sum, item) => sum + item.subtotal * noTaxOrCardFactor, 0));
+  const cardInstallmentLabel = budget.formaPagamento === "cartao" && budget.parcelasCartao > 1
+    ? `${budget.parcelasCartao} x ${fmtBRL(round2(topTotal / budget.parcelasCartao))}`
+    : "";
+  const topInstallmentValueLabel = cardInstallmentLabel || fmtBRL(topTotal);
+  const cardInstallmentLabelPrint = budget.formaPagamento === "cartao" && budget.parcelasCartao > 1
+    ? `${budget.parcelasCartao} x ${fmtBRL(round2(topTotal / budget.parcelasCartao))}`
+    : "";
+  const paymentConditionLabel = budget.formaPagamento === "cartao"
+    ? `Cartão ${budget.parcelasCartao}x`
+    : budget.formaPagamento === "avista_pix"
+      ? "À vista PIX"
+      : "Débito";
+  const argamassaInstallmentLabel = budget.formaPagamento === "cartao" && budget.parcelasCartao > 1
+    ? `${budget.parcelasCartao} x ${fmtBRL(round2(argamassaTotal / budget.parcelasCartao))}`
+    : fmtBRL(argamassaTotal);
+  const pixOnlyProductsSubtotal = round2(pixOnlyItems.reduce((sum, item) => sum + item.subtotal * removePricingFactor(item), 0));
   const pixOnlySubtotal = round2(pixOnlyProductsSubtotal + budget.frete);
-  const generalTotal = round2(topTotal + pixOnlySubtotal);
+  const generalTotal = round2(topTotal + argamassaTotal + pixOnlySubtotal);
   const totalWeightKg = calculateBudgetWeightKg(budget.items);
+  const totalAreaM2 = round2(budget.items
+    .filter((item) => !isLinearMeterProduct(item.product) && !isVillacolProduct(item.product))
+    .reduce((sum, item) => sum + item.areaM2, 0));
+  const totalLinearMeters = round2(budget.items
+    .filter((item) => isLinearMeterProduct(item.product))
+    .reduce((sum, item) => sum + calculateRealLinearMeters(item.product, item.areaM2, item.caixas), 0));
   const suggestedFreightByWeight = calculateFreightByWeight(budget.items, pricingSettings.fretePor100Kg);
 
   function formatFreightInput(value: number): string {
@@ -1599,7 +2066,7 @@ function BudgetEditor({
   async function handleDuplicate() {
     setDuplicating(true);
     try {
-      const newBudget = await duplicateBudget(budget);
+      const newBudget = await duplicateBudget(budget, currentUser);
       const full = await getBudgetWithItems(newBudget.id);
       setShowDuplicateModal(false);
       toast.success(`Orçamento #${full.numero} criado como cópia!`);
@@ -1611,8 +2078,29 @@ function BudgetEditor({
     finally { setDuplicating(false); }
   }
   const canSaveDraft = !isLocked && (budget.status === "rascunho" || isDirty);
+  const hasPendingChanges = isDirty || editFinancials || editingItemId !== null;
+  const canPrintBudget = !hasPendingChanges && !saving;
 
   function markDirty() { setIsDirty(true); }
+
+  function remindToSave(message: string) {
+    toast.warning(`${message} Clique em “Salvar Rascunho” antes de gerar o PDF.`, {
+      id: "budget-save-reminder",
+      duration: 8000,
+    });
+  }
+
+  function remindToSavePaymentChanges(message: string) {
+    toast.warning(`${message} Primeiro clique em “Salvar” para visualizar as alterações na tela e, depois, em “Salvar Rascunho” antes de Imprimir, Enviar ou Finalizar.`, {
+      id: "budget-save-reminder",
+      duration: 10000,
+    });
+  }
+
+  function handleEditTableChange(table: PriceTableOption) {
+    setEditTabela(table);
+    remindToSave("A tabela de preço do item foi alterada.");
+  }
 
   function getSentBudgetDraftPatch(): Partial<Budget> {
     if (budget.status !== "enviado_cliente") return {};
@@ -1622,7 +2110,8 @@ function BudgetEditor({
 
   function updateLocal(patch: Partial<Budget>) {
     const updated = { ...budget, ...patch };
-    const subtotal = updated.items.reduce((s, i) => s + i.subtotal, 0);
+    const subtotal = updated.items.reduce((sum, item) =>
+      sum + applyArgamassaCardFee(item.subtotal, item.product, updated.formaPagamento, pricingSettings), 0);
     const totalFinal = calculateBudgetTotal(subtotal, updated.frete, updated.formaPagamento, updated.descontoPixPercentual, updated.descontoPixIncluiFrete);
     const final = { ...updated, subtotal: round2(subtotal), totalFinal: round2(totalFinal) };
     if (Object.prototype.hasOwnProperty.call(patch, "frete")) {
@@ -1649,32 +2138,37 @@ function BudgetEditor({
     });
   }
 
-  async function handleAddProduct(product: Product, areaM2: number, itemTabelaPreco: 1 | 2 | 3 | 4) {
+  async function handleAddProduct(product: Product, areaM2: number, itemTabelaPreco: PriceTableOption, specialPrice?: number) {
     const already = budget.items.find((i) => i.productId === product.id);
     if (already) {
       setShowModal(false);
       toast.warning(`"${product.linha}" já está no orçamento — edite a metragem diretamente na tabela.`);
       return;
     }
-    const precoBase = product[priceKey(itemTabelaPreco)] as number | null;
-    if (precoBase == null || !Number.isFinite(Number(precoBase)) || Number(precoBase) <= 0) {
+    const precoBase = itemTabelaPreco === "TE" ? null : product[priceKey(itemTabelaPreco)] as number | null;
+    if (itemTabelaPreco !== "TE" && (precoBase == null || !Number.isFinite(Number(precoBase)) || Number(precoBase) <= 0)) {
       toast.error(`Preço não disponível para a tabela ${itemTabelaPreco}.`);
       return;
     }
-    if (!product.m2PorCaixa || product.m2PorCaixa <= 0) {
+    if (itemTabelaPreco === "TE" && (!specialPrice || specialPrice <= 0)) {
+      toast.error("Informe um valor válido para a Tabela Especial.");
+      return;
+    }
+    const isLinearProduct = isLinearMeterProduct(product);
+    if (!isLinearProduct && (!product.m2PorCaixa || product.m2PorCaixa <= 0)) {
       toast.error("Produto sem m²/caixa válido. Corrija o cadastro antes de adicionar.");
       return;
     }
-    const precoM2 = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
+    const precoM2 = itemTabelaPreco === "TE" ? round2(specialPrice || 0) : calculateProductFinalPrice(product, precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
     if (!Number.isFinite(precoM2) || precoM2 <= 0) {
       toast.error("Não foi possível calcular o preço final do produto.");
       return;
     }
-    const caixas = Math.ceil(areaM2 / product.m2PorCaixa);
+    const caixas = isLinearProduct ? (product.m2PorCaixa > 0 ? Math.ceil(areaM2 / product.m2PorCaixa) : Math.ceil(areaM2)) : Math.ceil(areaM2 / product.m2PorCaixa);
     setSaving(true);
     try {
       const newItem = await addBudgetItem(budget.id, {
-        productId: product.id, product, areaM2, caixas, precoM2, subtotal: round2(areaM2 * precoM2),
+        productId: product.id, product, areaM2, caixas, precoM2, subtotal: calculateItemSubtotal(product, areaM2, caixas, precoM2),
       });
       const nextItems = [...budget.items, newItem];
       const b = updateLocal({ ...getSentBudgetDraftPatch(), items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
@@ -1698,20 +2192,22 @@ function BudgetEditor({
     finally { setRemovingId(null); }
   }
 
-  function inferItemTabela(item: BudgetItem): 1 | 2 | 3 | 4 {
-    for (const t of [1, 2, 3, 4] as const) {
+  function inferItemTabela(item: BudgetItem): PriceTableOption {
+    for (const t of [1, 2, 3, 4, 5] as const) {
       const precoBase = item.product[priceKey(t)] as number | null;
       if (precoBase == null) continue;
-      const precoTabela = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
+      const precoTabela = calculateProductFinalPrice(item.product, precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
       if (Math.abs(precoTabela - item.precoM2) < 0.01) return t;
     }
-    return budget.tabelaPreco;
+    return "TE";
   }
 
   function startEditItem(item: BudgetItem) {
     setEditingItemId(item.id);
     setEditAreaInput(String(item.areaM2).replace(".", ","));
-    setEditTabela(inferItemTabela(item));
+    const inferredTabela = inferItemTabela(item);
+    setEditTabela(inferredTabela);
+    setEditSpecialPriceInput(inferredTabela === "TE" ? String(item.precoM2).replace(".", ",") : "");
   }
 
   async function confirmEditItem(itemId: string) {
@@ -1719,21 +2215,27 @@ function BudgetEditor({
     if (!item) return;
     const newArea = parseFloat(editAreaInput.replace(",", "."));
     if (!newArea || newArea <= 0) { toast.error("Área inválida"); return; }
-    const precoBase = item.product[priceKey(editTabela)] as number | null;
-    if (precoBase == null || !Number.isFinite(Number(precoBase)) || Number(precoBase) <= 0) {
+    const precoBase = editTabela === "TE" ? null : item.product[priceKey(editTabela)] as number | null;
+    if (editTabela !== "TE" && (precoBase == null || !Number.isFinite(Number(precoBase)) || Number(precoBase) <= 0)) {
       toast.error(`Preço não disponível para a tabela ${editTabela}.`);
       return;
     }
-    const newPrecoM2 = calculateFinalPrice(precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
+    const specialPrice = parseDecimalInput(editSpecialPriceInput);
+    if (editTabela === "TE" && (!specialPrice || specialPrice <= 0)) {
+      toast.error("Informe um valor válido para a Tabela Especial.");
+      return;
+    }
+    const newPrecoM2 = editTabela === "TE" ? round2(specialPrice) : calculateProductFinalPrice(item.product, precoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual);
     if (!Number.isFinite(newPrecoM2) || newPrecoM2 <= 0) {
       toast.error("Não foi possível calcular o preço final do produto.");
       return;
     }
-    const caixas = item.product.m2PorCaixa > 0 ? Math.ceil(newArea / item.product.m2PorCaixa) : item.caixas;
+    const caixas = isLinearMeterProduct(item.product) ? (item.product.m2PorCaixa > 0 ? Math.ceil(newArea / item.product.m2PorCaixa) : Math.ceil(newArea)) : item.product.m2PorCaixa > 0 ? Math.ceil(newArea / item.product.m2PorCaixa) : item.caixas;
     setSaving(true);
     try {
-      await updateBudgetItem(itemId, newArea, caixas, newPrecoM2);
-      const updatedItem = { ...item, areaM2: newArea, caixas, precoM2: newPrecoM2, subtotal: round2(newArea * newPrecoM2) };
+      const newSubtotal = calculateItemSubtotal(item.product, newArea, caixas, newPrecoM2);
+      await updateBudgetItem(itemId, newArea, caixas, newPrecoM2, newSubtotal);
+      const updatedItem = { ...item, areaM2: newArea, caixas, precoM2: newPrecoM2, subtotal: newSubtotal };
       const nextItems = budget.items.map((i) => i.id === itemId ? updatedItem : i);
       const b = updateLocal({ ...getSentBudgetDraftPatch(), items: nextItems, frete: calculateFreightByWeight(nextItems, pricingSettings.fretePor100Kg) });
       await persistTotals(b);
@@ -1747,6 +2249,7 @@ function BudgetEditor({
   function handlePixDiscountChange(value: string) {
     if (value.trim() === "") {
       setDescontoPix("");
+      remindToSavePaymentChanges("O desconto PIX foi alterado.");
       return;
     }
 
@@ -1758,6 +2261,7 @@ function BudgetEditor({
     }
 
     setDescontoPix(value);
+    remindToSavePaymentChanges("O desconto PIX foi alterado.");
   }
 
   async function handleSaveFinancials() {
@@ -1880,6 +2384,13 @@ function BudgetEditor({
   }
 
   async function printBudget() {
+    if (!canPrintBudget) {
+      toast.error("Existem alterações pendentes. Salve o orçamento antes de gerar o PDF.", {
+        id: "budget-pdf-unsaved",
+        duration: 8000,
+      });
+      return;
+    }
     const fmtBRLStr = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
     // Convert logo to base64 using the Vite-resolved URL
@@ -1900,15 +2411,22 @@ function BudgetEditor({
     const rows = villagresItems.map((item) => {
       const p = item.product;
       const cor = p?.cor && p.cor !== "única" && p.cor !== "-" ? p.cor : "";
+      const isVinilico = isVillaVinilicosProduct(p);
+      const isLinear = isLinearMeterProduct(p);
+      const quantityUnit = isLinear ? "ml" : "m²";
+      const realQuantity = isLinear
+        ? calculateRealLinearMeters(p, item.areaM2, item.caixas)
+        : calculateItemRealAreaM2(item);
       return `<tr>
         <td>${p?.referencia ?? ""}</td>
         <td>${p?.linha ?? ""}</td>
-        <td>${p?.colecao ?? ""}${cor ? " / " + cor : ""}</td>
-        <td>${p?.formato ?? ""}</td>
-        <td style="text-align:right">${fmtBRLStr(item.precoM2)}</td>
-        <td style="text-align:right">${item.areaM2.toFixed(2)}</td>
-        <td style="text-align:right">${calculateItemRealAreaM2(item).toFixed(2)}</td>
-        <td style="text-align:right">${p?.m2PorCaixa ?? ""}</td>
+        <td>${isVinilico ? "Villa Vinílicos" : p?.colecao ?? ""}${!isVinilico && cor ? " / " + cor : ""}</td>
+        <td>${p?.formato || (isLinear ? "Metro linear" : "")}</td>
+        <td style="text-align:right">${fmtBRLStr(item.precoM2)}/${quantityUnit}</td>
+        <td style="text-align:right">${item.areaM2.toFixed(2)} ${quantityUnit}</td>
+        <td style="text-align:right">${item.caixas} ${item.caixas === 1 ? "caixa" : "caixas"}</td>
+        <td style="text-align:right">${realQuantity.toFixed(2)} ${quantityUnit}</td>
+        <td style="text-align:right">${p?.m2PorCaixa ?? ""} ${quantityUnit}/caixa</td>
         <td style="text-align:right">${fmtKg(calculateItemWeightKg(item))}</td>
         <td style="text-align:right">${fmtBRLStr(item.subtotal)}</td>
       </tr>`;
@@ -1917,6 +2435,9 @@ function BudgetEditor({
     const complementaryRows = villacolItems.map((item) => {
       const p = item.product;
       const embalagem = p?.tipoEmbalagem || p?.tipoRejunte || p?.categoriaComplementar || "";
+      const unitLabel = getComplementaryUnitLabel(p);
+      const unitPrice = applyArgamassaCardFee(item.precoM2, p, budget.formaPagamento, pricingSettings);
+      const subtotal = applyArgamassaCardFee(item.subtotal, p, budget.formaPagamento, pricingSettings);
       return `<tr>
         <td>${p?.referencia ?? ""}</td>
         <td>${p?.linha ?? ""}</td>
@@ -1924,8 +2445,8 @@ function BudgetEditor({
         <td>${embalagem}</td>
         <td style="text-align:right">${item.caixas} ${getComplementaryUnitLabel(p, item.caixas !== 1)}</td>
         <td style="text-align:right">${fmtKg(calculateItemWeightKg(item))}</td>
-        <td style="text-align:right">${fmtBRLStr(item.precoM2)}</td>
-        <td style="text-align:right">${fmtBRLStr(item.subtotal)}</td>
+        <td style="text-align:right">${fmtBRLStr(unitPrice)}/${unitLabel}</td>
+        <td style="text-align:right">${fmtBRLStr(subtotal)}</td>
       </tr>`;
     }).join("");
 
@@ -1937,13 +2458,14 @@ function BudgetEditor({
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: Arial, sans-serif; font-size: 11px; color: #111; padding: 24px 28px; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
-  .logo img { height: 60px; }
-  .logo-text { font-size: 22px; font-weight: 900; letter-spacing: 4px; }
-  .logo-sub { font-size: 9px; letter-spacing: 2px; color: #555; }
-  .box-title { border: 1.5px solid #111; padding: 6px 12px; text-align: center; }
-  .box-title h2 { font-size: 12px; font-weight: 700; }
-  .box-title p { font-size: 11px; }
+  .header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 18px; margin-bottom: 18px; }
+  .brand-tagline { font-size: 20px; font-weight: 900; line-height: 1.15; letter-spacing: 0.6px; }
+  .logo { justify-self: center; text-align: center; }
+  .logo img { display: block; height: 90px; width: auto; object-fit: contain; }
+  .logo-fallback { font-size: 25px; font-weight: 900; letter-spacing: 4px; }
+  .box-title { justify-self: end; border: 2px solid #111; padding: 9px 16px; text-align: center; min-width: 250px; }
+  .box-title h2 { font-size: 15px; font-weight: 800; margin-bottom: 4px; }
+  .box-title p { font-size: 13px; font-weight: 600; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
   .info-table td { border: 1px solid #333; padding: 4px 8px; }
   .info-table td:first-child { font-weight: 700; width: 38%; background: #f0f0f0; }
@@ -1966,8 +2488,9 @@ function BudgetEditor({
 </head>
 <body>
 <div class="header">
+  <div class="brand-tagline">PAVIMENT PORCELANATOS PREMIUM</div>
   <div class="logo">
-    ${logoSrc ? `<img src="${logoSrc}" style="height:70px;width:auto;object-fit:contain;" />` : "<strong style='font-size:20px;letter-spacing:4px'>PAVIMENT</strong>"}
+    ${logoSrc ? `<img src="${logoSrc}" />` : `<strong class="logo-fallback">PAVIMENT</strong>`}
   </div>
   <div class="box-title">
     <h2>SALA TÉCNICA - VILLAGRES</h2>
@@ -1989,7 +2512,7 @@ ${rows ? `<div class="section-header">PRODUTOS / ESPECIFICAÇÕES</div>
   <thead>
     <tr>
       <th>Ref</th><th>Linha</th><th>Cor</th><th>Formato</th>
-      <th>Valor m²</th><th>Qnt m²</th><th>M² real</th><th>M²/cx</th><th>Peso total</th><th>Valor R$</th>
+      <th>Valor unit.</th><th>Quantidade</th><th>Caixas</th><th>Quantidade real</th><th>Por caixa</th><th>Peso total</th><th>Valor R$</th>
     </tr>
   </thead>
   <tbody>
@@ -2012,10 +2535,10 @@ ${complementaryRows ? `<div class="section-header">PRODUTOS COMPLEMENTARES</div>
 
 <div class="clearfix">
   <table class="totals-box">
-    <tr><td>Produtos Villagres</td><td>${fmtBRLStr(villagresSubtotal)}</td></tr>
-    <tr><td>Argamassas</td><td>${fmtBRLStr(argamassaSubtotal)}</td></tr>
+    <tr><td>Produtos Villagres / Villa Vinílicos</td><td>${fmtBRLStr(villagresSubtotal)}</td></tr>
     ${topPixDiscount > 0 ? `<tr><td>Desconto PIX (${budget.descontoPixPercentual}%)</td><td>- ${fmtBRLStr(topPixDiscount)}</td></tr>` : ""}
-    <tr><td>${topSubtotalLabel}</td><td>${fmtBRLStr(topTotal)}</td></tr>
+    <tr><td>${topSubtotalLabel}${cardInstallmentLabelPrint ? ` (${cardInstallmentLabelPrint})` : ""}</td><td>${fmtBRLStr(topTotal)}</td></tr>
+    ${argamassaTotal > 0 ? `<tr><td>Argamassas - Link de pagamento (${paymentConditionLabel}${budget.formaPagamento === "cartao" && budget.parcelasCartao > 1 ? ` · ${argamassaInstallmentLabel}` : ""})</td><td>${fmtBRLStr(argamassaTotal)}</td></tr>` : ""}
     <tr><td>Rejuntes/Niveladores Villacol (PIX)</td><td>${fmtBRLStr(pixOnlyProductsSubtotal)}</td></tr>
     ${budget.frete > 0 ? `<tr><td>Frete (PIX)</td><td>${fmtBRLStr(budget.frete)}</td></tr>` : ""}
     <tr><td>Subtotal PIX</td><td>${fmtBRLStr(pixOnlySubtotal)}</td></tr>
@@ -2063,6 +2586,7 @@ ${budget.observacoes ? `
           </div>
           <div className="flex items-center gap-2">
             <StatusPill status={budget.status} />
+            <BudgetOwnerPill createdBy={budget.createdBy} />
             {saving && <Spinner size={14} />}
           </div>
         </div>
@@ -2125,10 +2649,10 @@ ${budget.observacoes ? `
                   <tr className="text-xs text-muted-foreground bg-muted/30 border-b border-border">
                     <th className="text-left px-5 py-2.5 font-medium">Produto</th>
                     <th className="text-left px-3 py-2.5 font-medium hidden md:table-cell">Formato</th>
-                    <th className="text-right px-3 py-2.5 font-medium">m²</th>
+                    <th className="text-right px-3 py-2.5 font-medium">Qtd.</th>
                     <th className="text-right px-3 py-2.5 font-medium">Cx</th>
-                    <th className="text-right px-3 py-2.5 font-medium hidden md:table-cell">m² real</th>
-                    <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">R$/m²</th>
+                    <th className="text-right px-3 py-2.5 font-medium hidden md:table-cell">m²/ml real</th>
+                    <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">R$/m² ou ml</th>
                     <th className="text-right px-3 py-2.5 font-medium hidden lg:table-cell">Peso</th>
                     <th className="text-right px-3 py-2.5 font-medium">Subtotal</th>
                     <th className="px-3 py-2.5 w-16"></th>
@@ -2138,11 +2662,13 @@ ${budget.observacoes ? `
                   {villagresItems.map((item) => {
                     const isEditing = editingItemId === item.id;
                     const previewArea = parseFloat(editAreaInput.replace(",", ".")) || 0;
-                    const previewCx = item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : 0;
-                    const previewRealArea = round2(previewCx * (item.product.m2PorCaixa || 0));
-                    const previewWeight = round2(previewCx * (item.product.pesoBrutoCx || 0));
-                    const editPrecoBase = item.product[priceKey(editTabela)] as number | null;
-                    const editPrecoM2 = editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
+                    const itemIsLinear = isLinearMeterProduct(item.product);
+                    const previewCx = itemIsLinear ? (item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : Math.ceil(previewArea)) : item.product.m2PorCaixa > 0 ? Math.ceil(previewArea / item.product.m2PorCaixa) : 0;
+                    const previewRealArea = itemIsLinear ? calculateRealLinearMeters(item.product, previewArea, previewCx) : round2(previewCx * (item.product.m2PorCaixa || 0));
+                    const previewWeight = calculateItemWeightKg({ ...item, areaM2: previewArea, caixas: previewCx });
+                    const editPrecoBase = editTabela === "TE" ? null : item.product[priceKey(editTabela)] as number | null;
+                    const editSpecialPrice = parseDecimalInput(editSpecialPriceInput);
+                    const editPrecoM2 = editTabela === "TE" ? editSpecialPrice : editPrecoBase != null ? calculateProductFinalPrice(item.product, editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
                     return (
                       <tr key={item.id} className={`transition-colors ${isEditing ? "bg-primary/4" : "hover:bg-muted/20"}`}>
                         <td className="px-5 py-3">
@@ -2150,47 +2676,59 @@ ${budget.observacoes ? `
                           <p className="text-xs text-muted-foreground">
                             {item.product?.cor && item.product.cor !== "única" && item.product.cor !== "-"
                               ? `${item.product.cor} · ` : ""}
-                            {item.product?.superficie}
+                            {itemIsLinear ? "Venda por metro linear" : item.product?.superficie}
                           </p>
                           <p className="text-xs text-muted-foreground font-mono">Ref: {item.product?.referencia}</p>
                         </td>
-                        <td className="px-3 py-3 text-xs text-muted-foreground hidden md:table-cell">{item.product?.formato}</td>
+                        <td className="px-3 py-3 text-xs text-muted-foreground hidden md:table-cell">{item.product?.formato || (itemIsLinear ? "Metro linear" : "")}</td>
                         <td className="px-3 py-3 text-right">
                           {isEditing ? (
-                            <input type="text" value={editAreaInput} onChange={(e) => setEditAreaInput(e.target.value)}
-                              onKeyDown={(e) => { if (e.key === "Enter") confirmEditItem(item.id); if (e.key === "Escape") setEditingItemId(null); }}
-                              autoFocus
-                              className="w-20 border border-primary rounded-lg px-2 py-1 text-sm text-right font-mono bg-card focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                            <div className="flex items-center justify-end gap-1 font-mono">
+                              <input type="text" value={editAreaInput} onChange={(e) => setEditAreaInput(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === "Enter") confirmEditItem(item.id); if (e.key === "Escape") setEditingItemId(null); }}
+                                autoFocus
+                                className="w-20 border border-primary rounded-lg px-2 py-1 text-sm text-right font-mono bg-card focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                              <span className="text-xs text-muted-foreground">{itemIsLinear ? "ml" : "m²"}</span>
+                            </div>
                           ) : (
                             <button onClick={() => !isLocked && startEditItem(item)}
                               className={`font-mono text-sm group flex items-center gap-1 ml-auto transition-colors ${isLocked ? "cursor-default" : "hover:text-primary"}`}
                               title={isLocked ? "Orçamento bloqueado" : "Clique para editar"}>
-                              {item.areaM2.toFixed(2)}
+                              {item.areaM2.toFixed(2)} {itemIsLinear ? "ml" : "m²"}
                               {!isLocked && <Pencil size={10} className="opacity-0 group-hover:opacity-40 transition-opacity" />}
                             </button>
                           )}
                         </td>
                         <td className="px-3 py-3 text-right font-mono text-sm">
                           {isEditing && previewArea > 0
-                            ? <span className="text-primary font-semibold">{previewCx}</span>
-                            : item.caixas}
+                            ? <span className="text-primary font-semibold">{previewCx} cx</span>
+                            : <>{item.caixas} cx</>}
                         </td>
                         <td className="px-3 py-3 text-right font-mono text-sm hidden md:table-cell">
                           {isEditing && previewArea > 0
-                            ? <span className="text-primary font-semibold">{previewRealArea.toFixed(2)}</span>
-                            : calculateItemRealAreaM2(item).toFixed(2)}
+                            ? <span className="text-primary font-semibold">{previewRealArea.toFixed(2)} {itemIsLinear ? "ml" : "m²"}</span>
+                            : <>{itemIsLinear ? calculateRealLinearMeters(item.product, item.areaM2, item.caixas).toFixed(2) : calculateItemRealAreaM2(item).toFixed(2)} {itemIsLinear ? "ml" : "m²"}</>}
                         </td>
                         <td className="px-3 py-3 text-right text-sm hidden sm:table-cell">
                           {isEditing ? (
                             <div className="space-y-1">
-                              <div className="grid grid-cols-4 gap-1">
-                                {([1, 2, 3, 4] as const).map((t) => (
-                                  <button key={t} type="button" onClick={() => setEditTabela(t)}
+                              <div className="grid grid-cols-6 gap-1">
+                                {([1, 2, 3, 4, 5] as const).map((t) => (
+                                  <button key={t} type="button" onClick={() => handleEditTableChange(t)}
                                     className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
                                     T{t}
                                   </button>
                                 ))}
+                                <button type="button" onClick={() => handleEditTableChange("TE")}
+                                  className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === "TE" ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                                  TE
+                                </button>
                               </div>
+                              {editTabela === "TE" && (
+                                <input type="text" value={editSpecialPriceInput} onChange={(e) => setEditSpecialPriceInput(e.target.value)}
+                                  placeholder="Valor especial"
+                                  className="w-24 border border-primary rounded-lg px-2 py-1 text-xs text-right font-mono bg-card focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                              )}
                               <p className="font-mono text-primary font-semibold">{fmtBRL(editPrecoM2)}</p>
                             </div>
                           ) : <span className="font-mono">{fmtBRL(item.precoM2)}</span>}
@@ -2200,7 +2738,7 @@ ${budget.observacoes ? `
                         </td>
                         <td className="px-3 py-3 text-right font-mono font-semibold text-sm">
                           {isEditing && previewArea > 0
-                            ? <span className="text-primary">{fmtBRL(previewArea * editPrecoM2)}</span>
+                            ? <span className="text-primary">{fmtBRL(calculateItemSubtotal(item.product, previewArea, previewCx, editPrecoM2))}</span>
                             : fmtBRL(item.subtotal)}
                         </td>
                         <td className="px-3 py-3">
@@ -2255,8 +2793,12 @@ ${budget.observacoes ? `
                         const previewQty = parseFloat(editAreaInput.replace(",", ".")) || 0;
                         const previewCx = item.product.m2PorCaixa > 0 ? Math.ceil(previewQty / item.product.m2PorCaixa) : Math.ceil(previewQty);
                         const previewWeight = round2(previewCx * (item.product.pesoBrutoCx || 0));
-                        const editPrecoBase = item.product[priceKey(editTabela)] as number | null;
-                        const editPrecoM2 = editPrecoBase != null ? calculateFinalPrice(editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
+                        const editPrecoBase = editTabela === "TE" ? null : item.product[priceKey(editTabela)] as number | null;
+                        const editSpecialPrice = parseDecimalInput(editSpecialPriceInput);
+                        const editPrecoM2 = editTabela === "TE" ? editSpecialPrice : editPrecoBase != null ? calculateProductFinalPrice(item.product, editPrecoBase, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual) : item.precoM2;
+                        const displayedUnitPrice = applyArgamassaCardFee(item.precoM2, item.product, budget.formaPagamento, pricingSettings);
+                        const displayedSubtotal = applyArgamassaCardFee(item.subtotal, item.product, budget.formaPagamento, pricingSettings);
+                        const displayedEditPrice = applyArgamassaCardFee(editPrecoM2, item.product, budget.formaPagamento, pricingSettings);
                         const embalagem = item.product.tipoEmbalagem || item.product.tipoRejunte || item.product.categoriaComplementar || "—";
                         const unitLabel = getComplementaryUnitLabel(item.product, item.caixas !== 1);
                         const previewUnitLabel = getComplementaryUnitLabel(item.product, previewCx !== 1);
@@ -2290,22 +2832,31 @@ ${budget.observacoes ? `
                             <td className="px-3 py-3 text-right text-sm hidden md:table-cell">
                               {isEditing ? (
                                 <div className="space-y-1">
-                                  <div className="grid grid-cols-4 gap-1">
-                                    {([1, 2, 3, 4] as const).map((t) => (
-                                      <button key={t} type="button" onClick={() => setEditTabela(t)}
+                                  <div className="grid grid-cols-6 gap-1">
+                                    {([1, 2, 3, 4, 5] as const).map((t) => (
+                                      <button key={t} type="button" onClick={() => handleEditTableChange(t)}
                                         className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
                                         T{t}
                                       </button>
                                     ))}
+                                    <button type="button" onClick={() => handleEditTableChange("TE")}
+                                      className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === "TE" ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                                      TE
+                                    </button>
                                   </div>
-                                  <p className="font-mono text-primary font-semibold">{fmtBRL(editPrecoM2)}</p>
+                                  {editTabela === "TE" && (
+                                    <input type="text" value={editSpecialPriceInput} onChange={(e) => setEditSpecialPriceInput(e.target.value)}
+                                      placeholder="Valor especial"
+                                      className="w-24 border border-primary rounded-lg px-2 py-1 text-xs text-right font-mono bg-card focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                                  )}
+                                  <p className="font-mono text-primary font-semibold">{fmtBRL(displayedEditPrice)}</p>
                                 </div>
-                              ) : <span className="font-mono">{fmtBRL(item.precoM2)}</span>}
+                              ) : <span className="font-mono">{fmtBRL(displayedUnitPrice)}</span>}
                             </td>
                             <td className="px-3 py-3 text-right font-mono font-semibold text-sm">
                               {isEditing && previewQty > 0
-                                ? <span className="text-primary">{fmtBRL(previewQty * editPrecoM2)}</span>
-                                : fmtBRL(item.subtotal)}
+                                ? <span className="text-primary">{fmtBRL(applyArgamassaCardFee(calculateItemSubtotal(item.product, previewQty, previewCx, editPrecoM2), item.product, budget.formaPagamento, pricingSettings))}</span>
+                                : fmtBRL(displayedSubtotal)}
                             </td>
                             <td className="px-3 py-3">
                               {isEditing ? (
@@ -2370,7 +2921,10 @@ ${budget.observacoes ? `
                 <div className="grid sm:grid-cols-2 gap-3">
                   <div>
                     <label className="text-xs font-medium text-muted-foreground block mb-1">Forma de pagamento</label>
-                    <select value={formaPagamento} onChange={(e) => setFormaPagamento(e.target.value as FormaPagamento)}
+                    <select value={formaPagamento} onChange={(e) => {
+                      setFormaPagamento(e.target.value as FormaPagamento);
+                      remindToSavePaymentChanges("A forma de pagamento foi alterada.");
+                    }}
                       className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25">
                       <option value="avista">Débito</option>
                       <option value="avista_pix">PIX</option>
@@ -2380,7 +2934,10 @@ ${budget.observacoes ? `
                   {formaPagamento === "cartao" ? (
                     <div>
                       <label className="text-xs font-medium text-muted-foreground block mb-1">Parcelas no cartão</label>
-                      <select value={parcelasCartao} onChange={(e) => setParcelasCartao(e.target.value)}
+                      <select value={parcelasCartao} onChange={(e) => {
+                        setParcelasCartao(e.target.value);
+                        remindToSavePaymentChanges("A quantidade de parcelas foi alterada.");
+                      }}
                         className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25">
                         {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}x</option>)}
                       </select>
@@ -2552,13 +3109,19 @@ ${budget.observacoes ? `
             )}
 
             <div className="mt-5 pt-4 border-t border-border space-y-2">
+              {hasPendingChanges && (
+                <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  Há alterações pendentes. Salve o rascunho antes de gerar o PDF.
+                </div>
+              )}
               <button onClick={handleSaveDraft} disabled={saving || !canSaveDraft}
                 className="w-full flex items-center justify-center gap-2 bg-primary text-primary-foreground py-2.5 rounded-xl text-sm font-medium hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
                 title={!canSaveDraft ? "Faça uma alteração para salvar novamente como rascunho" : undefined}>
                 {saving ? <Spinner size={14} /> : <Save size={14} />} Salvar Rascunho
               </button>
-              <button onClick={printBudget}
-                className="w-full flex items-center justify-center gap-2 border border-border py-2.5 rounded-xl text-xs hover:bg-muted transition-colors text-muted-foreground hover:text-foreground">
+              <button onClick={printBudget} disabled={!canPrintBudget}
+                title={!canPrintBudget ? "Salve todas as alterações antes de imprimir ou gerar o PDF" : "Imprimir ou gerar o PDF do orçamento"}
+                className={`w-full flex items-center justify-center gap-2 border py-2.5 rounded-xl text-xs font-semibold transition-colors ${canPrintBudget ? "bg-primary text-primary-foreground border-primary hover:opacity-90" : "bg-muted/60 text-muted-foreground/50 border-border cursor-not-allowed opacity-60"}`}>
                 <Printer size={13} /> Imprimir / Gerar PDF
               </button>
             </div>
@@ -2568,14 +3131,18 @@ ${budget.observacoes ? `
             <h3 className="font-semibold text-sm mb-4">Resumo Financeiro</h3>
             <div className="space-y-3">
               <div className="rounded-xl border border-border p-3 space-y-2 bg-muted/10">
-                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Villagres + Argamassas</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Produtos Villagres / Villa Vinílicos</p>
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Produtos Villagres</span>
+                  <span className="text-muted-foreground">Total do item</span>
                   <span className="font-mono">{fmtBRL(villagresSubtotal)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Argamassas</span>
-                  <span className="font-mono">{fmtBRL(argamassaSubtotal)}</span>
+                  <span className="text-muted-foreground">Condição de pagamento</span>
+                  <span className="font-mono text-right">{paymentConditionLabel}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Valor das parcelas</span>
+                  <span className="font-mono text-right">{topInstallmentValueLabel}</span>
                 </div>
                 {topPixDiscount > 0 && (
                   <div className="flex justify-between text-sm text-green-700">
@@ -2589,10 +3156,36 @@ ${budget.observacoes ? `
                 </div>
               </div>
 
+              {argamassaTotal > 0 && (
+                <div className="rounded-xl border border-primary/20 p-3 space-y-2 bg-primary/5">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Argamassas</p>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Total do item</span>
+                    <span className="font-mono">{fmtBRL(argamassaTotal)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Condição de pagamento</span>
+                    <span className="font-mono text-right">{paymentConditionLabel}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Valor das parcelas</span>
+                    <span className="font-mono text-right">{argamassaInstallmentLabel}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Informação</span>
+                    <span className="font-mono text-primary text-right">Cliente receberá um Link de Pagamento</span>
+                  </div>
+                  <div className="flex justify-between text-sm font-semibold pt-2 border-t border-border">
+                    <span>Subtotal</span>
+                    <span className="font-mono">{fmtBRL(argamassaTotal)}</span>
+                  </div>
+                </div>
+              )}
+
               <div className="rounded-xl border border-border p-3 space-y-2 bg-muted/10">
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Frete + Rejuntes/Niveladores Villacol (PIX)</p>
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Rejuntes/Niveladores</span>
+                  <span className="text-muted-foreground">Total do item</span>
                   <span className="font-mono">{fmtBRL(pixOnlyProductsSubtotal)}</span>
                 </div>
                 {budget.frete > 0 && (
@@ -2601,6 +3194,10 @@ ${budget.observacoes ? `
                     <span className="font-mono">{fmtBRL(budget.frete)}</span>
                   </div>
                 )}
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Condição de pagamento</span>
+                  <span className="font-mono text-right">PIX</span>
+                </div>
                 <div className="flex justify-between text-sm font-semibold pt-2 border-t border-border">
                   <span>Subtotal PIX</span>
                   <span className="font-mono">{fmtBRL(pixOnlySubtotal)}</span>
@@ -2624,10 +3221,18 @@ ${budget.observacoes ? `
                     <span>Total de caixas</span>
                     <span className="font-mono">{budget.items.reduce((s, i) => s + i.caixas, 0)} cx</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span>Total de m²</span>
-                    <span className="font-mono">{budget.items.reduce((s, i) => s + i.areaM2, 0).toFixed(2)} m²</span>
-                  </div>
+                  {totalAreaM2 > 0 && (
+                    <div className="flex justify-between">
+                      <span>Total de m²</span>
+                      <span className="font-mono">{totalAreaM2.toFixed(2)} m²</span>
+                    </div>
+                  )}
+                  {totalLinearMeters > 0 && (
+                    <div className="flex justify-between">
+                      <span>Total de metros lineares</span>
+                      <span className="font-mono">{totalLinearMeters.toFixed(2)} ml</span>
+                    </div>
+                  )}
                   <div className="flex justify-between">
                     <span>Peso total</span>
                     <span className="font-mono">{fmtKg(totalWeightKg)}</span>
@@ -2674,9 +3279,9 @@ ${budget.observacoes ? `
 // ── Customer View ─────────────────────────────────────────────────
 
 function CustomerView({
-  customer: initCustomer, allProducts, pricingSettings, onBack, onOpenBudget,
+  customer: initCustomer, allProducts, pricingSettings, currentUser, onBack, onOpenBudget,
 }: {
-  customer: Customer; allProducts: Product[]; pricingSettings: PricingSettings;
+  customer: Customer; allProducts: Product[]; pricingSettings: PricingSettings; currentUser: AppUser;
   onBack: () => void;
   onOpenBudget: (b: Budget, c: Customer) => void;
 }) {
@@ -2685,6 +3290,9 @@ function CustomerView({
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
+  const [deletingBudgetId, setDeletingBudgetId] = useState<string | null>(null);
+  const [exportingBudgetId, setExportingBudgetId] = useState<string | null>(null);
+  const [budgetToDelete, setBudgetToDelete] = useState<Budget | null>(null);
   const [editForm, setEditForm] = useState({
     ...initCustomer,
     cpf: formatCPF(initCustomer.cpf || ""),
@@ -2726,7 +3334,7 @@ function CustomerView({
   async function loadBudgets() {
     setLoading(true);
     try {
-      setBudgets(await getBudgetsForCustomer(customer.id));
+      setBudgets(await getBudgetsForCustomer(customer.id, currentUser));
     } catch { toast.error("Erro ao carregar orçamentos"); }
     finally { setLoading(false); }
   }
@@ -2736,7 +3344,7 @@ function CustomerView({
   async function handleCreateBudget() {
     setCreating(true);
     try {
-      const b = await createBudget(customer.id);
+      const b = await createBudget(customer.id, currentUser);
       onOpenBudget(b, customer);
     } catch (e: any) { toast.error("Erro: " + e.message); setCreating(false); }
   }
@@ -2746,6 +3354,24 @@ function CustomerView({
       const full = await getBudgetWithItems(b.id);
       onOpenBudget(full, customer);
     } catch (e: any) { toast.error("Erro ao abrir orçamento: " + e.message); }
+  }
+
+  async function handleDeleteBudget(b: Budget) {
+    if (b.status !== "rascunho" && b.status !== "cancelado") {
+      toast.error("Somente orçamentos em rascunho ou cancelados podem ser excluídos.");
+      return;
+    }
+    setDeletingBudgetId(b.id);
+    try {
+      await deleteBudget(b.id);
+      setBudgets((current) => current.filter((budget) => budget.id !== b.id));
+      toast.success(`Orçamento #${b.numero} excluído.`);
+    } catch (e: any) {
+      toast.error("Erro ao excluir orçamento: " + e.message);
+    } finally {
+      setDeletingBudgetId(null);
+      setBudgetToDelete(null);
+    }
   }
 
   async function saveEdit() {
@@ -2796,7 +3422,7 @@ function CustomerView({
               </p>
             )}
           </div>
-          <div className="flex gap-2 shrink-0">
+          <div className="flex gap-2 shrink-0 mt-3">
             <button onClick={() => setShowEdit(true)}
               className="border border-white/20 px-3 py-1.5 rounded-lg text-xs hover:bg-white/10 transition-colors flex items-center gap-1">
               <Pencil size={11} /> Editar
@@ -2843,33 +3469,78 @@ function CustomerView({
           </div>
         ) : (
           <div className="space-y-3">
-            {budgets.map((b) => (
-              <button key={b.id} onClick={() => handleOpenBudget(b)}
-                className="w-full bg-card border border-border rounded-2xl p-4 text-left hover:border-primary/30 hover:shadow-sm transition-all group">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-semibold text-sm">Orçamento #{b.numero}</span>
-                      <StatusPill status={b.status} />
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {fmtDate(b.createdAt)} · Tabela {b.tabelaPreco}
-                    </p>
-                  </div>
-                  <div className="text-right flex items-center gap-2">
+            {budgets.map((b) => {
+              const canDeleteBudget = b.status === "rascunho" || b.status === "cancelado";
+              return (
+              <div key={b.id}
+                className="w-full bg-card border border-border rounded-2xl text-left hover:border-primary/30 hover:shadow-sm transition-all group flex items-stretch overflow-hidden">
+                <button onClick={() => handleOpenBudget(b)} className="flex-1 p-4 text-left">
+                  <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="font-semibold font-mono text-lg">{fmtBRL(b.totalFinal)}</p>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="font-semibold text-sm">Orçamento #{b.numero}</span>
+                        <StatusPill status={b.status} />
+                        <BudgetOwnerPill createdBy={b.createdBy} />
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {fmtDate(b.createdAt)} · Tabela {b.tabelaPreco}
+                      </p>
                     </div>
-                    <ChevronRight size={16} className="text-muted-foreground group-hover:text-primary transition-colors" />
+                    <div className="text-right flex items-center gap-2">
+                      <div>
+                        <p className="font-semibold font-mono text-lg">{fmtBRL(b.totalFinal)}</p>
+                      </div>
+                      <ChevronRight size={16} className="text-muted-foreground group-hover:text-primary transition-colors" />
+                    </div>
                   </div>
-                </div>
-              </button>
-            ))}
+                </button>
+                {currentUser.isAdmin && (
+                  <button
+                    onClick={async () => {
+                      setExportingBudgetId(b.id);
+                      try {
+                        await exportBudgetToExcel(b, customer.nome, pricingSettings);
+                        toast.success(`Orçamento #${b.numero} exportado para Excel.`);
+                      } catch (error: any) {
+                        toast.error("Erro ao exportar orçamento: " + error.message);
+                      } finally {
+                        setExportingBudgetId(null);
+                      }
+                    }}
+                    disabled={exportingBudgetId === b.id}
+                    className="px-4 flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-primary/5 transition-colors border-l border-border disabled:opacity-50"
+                    title="Exportar orçamento para Excel"
+                  >
+                    {exportingBudgetId === b.id ? <Spinner size={14} /> : <Download size={15} />}
+                  </button>
+                )}
+                {canDeleteBudget && (
+                  <button
+                    onClick={() => setBudgetToDelete(b)}
+                    disabled={deletingBudgetId === b.id}
+                    className="px-4 flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-red-50 transition-colors border-l border-border disabled:opacity-50"
+                    title={`Excluir orçamento ${b.status === "rascunho" ? "em rascunho" : "cancelado"}`}
+                  >
+                    {deletingBudgetId === b.id ? <Spinner size={14} /> : <Trash2 size={15} />}
+                  </button>
+                )}
+              </div>
+              );
+            })}
           </div>
         )}
       </div>
 
 
+
+      {budgetToDelete && (
+        <BudgetDeleteDialog
+          budgetNumber={budgetToDelete.numero}
+          deleting={deletingBudgetId === budgetToDelete.id}
+          onCancel={() => setBudgetToDelete(null)}
+          onConfirm={() => handleDeleteBudget(budgetToDelete)}
+        />
+      )}
 
       {showEdit && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 overflow-y-auto">
@@ -3039,42 +3710,65 @@ function AllCustomersTab({ onSelect }: { onSelect: (c: Customer) => void }) {
 }
 
 async function updateProduct(id: string, patch: Partial<Omit<Product, "id">>): Promise<void> {
+  const normalized = normalizeProductBrand({ ...createEmptyProduct(), ...patch });
   const { error } = await supabase.from("products").update({
-    referencia: patch.referencia, formato: patch.formato, linha: patch.linha,
-    colecao: patch.colecao, cor: patch.cor, superficie: patch.superficie,
-    m2_por_caixa: patch.m2PorCaixa, pecas_por_caixa: patch.pecasPorCaixa,
-    m2_por_pallet: patch.m2PorPallet, cx_por_pallet: patch.cxPorPallet,
-    peso_bruto_m2: patch.pesoBrutoM2, peso_bruto_cx: patch.pesoBrutoCx, espessura_mm: patch.espessuraMm,
-    preco1: patch.preco1, preco2: patch.preco2, preco3: patch.preco3, preco4: patch.preco4,
-    descontinuado: patch.descontinuado ?? false,
-    marca: patch.marca || "Villagres",
-    categoria_complementar: patch.categoriaComplementar || null,
-    tipo_rejunte: patch.tipoRejunte || null,
-    tipo_embalagem: patch.tipoEmbalagem || null,
+    referencia: normalized.referencia, formato: normalized.formato, linha: normalized.linha,
+    colecao: normalized.colecao, cor: normalized.cor, superficie: normalized.superficie,
+    m2_por_caixa: normalized.m2PorCaixa, pecas_por_caixa: normalized.pecasPorCaixa,
+    m2_por_pallet: normalized.m2PorPallet, cx_por_pallet: normalized.cxPorPallet,
+    peso_bruto_m2: normalized.pesoBrutoM2, peso_bruto_cx: normalized.pesoBrutoCx, espessura_mm: normalized.espessuraMm,
+    preco1: normalized.preco1, preco2: normalized.preco2, preco3: normalized.preco3, preco4: normalized.preco4, preco5: normalized.preco5,
+    descontinuado: normalized.descontinuado ?? false,
+    marca: normalized.marca || "Villagres",
+    categoria_complementar: normalized.categoriaComplementar || null,
+    tipo_rejunte: normalized.tipoRejunte || null,
+    tipo_embalagem: normalized.tipoEmbalagem || null,
   }).eq("id", id);
   if (error) throw error;
 }
 
 async function createProduct(product: Omit<Product, "id">): Promise<Product> {
+  const normalized = normalizeProductBrand(product);
   const { data, error } = await supabase.from("products").insert({
-    referencia: product.referencia, formato: product.formato, linha: product.linha,
-    colecao: product.colecao, cor: product.cor, superficie: product.superficie,
-    faces: product.faces, variacao: product.variacao, local_uso: product.localUso, derivacao: product.derivacao,
-    m2_por_caixa: product.m2PorCaixa, pecas_por_caixa: product.pecasPorCaixa,
-    m2_por_pallet: product.m2PorPallet, cx_por_pallet: product.cxPorPallet,
-    peso_bruto_m2: product.pesoBrutoM2, peso_bruto_cx: product.pesoBrutoCx, espessura_mm: product.espessuraMm,
-    preco1: product.preco1, preco2: product.preco2, preco3: product.preco3, preco4: product.preco4,
-    descontinuado: product.descontinuado ?? false,
-    marca: product.marca || "Villagres",
-    categoria_complementar: product.categoriaComplementar || null,
-    tipo_rejunte: product.tipoRejunte || null,
-    tipo_embalagem: product.tipoEmbalagem || null,
+    referencia: normalized.referencia, formato: normalized.formato, linha: normalized.linha,
+    colecao: normalized.colecao, cor: normalized.cor, superficie: normalized.superficie,
+    faces: normalized.faces, variacao: normalized.variacao, local_uso: normalized.localUso, derivacao: normalized.derivacao,
+    m2_por_caixa: normalized.m2PorCaixa, pecas_por_caixa: normalized.pecasPorCaixa,
+    m2_por_pallet: normalized.m2PorPallet, cx_por_pallet: normalized.cxPorPallet,
+    peso_bruto_m2: normalized.pesoBrutoM2, peso_bruto_cx: normalized.pesoBrutoCx, espessura_mm: normalized.espessuraMm,
+    preco1: normalized.preco1, preco2: normalized.preco2, preco3: normalized.preco3, preco4: normalized.preco4, preco5: normalized.preco5,
+    descontinuado: normalized.descontinuado ?? false,
+    marca: normalized.marca || "Villagres",
+    categoria_complementar: normalized.categoriaComplementar || null,
+    tipo_rejunte: normalized.tipoRejunte || null,
+    tipo_embalagem: normalized.tipoEmbalagem || null,
   }).select().single();
   if (error) throw error;
   return mapProduct(data);
 }
 
-function createEmptyProduct(marca: "Villagres" | "Villacol" = "Villagres"): Product {
+async function deleteProduct(id: string): Promise<{ deleted: boolean; archived: boolean }> {
+  const { count, error: countError } = await supabase
+    .from("budget_items")
+    .select("id", { count: "exact", head: true })
+    .eq("product_id", id);
+  if (countError) throw countError;
+
+  if ((count || 0) > 0) {
+    const { error: archiveError } = await supabase
+      .from("products")
+      .update({ descontinuado: true })
+      .eq("id", id);
+    if (archiveError) throw archiveError;
+    return { deleted: false, archived: true };
+  }
+
+  const { error } = await supabase.from("products").delete().eq("id", id);
+  if (error) throw error;
+  return { deleted: true, archived: false };
+}
+
+function createEmptyProduct(marca: "Villagres" | "Villacol" | "Villa Vinílicos" = "Villagres"): Product {
   return {
     id: "",
     marca,
@@ -3102,21 +3796,202 @@ function createEmptyProduct(marca: "Villagres" | "Villacol" = "Villagres"): Prod
     preco2: null,
     preco3: null,
     preco4: null,
+    preco5: null,
     descontinuado: false,
   };
 }
 
+
+type ProductTemplateKind = "villagres" | "villa_vinilicos" | "villa_vinilicos_rodapes" | "argamassas" | "rejuntes" | "niveladores";
+
+const PRODUCT_TEMPLATE_LABELS: Record<ProductTemplateKind, string> = {
+  villagres: "Produtos Villagres",
+  villa_vinilicos: "Villa Vinílicos",
+  villa_vinilicos_rodapes: "Villa Vinílicos Rodapés",
+  argamassas: "Argamassas",
+  rejuntes: "Rejuntes",
+  niveladores: "Niveladores",
+};
+
+const PRODUCT_TEMPLATE_HEADERS: Record<ProductTemplateKind, string[]> = {
+  villagres: ["Formato", "Referencia", "Linha", "Colecao", "Cor", "Superficie", "Faces", "Variacao", "LocalUso", "Derivacao", "M2PorCaixa", "PecasPorCaixa", "M2PorPallet", "CxPorPallet", "PesoBrutoM2", "PesoBrutoCx", "EspessuraMm", "Preco1", "Preco2", "Preco3", "Preco4", "Preco5", "Descontinuado"],
+  villa_vinilicos: ["Formato", "Referência", "Linha", "Coleção", "Cor", "Superfície", "Faces", "Capa Desgaste", "Local de Uso", "Derivação", "m2/cx", "peças/cx", "m2/pallet", "cx/pallet", "peso bruto/m2", "peso bruto/cx", "Espessura mm", "Preço T1", "Preço T2", "Preço T3", "Preço T4", "Preço T5"],
+  villa_vinilicos_rodapes: ["Formato", "Referência", "Linha", "Cor", "Superfície", "Derivação", "metro linear/cx", "peças/cx", "peso bruto/metro linear", "peso bruto/cx", "Espessura mm", "Preço 1", "Preço 2", "Preço 3", "Preço 4", "Preço 5"],
+  argamassas: ["Referencia", "NomeComercial", "TipoEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Preco5", "Descontinuado"],
+  rejuntes: ["Referencia", "NomeComercial", "Cor", "TipoRejunte", "TipoEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Preco5", "Descontinuado"],
+  niveladores: ["Referencia", "NomeComercial", "EspessuraMm", "TipoEmbalagem", "QuantidadePorEmbalagem", "PesoKg", "Preco1", "Preco2", "Preco3", "Preco4", "Preco5", "Descontinuado"],
+};
+
+const PRODUCT_TEMPLATE_EXAMPLES: Record<ProductTemplateKind, string[]> = {
+  villagres: ["60x60", "REF-001", "Nome da Linha", "Nome Coleção", "Bege", "Polido", "1", "-", "3", "-", "1,44", "6", "43,20", "30", "18,50", "26,65", "9,00", "45,90", "49,90", "54,90", "59,90", "64,90", "FALSE"],
+  villa_vinilicos: ["18x122", "SPC-001", "Piso Vinílico Carvalho", "Coleção Vinílicos", "Carvalho", "Texturizado", "8", "0,30", "3", "Classe 32", "2,20", "10", "88,00", "40", "8,50", "18,70", "4,00", "89,90", "94,90", "99,90", "104,90", "109,90"],
+  villa_vinilicos_rodapes: ["7x240", "RP-001", "Rodapé Vinílico Carvalho", "Carvalho", "Texturizado", "Rodapé", "2,40", "1", "0,85", "2,04", "12,00", "29,90", "32,90", "35,90", "39,90", "44,90"],
+  argamassas: ["ARG-001", "Argamassa ACIII", "Saco 20 kg", "20", "29,90", "32,90", "35,90", "39,90", "44,90", "FALSE"],
+  rejuntes: ["REJ-001", "Rejunte Acrílico", "Branco", "Acrílico", "Pote 1 kg", "1", "18,90", "20,90", "22,90", "24,90", "26,90", "FALSE"],
+  niveladores: ["NIV-001", "Nivelador 1,5 mm", "1,5", "Pacote 100 un", "100", "0,50", "35,90", "39,90", "44,90", "49,90", "54,90", "FALSE"],
+};
+
+function normalizeCSVHeader(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+}
+
+function parseBool(value: string): boolean {
+  return ["true", "sim", "s", "1", "yes"].includes(value.trim().toLowerCase());
+}
+
+function getRowValue(row: string[], headerMap: Record<string, number>, ...keys: string[]): string {
+  for (const key of keys) {
+    const index = headerMap[normalizeCSVHeader(key)];
+    if (index != null) return row[index] || "";
+  }
+  return "";
+}
+
+function buildProductTemplateCSV(kind: ProductTemplateKind): string {
+  return `${PRODUCT_TEMPLATE_HEADERS[kind].join(";")}\n${PRODUCT_TEMPLATE_EXAMPLES[kind].join(";")}`;
+}
+
+function inferTemplateKindFromHeaders(headerMap: Record<string, number>): ProductTemplateKind {
+  if (headerMap[normalizeCSVHeader("metro linear/cx")] != null || headerMap[normalizeCSVHeader("peso bruto/metro linear")] != null) return "villa_vinilicos_rodapes";
+  if (headerMap[normalizeCSVHeader("Capa Desgaste")] != null || headerMap[normalizeCSVHeader("peso bruto/m2")] != null || headerMap[normalizeCSVHeader("Preço T5")] != null) return "villa_vinilicos";
+  if (headerMap[normalizeCSVHeader("Superficie")] != null || headerMap[normalizeCSVHeader("Formato")] != null) return "villagres";
+  if (headerMap[normalizeCSVHeader("TipoRejunte")] != null || headerMap[normalizeCSVHeader("Cor")] != null) return "rejuntes";
+  if (headerMap[normalizeCSVHeader("QuantidadePorEmbalagem")] != null || headerMap[normalizeCSVHeader("EspessuraMm")] != null) return "niveladores";
+  return "argamassas";
+}
+
+function buildProductsFromTemplateCSV(csvText: string): Omit<Product, "id">[] {
+  const rows = parseCSVFull(csvText);
+  if (rows.length < 2) return [];
+  const headerMap = rows[0].reduce<Record<string, number>>((acc, header, index) => {
+    acc[normalizeCSVHeader(header)] = index;
+    return acc;
+  }, {});
+  if (headerMap[normalizeCSVHeader("Referencia")] == null && headerMap[normalizeCSVHeader("Ref")] == null) {
+    return buildProductsFromCSV(csvText);
+  }
+
+  const kind = inferTemplateKindFromHeaders(headerMap);
+  return rows.slice(1).map((row) => {
+    const referencia = getRowValue(row, headerMap, "Referencia", "Ref").trim();
+    const nome = getRowValue(row, headerMap, "NomeComercial", "Linha", "Nome").trim();
+    if (!referencia && !nome) return null;
+
+    if (kind === "villagres" || kind === "villa_vinilicos" || kind === "villa_vinilicos_rodapes") {
+      return {
+        formato: getRowValue(row, headerMap, "Formato"),
+        referencia,
+        linha: nome,
+        colecao: getRowValue(row, headerMap, "Colecao", "Coleção"),
+        cor: getRowValue(row, headerMap, "Cor"),
+        superficie: getRowValue(row, headerMap, "Superficie", "Superfície"),
+        faces: parseInt(getRowValue(row, headerMap, "Faces")) || 0,
+        variacao: getRowValue(row, headerMap, "Variacao", "Variação", "Capa Desgaste"),
+        localUso: parseInt(getRowValue(row, headerMap, "LocalUso", "Local de Uso")) || 3,
+        derivacao: getRowValue(row, headerMap, "Derivacao", "Derivação"),
+        m2PorCaixa: parseNum(getRowValue(row, headerMap, "M2PorCaixa", "m2/cx", "m²/cx", "metro linear/cx")),
+        pecasPorCaixa: parseInt(getRowValue(row, headerMap, "PecasPorCaixa", "PeçasPorCaixa", "peças/cx", "pecas/cx")) || 0,
+        m2PorPallet: parseNum(getRowValue(row, headerMap, "M2PorPallet", "m2/pallet", "m²/pallet")),
+        cxPorPallet: parseInt(getRowValue(row, headerMap, "CxPorPallet", "cx/pallet")) || 0,
+        pesoBrutoM2: parseNum(getRowValue(row, headerMap, "PesoBrutoM2", "peso bruto/m2", "peso bruto/m²", "peso bruto/metro linear")),
+        pesoBrutoCx: parseNum(getRowValue(row, headerMap, "PesoBrutoCx", "PesoKg", "peso bruto/cx")),
+        espessuraMm: parseNum(getRowValue(row, headerMap, "EspessuraMm", "Espessura mm")),
+        preco1: parsePrice(getRowValue(row, headerMap, "Preco1", "Preço1", "Preço T1", "Preço 1")),
+        preco2: parsePrice(getRowValue(row, headerMap, "Preco2", "Preço2", "Preço T2", "Preço 2")),
+        preco3: parsePrice(getRowValue(row, headerMap, "Preco3", "Preço3", "Preço T3", "Preço 3")),
+        preco4: parsePrice(getRowValue(row, headerMap, "Preco4", "Preço4", "Preço T4", "Preço 4")),
+        preco5: parsePrice(getRowValue(row, headerMap, "Preco5", "Preço5", "Preço T5", "Preço 5")),
+        descontinuado: parseBool(getRowValue(row, headerMap, "Descontinuado")),
+        marca: kind === "villa_vinilicos" || kind === "villa_vinilicos_rodapes" ? "Villa Vinílicos" : "Villagres",
+        categoriaComplementar: "",
+        tipoRejunte: "",
+        tipoEmbalagem: "",
+      };
+    }
+
+    const categoriaComplementar = kind === "argamassas" ? "Argamassa" : kind === "rejuntes" ? "Rejunte" : "Niveladores/Cunhas";
+    const quantidadePorEmbalagem = parseInt(getRowValue(row, headerMap, "QuantidadePorEmbalagem")) || 1;
+    const pesoKg = parseNum(getRowValue(row, headerMap, "PesoKg", "PesoBrutoCx"));
+    return {
+      formato: "",
+      referencia,
+      linha: nome || categoriaComplementar,
+      colecao: "",
+      cor: getRowValue(row, headerMap, "Cor"),
+      superficie: "",
+      faces: 0,
+      variacao: "",
+      localUso: 3,
+      derivacao: "",
+      m2PorCaixa: 1,
+      pecasPorCaixa: kind === "niveladores" ? quantidadePorEmbalagem : 1,
+      m2PorPallet: 0,
+      cxPorPallet: 0,
+      pesoBrutoM2: 0,
+      pesoBrutoCx: pesoKg,
+      espessuraMm: parseNum(getRowValue(row, headerMap, "EspessuraMm")),
+      preco1: parsePrice(getRowValue(row, headerMap, "Preco1", "Preço1")),
+      preco2: parsePrice(getRowValue(row, headerMap, "Preco2", "Preço2")),
+      preco3: parsePrice(getRowValue(row, headerMap, "Preco3", "Preço3")),
+      preco4: parsePrice(getRowValue(row, headerMap, "Preco4", "Preço4")),
+      preco5: parsePrice(getRowValue(row, headerMap, "Preco5", "Preço5")),
+      descontinuado: parseBool(getRowValue(row, headerMap, "Descontinuado")),
+      marca: "Villacol",
+      categoriaComplementar,
+      tipoRejunte: kind === "rejuntes" ? getRowValue(row, headerMap, "TipoRejunte") : "",
+      tipoEmbalagem: getRowValue(row, headerMap, "TipoEmbalagem"),
+    };
+  }).filter(Boolean) as Omit<Product, "id">[];
+}
+
+async function importProducts(products: Omit<Product, "id">[]): Promise<{ created: number; updated: number; total: number }> {
+  const existing = await fetchAllProducts();
+  const byRef = new Map(existing.filter((p) => p.referencia).map((p) => [p.referencia.trim().toLowerCase(), p]));
+  const byName = new Map(existing.filter((p) => p.linha).map((p) => [p.linha.trim().toLowerCase(), p]));
+  let created = 0;
+  let updated = 0;
+
+  for (const product of products) {
+    const refKey = product.referencia.trim().toLowerCase();
+    const nameKey = product.linha.trim().toLowerCase();
+    const match = refKey ? byRef.get(refKey) : nameKey ? byName.get(nameKey) : undefined;
+    if (match) {
+      await updateProduct(match.id, product);
+      updated++;
+      byRef.set(refKey, { ...match, ...product });
+      byName.set(nameKey, { ...match, ...product });
+    } else {
+      if (!refKey) throw new Error(`Produto novo "${product.linha}" sem referência. Informe uma referência para criar novos produtos.`);
+      const createdProduct = await createProduct(product);
+      created++;
+      if (createdProduct.referencia) byRef.set(createdProduct.referencia.trim().toLowerCase(), createdProduct);
+      if (createdProduct.linha) byName.set(createdProduct.linha.trim().toLowerCase(), createdProduct);
+    }
+  }
+
+  return { created, updated, total: products.length };
+}
+
 // ── Product Edit Modal ────────────────────────────────────────────
 
-function ProductEditModal({ product, onSave, onClose }: {
+function ProductEditModal({ product, onSave, onDelete, onClose }: {
   product: Product;
   onSave: (updated: Product) => void;
+  onDelete: (productId: string) => void;
   onClose: () => void;
 }) {
   const [form, setForm] = useState({ ...product });
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [villaVinilicosTipo, setVillaVinilicosTipo] = useState<"pisos" | "rodapes">(
+    hasVillaVinilicosRodapeSignature(product) ? "rodapes" : "pisos",
+  );
   const isNew = !product.id;
   const isVillacol = form.marca === "Villacol";
+  const isVillaVinilicos = form.marca === "Villa Vinílicos";
+  const isVillaVinilicosLinear = isVillaVinilicos && villaVinilicosTipo === "rodapes";
+  const isLinearProductForm = isVillaVinilicosLinear || isCantoneiraProduct(form);
   const isRejunte = isVillacol && form.categoriaComplementar === "Rejunte";
   const isArgamassa = isVillacol && form.categoriaComplementar === "Argamassa";
   const isNiveladorCunha = isVillacol && form.categoriaComplementar === "Niveladores/Cunhas";
@@ -3151,12 +4026,25 @@ function ProductEditModal({ product, onSave, onClose }: {
     }));
   }
 
+  function handleVillaVinilicosTipoChange(tipo: "pisos" | "rodapes") {
+    setVillaVinilicosTipo(tipo);
+    setForm((f) => ({
+      ...f,
+      derivacao: tipo === "rodapes" ? "Rodapé" : f.derivacao === "Rodapé" ? "" : f.derivacao,
+      colecao: tipo === "rodapes" ? "" : f.colecao,
+      faces: tipo === "rodapes" ? 0 : f.faces,
+      variacao: tipo === "rodapes" ? "" : f.variacao,
+      m2PorPallet: tipo === "rodapes" ? 0 : f.m2PorPallet,
+      cxPorPallet: tipo === "rodapes" ? 0 : f.cxPorPallet,
+    }));
+  }
+
   async function handleSave() {
     if (!form.referencia.trim()) { toast.error("Informe a referência do produto."); return; }
     if (!form.linha.trim()) { toast.error("Informe o nome do produto."); return; }
     setSaving(true);
     try {
-      const normalizedProduct: Product = {
+      const normalizedProduct: Product = normalizeProductBrand({
         ...form,
         marca: form.marca || "Villagres",
         categoriaComplementar: form.marca === "Villacol" ? form.categoriaComplementar || "Argamassa" : "",
@@ -3166,6 +4054,7 @@ function ProductEditModal({ product, onSave, onClose }: {
         preco2: form.preco2 != null && form.preco2 !== "" ? parseFloat(String(form.preco2).replace(",", ".")) : null,
         preco3: form.preco3 != null && form.preco3 !== "" ? parseFloat(String(form.preco3).replace(",", ".")) : null,
         preco4: form.preco4 != null && form.preco4 !== "" ? parseFloat(String(form.preco4).replace(",", ".")) : null,
+        preco5: form.preco5 != null && form.preco5 !== "" ? parseFloat(String(form.preco5).replace(",", ".")) : null,
         faces: parseInt(String(form.faces)) || 0,
         localUso: parseInt(String(form.localUso)) || 3,
         m2PorCaixa: parseFloat(String(form.m2PorCaixa).replace(",", ".")) || (form.marca === "Villacol" ? 1 : 0),
@@ -3175,7 +4064,7 @@ function ProductEditModal({ product, onSave, onClose }: {
         pesoBrutoCx: parseFloat(String(form.pesoBrutoCx).replace(",", ".")) || 0,
         pesoBrutoM2: parseFloat(String(form.pesoBrutoM2).replace(",", ".")) || 0,
         espessuraMm: parseFloat(String(form.espessuraMm).replace(",", ".")) || 0,
-      };
+      });
       if (isNew) {
         const created = await createProduct(normalizedProduct);
         onSave(created);
@@ -3189,6 +4078,24 @@ function ProductEditModal({ product, onSave, onClose }: {
     finally { setSaving(false); }
   }
 
+
+  async function handleDelete() {
+    if (isNew) return;
+    setDeleting(true);
+    try {
+      const result = await deleteProduct(form.id);
+      onDelete(form.id);
+      setShowDeleteConfirm(false);
+      toast.success(result.archived
+        ? "Produto usado em orçamentos: foi marcado como descontinuado e removido da lista ativa."
+        : "Produto excluído!");
+    } catch (e: any) {
+      toast.error("Erro ao excluir: " + e.message);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   const inputCls = "w-full border border-border rounded-xl px-3 py-2 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25";
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
@@ -3196,7 +4103,7 @@ function ProductEditModal({ product, onSave, onClose }: {
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <div>
             <h3 className="font-semibold">{isNew ? "Novo Produto" : "Editar Produto"}</h3>
-            <p className="text-xs text-muted-foreground font-mono">{isNew ? "Cadastre Villagres ou Villacol" : `Ref: ${product.referencia}`}</p>
+            <p className="text-xs text-muted-foreground font-mono">{isNew ? "Cadastre Villagres, Villacol ou Villa Vinílicos" : `Ref: ${product.referencia}`}</p>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X size={18} /></button>
         </div>
@@ -3207,8 +4114,8 @@ function ProductEditModal({ product, onSave, onClose }: {
               <label className="text-xs font-medium text-muted-foreground mb-1 block">Marca</label>
               <select value={form.marca} onChange={(e) => handleMarcaChange(e.target.value)} className={inputCls}>
                 <option value="Villagres">Villagres</option>
-                <option value="Villa Vinílicos">Villa Vinílicos</option>
                 <option value="Villacol">Villacol</option>
+                <option value="Villa Vinílicos">Villa Vinílicos</option>
               </select>
             </div>
             <div>
@@ -3216,6 +4123,23 @@ function ProductEditModal({ product, onSave, onClose }: {
               <input {...field("referencia")} className={inputCls} />
             </div>
           </div>
+
+          {isVillaVinilicos && (
+            <div className="rounded-xl border border-border p-4 bg-muted/20">
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Produto Villa Vinílicos</label>
+              <select
+                value={villaVinilicosTipo}
+                onChange={(e) => handleVillaVinilicosTipoChange(e.target.value as "pisos" | "rodapes")}
+                className={inputCls}
+              >
+                <option value="pisos">Pisos — vendidos em m²</option>
+                <option value="rodapes">Rodapés — vendidos em metros lineares</option>
+              </select>
+              <p className="text-xs text-muted-foreground mt-2">
+                A opção escolhida define os campos de cadastro e a unidade utilizada no orçamento.
+              </p>
+            </div>
+          )}
 
           {isVillacol ? (
             <div className="space-y-3 rounded-xl border border-border p-4 bg-muted/20">
@@ -3285,7 +4209,7 @@ function ProductEditModal({ product, onSave, onClose }: {
           ) : (
             <>
               <div className="grid grid-cols-2 gap-3">
-                {([ ["Linha", "linha"], ["Coleção", "colecao"], ["Cor", "cor"], ["Formato", "formato"], ["Superfície", "superficie"] ] as const).map(([label, key]) => (
+                {([ ["Linha", "linha"], ...(!isVillaVinilicosLinear ? [["Coleção", "colecao"]] : []), ["Cor", "cor"], ["Formato", "formato"], ["Superfície", "superficie"] ] as [string, keyof Product][]).map(([label, key]) => (
                   <div key={key}>
                     <label className="text-xs font-medium text-muted-foreground mb-1 block">{label}</label>
                     <input {...field(key)} className={inputCls} />
@@ -3293,26 +4217,28 @@ function ProductEditModal({ product, onSave, onClose }: {
                 ))}
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Faces</label>
-                  <input {...field("faces")} inputMode="numeric" className={inputCls} />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Variação</label>
-                  <input {...field("variacao")} placeholder="Ex.: V1, V2, V3" className={inputCls} />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Local de uso</label>
-                  <select
-                    value={String(form.localUso ?? 3)}
-                    onChange={(e) => setForm((f) => ({ ...f, localUso: Number(e.target.value) }))}
-                    className={inputCls}
-                  >
-                    {Object.entries(LOCAL_USO).map(([value, label]) => (
-                      <option key={value} value={value}>{value} - {label}</option>
-                    ))}
-                  </select>
-                </div>
+                {!isVillaVinilicosLinear && <>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Faces</label>
+                    <input {...field("faces")} inputMode="numeric" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">{isVillaVinilicos ? "Capa Desgaste" : "Variação"}</label>
+                    <input {...field("variacao")} placeholder={isVillaVinilicos ? "Ex.: 0,30" : "Ex.: V1, V2, V3"} className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Local de uso</label>
+                    <select
+                      value={String(form.localUso ?? 3)}
+                      onChange={(e) => setForm((f) => ({ ...f, localUso: Number(e.target.value) }))}
+                      className={inputCls}
+                    >
+                      {Object.entries(LOCAL_USO).map(([value, label]) => (
+                        <option key={value} value={value}>{value} - {label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </>}
                 <div>
                   <label className="text-xs font-medium text-muted-foreground mb-1 block">Derivação</label>
                   <input {...field("derivacao")} className={inputCls} />
@@ -3320,23 +4246,25 @@ function ProductEditModal({ product, onSave, onClose }: {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">m²/caixa</label>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{isLinearProductForm ? "ml/caixa" : "m²/caixa"}</label>
                   <input {...field("m2PorCaixa")} inputMode="decimal" className={inputCls} />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-muted-foreground mb-1 block">Peças/caixa</label>
                   <input {...field("pecasPorCaixa")} inputMode="numeric" className={inputCls} />
                 </div>
+                {!isVillaVinilicosLinear && <>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">m²/pallet</label>
+                    <input {...field("m2PorPallet")} inputMode="decimal" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Caixas/pallet</label>
+                    <input {...field("cxPorPallet")} inputMode="numeric" className={inputCls} />
+                  </div>
+                </>}
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">m²/pallet</label>
-                  <input {...field("m2PorPallet")} inputMode="decimal" className={inputCls} />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Caixas/pallet</label>
-                  <input {...field("cxPorPallet")} inputMode="numeric" className={inputCls} />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Peso bruto/m² (kg)</label>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{isLinearProductForm ? "Peso bruto/metro linear (kg)" : "Peso bruto/m² (kg)"}</label>
                   <input {...field("pesoBrutoM2")} inputMode="decimal" className={inputCls} />
                 </div>
                 <div>
@@ -3356,11 +4284,23 @@ function ProductEditModal({ product, onSave, onClose }: {
               Produtos Villacol entram como itens complementares. Use m²/caixa = 1 para controlar por unidade/embalagem no orçamento.
             </p>
           )}
+          {isVillaVinilicos && (
+            <p className="text-xs text-muted-foreground rounded-xl bg-blue-50 border border-blue-100 px-3 py-2">
+              {isVillaVinilicosLinear
+                ? "Rodapés Villa Vinílicos são vendidos e calculados por metro linear."
+                : "Pisos Villa Vinílicos são vendidos e calculados por metro quadrado."}
+            </p>
+          )}
+          {isCantoneiraProduct(form) && (
+            <p className="text-xs text-muted-foreground rounded-xl bg-blue-50 border border-blue-100 px-3 py-2">
+              Produtos da linha CANTONEIRA são vendidos e calculados por metro linear.
+            </p>
+          )}
 
           <div>
-            <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Tabelas de Preço {isVillacol ? "(R$/unidade ou embalagem)" : "(R$/m²)"}</p>
-            <div className="grid grid-cols-4 gap-2">
-              {([1, 2, 3, 4] as const).map((t) => (
+            <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Tabelas de Preço {isLinearProductForm ? "(R$/metro linear)" : isVillacol ? "(R$/unidade ou embalagem)" : "(R$/m²)"}</p>
+            <div className="grid grid-cols-5 gap-2">
+              {([1, 2, 3, 4, 5] as const).map((t) => (
                 <div key={t}>
                   <label className="text-xs text-muted-foreground mb-1 block text-center">Tab. {t}</label>
                   <input
@@ -3394,12 +4334,40 @@ function ProductEditModal({ product, onSave, onClose }: {
         </div>
 
         <div className="px-6 py-4 border-t border-border flex gap-2">
+          {!isNew && (
+            <button onClick={() => setShowDeleteConfirm(true)} disabled={deleting || saving}
+              className="border border-destructive/30 text-destructive rounded-xl px-4 py-2.5 text-sm hover:bg-red-50 transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
+              {deleting ? <Spinner size={14} /> : <Trash2 size={14} />} Excluir
+            </button>
+          )}
           <button onClick={onClose} className="flex-1 border border-border rounded-xl py-2.5 text-sm hover:bg-muted transition-colors">Cancelar</button>
-          <button onClick={handleSave} disabled={saving}
+          <button onClick={handleSave} disabled={saving || deleting}
             className="flex-1 bg-primary text-primary-foreground rounded-xl py-2.5 text-sm font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2">
             {saving ? <Spinner size={14} /> : <Check size={14} />} {isNew ? "Criar Produto" : "Salvar Alterações"}
           </button>
         </div>
+
+        {showDeleteConfirm && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
+            <div className="bg-card rounded-2xl shadow-2xl w-full max-w-sm p-6 border border-border">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold">Excluir produto</h3>
+                <button onClick={() => setShowDeleteConfirm(false)} className="text-muted-foreground hover:text-foreground"><X size={16} /></button>
+              </div>
+              <p className="text-sm text-muted-foreground leading-relaxed mb-4">
+                Deseja excluir o produto <strong className="text-foreground">{form.linha}</strong>?
+                Se ele já estiver em algum orçamento, o sistema irá apenas marcá-lo como descontinuado para preservar o histórico.
+              </p>
+              <div className="flex gap-2">
+                <button onClick={() => setShowDeleteConfirm(false)} className="flex-1 border border-border rounded-xl py-2.5 text-sm hover:bg-muted transition-colors">Cancelar</button>
+                <button onClick={handleDelete} disabled={deleting}
+                  className="flex-1 bg-destructive text-destructive-foreground rounded-xl py-2.5 text-sm font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2">
+                  {deleting ? <Spinner size={14} /> : <Trash2 size={14} />} Excluir
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -3414,10 +4382,10 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
   const [localUso, setLocalUso] = useState("");
   const [marcaFiltro, setMarcaFiltro] = useState("");
   const [categoriaFiltro, setCategoriaFiltro] = useState("");
-  const [tabela, setTabela] = useState<1 | 2 | 3 | 4>(1);
+  const [tabela, setTabela] = useState<1 | 2 | 3 | 4 | 5>(1);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState<{ ok: number; total: number } | null>(null);
+  const [importResult, setImportResult] = useState<{ created: number; updated: number; total: number } | null>(null);
   const [showDescontinuados, setShowDescontinuados] = useState(false);
   const [showTemplateExportModal, setShowTemplateExportModal] = useState(false);
   const [pricingForm, setPricingForm] = useState({
@@ -3446,23 +4414,10 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
       (!categoriaFiltro || p.categoriaComplementar === categoriaFiltro) &&
       (!superficie || p.superficie === superficie) &&
       (!localUso || String(p.localUso) === localUso) &&
-      (showDescontinuados || !p.descontinuado);
+      (showDescontinuados ? p.descontinuado : !p.descontinuado);
   });
 
   const descontinuadosCount = products.filter((p) => p.descontinuado).length;
-
-  function exportProductTemplate(kind: ProductTemplateKind) {
-    const csv = buildProductTemplateCSV(kind);
-    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `template_produtos_${kind}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    setShowTemplateExportModal(false);
-    toast.success(`Template ${PRODUCT_TEMPLATE_LABELS[kind]} baixado!`);
-  }
 
   const pk = priceKey(tabela);
 
@@ -3471,6 +4426,16 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
       const next = ps.some((p) => p.id === updated.id)
         ? ps.map((p) => p.id === updated.id ? updated : p)
         : [updated, ...ps];
+      onProductsChange(next);
+      return next;
+    });
+    setEditingProduct(null);
+  }
+
+
+  function handleProductDeleted(productId: string) {
+    setProducts((ps) => {
+      const next = ps.filter((p) => p.id !== productId);
       onProductsChange(next);
       return next;
     });
@@ -3505,6 +4470,16 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
     }
   }
 
+  function exportProductTemplate(kind: ProductTemplateKind) {
+    const csv = buildProductTemplateCSV(kind);
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `template_produtos_${kind}.csv`; a.click();
+    URL.revokeObjectURL(url);
+    setShowTemplateExportModal(false);
+  }
+
   async function handleImportCSV(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -3513,14 +4488,14 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
     setImportResult(null);
     try {
       const text = await file.text();
-      const parsed = buildProductsFromCSV(text);
+      const parsed = buildProductsFromTemplateCSV(text);
       if (parsed.length === 0) { toast.error("Nenhum produto encontrado no arquivo."); return; }
-      await seedProducts(parsed);
+      const result = await importProducts(parsed);
       const refreshed = await fetchAllProducts();
       setProducts(refreshed);
       onProductsChange(refreshed);
-      setImportResult({ ok: parsed.length, total: parsed.length });
-      toast.success(`${parsed.length} produtos importados com sucesso!`);
+      setImportResult(result);
+      toast.success(`${result.created} produtos criados e ${result.updated} atualizados.`);
     } catch (e: any) { toast.error("Erro ao importar: " + e.message); }
     finally { setImporting(false); }
   }
@@ -3539,8 +4514,8 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
           className="border border-border rounded-xl px-3 py-2.5 text-xs bg-card focus:outline-none">
           <option value="">Todas as marcas</option>
           <option value="Villagres">Villagres</option>
-          <option value="Villa Vinílicos">Villa Vinílicos</option>
           <option value="Villacol">Villacol</option>
+          <option value="Villa Vinílicos">Villa Vinílicos</option>
         </select>
         <select value={categoriaFiltro} onChange={(e) => setCategoriaFiltro(e.target.value)}
           className="border border-border rounded-xl px-3 py-2.5 text-xs bg-card focus:outline-none">
@@ -3564,7 +4539,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
         </select>
         <div className="flex items-center gap-1 border border-border rounded-xl px-3 bg-card h-[38px]">
           <span className="text-xs text-muted-foreground">Tab.</span>
-          {([1, 2, 3, 4] as const).map((t) => (
+          {([1, 2, 3, 4, 5] as const).map((t) => (
             <button key={t} onClick={() => setTabela(t)}
               className={`w-6 h-6 rounded text-xs font-semibold transition-all ${tabela === t ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>
               {t}
@@ -3585,16 +4560,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
         </button>
 
         {/* Export template */}
-        <button onClick={() => {
-          const headers = "Formato;Referencia;Linha;Colecao;Cor;Superficie;Faces;Variacao;LocalUso;Derivacao;M2PorCaixa;PecasPorCaixa;M2PorPallet;CxPorPallet;PesoBrutoM2;PesoBrutoCx;EspessuraMm;Preco1;Preco2;Preco3;Preco4";
-          const example = "60x60;REF-001;Nome da Linha;Nome Coleção;Bege;Polido;1;-;3;-;1,44;6;43,20;30;18,50;26,65;9,00;45,90;49,90;54,90;59,90";
-          const csv = headers + "\n" + example;
-          const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url; a.download = "template_produtos_villagres.csv"; a.click();
-          URL.revokeObjectURL(url);
-        }}
+        <button onClick={() => setShowTemplateExportModal(true)}
           className="flex items-center gap-1.5 border border-border rounded-xl px-3 py-2 text-xs hover:bg-muted transition-colors text-muted-foreground">
           <Copy size={12} /> Exportar Template
         </button>
@@ -3610,37 +4576,27 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
       {importResult && (
         <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-xl px-4 py-2.5 text-sm text-green-800">
           <Check size={14} className="text-green-600 shrink-0" />
-          <span><strong>{importResult.ok}</strong> produtos importados/atualizados com sucesso.</span>
+          <span><strong>{importResult.created}</strong> criados e <strong>{importResult.updated}</strong> atualizados ({importResult.total} no arquivo).</span>
           <button onClick={() => setImportResult(null)} className="ml-auto text-green-600 hover:text-green-800"><X size={13} /></button>
         </div>
       )}
 
-      {/* Modal de Escolha do Template de Exportação */}
       {showTemplateExportModal && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
           <div className="bg-card rounded-2xl shadow-2xl w-full max-w-md p-6 border border-border">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="font-semibold">Exportar template CSV</h3>
-                <p className="text-xs text-muted-foreground mt-1">Escolha a linha de produtos para baixar a planilha com as colunas corretas:</p>
+                <h3 className="font-semibold">Exportar template</h3>
+                <p className="text-xs text-muted-foreground mt-1">Escolha a linha de produtos para gerar o arquivo com os campos corretos.</p>
               </div>
-              <button onClick={() => setShowTemplateExportModal(false)} className="text-muted-foreground hover:text-foreground">
-                <X size={18} />
-              </button>
+              <button onClick={() => setShowTemplateExportModal(false)} className="text-muted-foreground hover:text-foreground"><X size={16} /></button>
             </div>
-            <div className="grid gap-2 max-h-[60vh] overflow-y-auto pr-1">
+            <div className="grid gap-2">
               {(Object.keys(PRODUCT_TEMPLATE_LABELS) as ProductTemplateKind[]).map((kind) => (
-                <button
-                  key={kind}
-                  type="button"
-                  onClick={() => exportProductTemplate(kind)}
-                  className="w-full border border-border rounded-xl px-4 py-3 text-left hover:bg-primary/10 hover:border-primary/40 transition-colors group flex items-center justify-between"
-                >
-                  <div>
-                    <span className="text-sm font-medium group-hover:text-primary transition-colors">{PRODUCT_TEMPLATE_LABELS[kind]}</span>
-                    <span className="block text-xs text-muted-foreground mt-0.5">Template CSV com os cabeçalhos específicos de {PRODUCT_TEMPLATE_LABELS[kind].toLowerCase()}.</span>
-                  </div>
-                  <ChevronRight size={16} className="text-muted-foreground group-hover:text-primary shrink-0 ml-2" />
+                <button key={kind} type="button" onClick={() => exportProductTemplate(kind)}
+                  className="w-full border border-border rounded-xl px-4 py-3 text-left hover:bg-muted transition-colors">
+                  <span className="text-sm font-medium">{PRODUCT_TEMPLATE_LABELS[kind]}</span>
+                  <span className="block text-xs text-muted-foreground mt-0.5">Template CSV específico para {PRODUCT_TEMPLATE_LABELS[kind].toLowerCase()}.</span>
                 </button>
               ))}
             </div>
@@ -3716,14 +4672,21 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
                 <th className="text-left px-5 py-2.5 font-medium">Produto</th>
                 <th className="text-left px-3 py-2.5 font-medium hidden md:table-cell">Formato</th>
                 <th className="text-left px-3 py-2.5 font-medium hidden lg:table-cell">Superfície</th>
-                <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">m²/cx</th>
+                <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">Unidade</th>
                 <th className="text-right px-3 py-2.5 font-medium">Preço-base</th>
+                <th className="text-right px-3 py-2.5 font-medium">Preço c/ taxas</th>
                 <th className="w-10 px-3 py-2.5"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {filtered.slice(0, 200).map((p) => {
                 const price = p[pk] as number | null;
+                const priceWithTaxes = price == null ? null : applyArgamassaCardFee(
+                  calculateProductFinalPrice(p, price, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual),
+                  p,
+                  "cartao",
+                  pricingSettings,
+                );
                 return (
                   <tr key={p.id} className={`transition-colors group ${p.descontinuado ? "bg-amber-50/50 hover:bg-amber-50" : "hover:bg-muted/20"}`}>
                     <td className="px-5 py-2.5">
@@ -3737,16 +4700,23 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
                       <p className="text-xs text-muted-foreground">
                         {p.marca === "Villacol"
                           ? [p.categoriaComplementar, p.tipoRejunte || p.tipoEmbalagem, p.cor].filter(Boolean).join(" · ")
-                          : `${p.cor && p.cor !== "única" && p.cor !== "-" ? `${p.cor} · ` : ""}${p.colecao}`}
+                          : isVillaVinilicosProduct(p)
+                            ? [isLinearMeterProduct(p) ? "Venda por metro linear" : "Venda por m²", p.colecao].filter(Boolean).join(" · ")
+                            : `${p.cor && p.cor !== "única" && p.cor !== "-" ? `${p.cor} · ` : ""}${p.colecao}`}
                       </p>
                       <p className="text-xs text-muted-foreground font-mono">Ref: {p.referencia}</p>
                     </td>
-                    <td className="px-3 py-2.5 text-xs text-muted-foreground hidden md:table-cell">{p.formato}</td>
-                    <td className="px-3 py-2.5 text-xs text-muted-foreground hidden lg:table-cell">{p.superficie} · {LOCAL_USO[p.localUso]}</td>
-                    <td className="px-3 py-2.5 text-right text-xs font-mono hidden sm:table-cell">{p.m2PorCaixa}</td>
+                    <td className="px-3 py-2.5 text-xs text-muted-foreground hidden md:table-cell">{p.formato || (isLinearMeterProduct(p) ? "Metro linear" : "—")}</td>
+                    <td className="px-3 py-2.5 text-xs text-muted-foreground hidden lg:table-cell">{p.superficie?.trim() || "-"}</td>
+                    <td className="px-3 py-2.5 text-right text-xs font-mono hidden sm:table-cell">{isLinearMeterProduct(p) ? "m linear" : p.m2PorCaixa}</td>
                     <td className="px-3 py-2.5 text-right">
-                      {price
+                      {price != null
                         ? <span className="font-mono text-muted-foreground">{fmtBRL(price)}</span>
+                        : <span className="text-xs text-amber-600">Consultar</span>}
+                    </td>
+                    <td className="px-3 py-2.5 text-right">
+                      {priceWithTaxes != null
+                        ? <span className="font-mono font-semibold text-primary">{fmtBRL(priceWithTaxes)}</span>
                         : <span className="text-xs text-amber-600">Consultar</span>}
                     </td>
                     <td className="px-3 py-2.5 text-center">
@@ -3768,6 +4738,7 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
         <ProductEditModal
           product={editingProduct}
           onSave={handleProductSaved}
+          onDelete={handleProductDeleted}
           onClose={() => setEditingProduct(null)}
         />
       )}
@@ -3775,453 +4746,250 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
   );
 }
 
-// ── Customer Search (Home) ────────────────────────────────────────
 
-// ── Users Management Component ─────────────────────────────────────
+// ── Users Management ──────────────────────────────────────────────
 
-function UsersTab({
-  users,
-  currentUser,
-  onUsersReload,
-}: {
+function UsersTab({ users, currentUser, onUsersReload }: {
   users: AppUser[];
   currentUser: AppUser;
-  onUsersReload: () => void;
+  onUsersReload: () => Promise<void>;
 }) {
   const [newUser, setNewUser] = useState({ username: "", label: "", password: "", isAdmin: false });
-  const [passwords, setPasswords] = useState<Record<string, string>>({});
-  const [loadingUser, setLoadingUser] = useState<string | null>(null);
+  const [editingPasswords, setEditingPasswords] = useState<Record<string, string>>({});
+  const [draftAdminRoles, setDraftAdminRoles] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(users.map((user) => [user.username, user.isAdmin])),
+  );
+  const [savingUser, setSavingUser] = useState<string | null>(null);
 
-  function cleanUsername(val: string) {
-    return val.trim().toLowerCase().replace(/\s+/g, "_");
+  useEffect(() => {
+    setDraftAdminRoles(Object.fromEntries(users.map((user) => [user.username, user.isAdmin])));
+  }, [users]);
+
+  function normalizeUsername(value: string): string {
+    return value.trim().toLowerCase().replace(/\s+/g, "_");
   }
 
   async function handleCreateUser() {
-    const username = cleanUsername(newUser.username);
+    const username = normalizeUsername(newUser.username);
     const label = newUser.label.trim() || username;
     const password = newUser.password.trim();
 
-    if (!username) {
-      toast.error("Informe o nome de usuário.");
-      return;
-    }
-    if (!/^[a-z0-9._-]+$/.test(username)) {
-      toast.error("Use apenas letras, números, ponto, hífen ou underline no usuário.");
-      return;
-    }
-    if (!password) {
-      toast.error("Informe uma senha inicial.");
-      return;
-    }
-    if (users.some((u) => u.username === username)) {
-      toast.error("Já existe um usuário com este nome.");
-      return;
-    }
+    if (!username) { toast.error("Informe o usuário."); return; }
+    if (!/^[a-z0-9._-]+$/.test(username)) { toast.error("Use apenas letras, números, ponto, hífen ou underline no usuário."); return; }
+    if (!password) { toast.error("Informe uma senha."); return; }
+    if (users.some((user) => user.username === username)) { toast.error("Já existe um usuário com este nome."); return; }
 
-    setLoadingUser("new");
+    setSavingUser("new");
     try {
-      await createUser({ username, label, password, isAdmin: newUser.isAdmin });
+      await createAppUser({ username, label, password, isAdmin: newUser.isAdmin });
       await onUsersReload();
       setNewUser({ username: "", label: "", password: "", isAdmin: false });
-      toast.success(`Usuário "${username}" criado com sucesso!`);
-    } catch (e: any) {
-      toast.error("Erro ao criar usuário: " + e.message);
-    } finally {
-      setLoadingUser(null);
-    }
+      toast.success(`Usuário ${username} criado.`);
+    } catch (e: any) { toast.error("Erro ao criar usuário: " + e.message); }
+    finally { setSavingUser(null); }
   }
 
-  async function handleChangePassword(username: string) {
-    const pass = (passwords[username] || "").trim();
-    if (!pass) {
-      toast.error("Informe uma nova senha válida.");
+  async function handleSavePassword(username: string) {
+    const password = editingPasswords[username]?.trim();
+    if (!password) { toast.error("Informe uma senha válida."); return; }
+
+    setSavingUser(username);
+    try {
+      await updateAppUserPassword(username, password);
+      await onUsersReload();
+      setEditingPasswords((prev) => ({ ...prev, [username]: "" }));
+      toast.success(`Senha de ${username} atualizada.`);
+    } catch (e: any) { toast.error("Erro ao alterar senha: " + e.message); }
+    finally { setSavingUser(null); }
+  }
+
+  function handleDraftAdminRoleChange(username: string, isAdmin: boolean) {
+    const nextRoles = { ...draftAdminRoles, [username]: isAdmin };
+    const activeAdminCount = users.filter((user) => user.active && nextRoles[user.username]).length;
+    if (activeAdminCount < 1) {
+      toast.error("O sistema precisa manter pelo menos um administrador ativo.");
       return;
     }
-    setLoadingUser(username);
-    try {
-      await updateUserPassword(username, pass);
-      await onUsersReload();
-      setPasswords((p) => ({ ...p, [username]: "" }));
-      toast.success(`Senha de "${username}" atualizada com sucesso.`);
-    } catch (e: any) {
-      toast.error("Erro ao alterar senha: " + e.message);
-    } finally {
-      setLoadingUser(null);
-    }
+    setDraftAdminRoles(nextRoles);
   }
 
-  async function handleToggleAdmin(username: string, newIsAdmin: boolean) {
-    const userToUpdate = users.find((u) => u.username === username);
-    if (!userToUpdate) return;
-    if (userToUpdate.isAdmin === newIsAdmin) return;
-
-    // Regra de negócio: sempre deve haver pelo menos um admin ativo
-    if (!newIsAdmin) {
-      const activeAdminCount = users.filter((u) => u.active && u.isAdmin).length;
-      if (activeAdminCount <= 1) {
-        toast.error("Operação não permitida: É necessário manter pelo menos um usuário com perfil de Administrador no sistema.");
-        return;
-      }
+  async function handleSaveAdminRoles() {
+    const activeAdminCount = users.filter((user) => user.active && draftAdminRoles[user.username]).length;
+    if (activeAdminCount < 1) {
+      toast.error("O sistema precisa manter pelo menos um administrador ativo.");
+      return;
     }
 
-    setLoadingUser(`admin_${username}`);
+    const changedUsers = users.filter((user) => user.isAdmin !== draftAdminRoles[user.username]);
+    if (changedUsers.length === 0) {
+      toast.info("Nenhuma alteração de perfil para salvar.");
+      return;
+    }
+
+    setSavingUser("roles");
     try {
-      await updateUserAdminStatus(username, newIsAdmin);
+      // Promote first so role swaps never temporarily leave the system without an admin.
+      const orderedChanges = [...changedUsers].sort((a, b) => Number(draftAdminRoles[b.username]) - Number(draftAdminRoles[a.username]));
+      for (const user of orderedChanges) {
+        await updateAppUserAdminRole(user.username, draftAdminRoles[user.username]);
+      }
       await onUsersReload();
-      toast.success(
-        newIsAdmin
-          ? `Usuário "${username}" agora é Administrador.`
-          : `Usuário "${username}" agora é Usuário Padrão.`
-      );
-    } catch (e: any) {
-      toast.error("Erro ao atualizar perfil do usuário: " + e.message);
-    } finally {
-      setLoadingUser(null);
-    }
+      toast.success("Perfis de acesso atualizados.");
+    } catch (e: any) { toast.error("Erro ao salvar perfis: " + e.message); }
+    finally { setSavingUser(null); }
   }
 
   async function handleRemoveUser(username: string) {
-    if (username === "admin") {
-      toast.error("O usuário principal 'admin' não pode ser removido.");
+    if (username === "admin") { toast.error("O usuário admin não pode ser removido."); return; }
+    if (username === currentUser.username) { toast.error("Você não pode remover o usuário logado."); return; }
+    const user = users.find((candidate) => candidate.username === username);
+    if (user?.isAdmin && users.filter((candidate) => candidate.active && candidate.isAdmin).length <= 1) {
+      toast.error("O sistema precisa manter pelo menos um administrador ativo.");
       return;
     }
-    if (username === currentUser.username) {
-      toast.error("Você não pode remover o seu próprio usuário enquanto estiver logado.");
-      return;
-    }
-    const userToRemove = users.find((u) => u.username === username);
-    if (userToRemove?.isAdmin) {
-      const activeAdminCount = users.filter((u) => u.active && u.isAdmin).length;
-      if (activeAdminCount <= 1) {
-        toast.error("Operação não permitida: Remover este usuário deixaria o sistema sem nenhum Administrador.");
-        return;
-      }
-    }
+    if (!confirm(`Remover o usuário "${username}"? Os orçamentos criados por ele continuarão salvos, mas ficarão visíveis apenas para o admin.`)) return;
 
-    if (
-      confirm(
-        `Deseja remover o usuário "${username}"? Ele perderá acesso ao sistema, mas seus orçamentos criados permanecerão salvos.`
-      )
-    ) {
-      setLoadingUser(username);
-      try {
-        await deactivateUser(username);
-        await onUsersReload();
-        toast.success(`Usuário "${username}" removido.`);
-      } catch (e: any) {
-        toast.error("Erro ao remover usuário: " + e.message);
-      } finally {
-        setLoadingUser(null);
-      }
-    }
+    setSavingUser(username);
+    try {
+      await deactivateAppUser(username);
+      await onUsersReload();
+      toast.success(`Usuário ${username} removido.`);
+    } catch (e: any) { toast.error("Erro ao remover usuário: " + e.message); }
+    finally { setSavingUser(null); }
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div>
-        <h2 className="font-semibold text-lg">Gerenciamento de Usuários</h2>
-        <p className="text-sm text-muted-foreground">
-          Gerencie acessos, defina permissões de Administrador e altere senhas dos usuários do sistema.
-        </p>
+        <h2 className="font-semibold mb-1">Usuários</h2>
+        <p className="text-sm text-muted-foreground">Administradores podem criar usuários, definir perfis, alterar senhas e remover acessos.</p>
       </div>
 
-      {/* Form de Criar Novo Usuário */}
       <div className="bg-card border border-border rounded-2xl p-5 shadow-sm">
-        <h3 className="font-semibold text-base mb-4 flex items-center gap-2">
-          <Plus size={18} className="text-primary" /> Criar Novo Usuário
-        </h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center"><UserPlus size={19} /></div>
           <div>
-            <label className="text-xs font-medium text-muted-foreground block mb-1">Nome de usuário *</label>
-            <input
-              type="text"
-              value={newUser.username}
-              onChange={(e) => setNewUser((u) => ({ ...u, username: cleanUsername(e.target.value) }))}
-              placeholder="ex: vendedor_2"
-              className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-mono"
-            />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-muted-foreground block mb-1">Nome de exibição</label>
-            <input
-              type="text"
-              value={newUser.label}
-              onChange={(e) => setNewUser((u) => ({ ...u, label: e.target.value }))}
-              placeholder="Ex: João da Silva"
-              className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25"
-            />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-muted-foreground block mb-1">Senha inicial *</label>
-            <input
-              type="password"
-              value={newUser.password}
-              onChange={(e) => setNewUser((u) => ({ ...u, password: e.target.value }))}
-              placeholder="Digite a senha"
-              className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25"
-            />
+            <h3 className="font-semibold">Criar novo usuário</h3>
+            <p className="text-xs text-muted-foreground">Preencha os dados e escolha o nível de acesso.</p>
           </div>
         </div>
-
-        {/* Perfil Inicial */}
-        <div className="mt-4 pt-3 border-t border-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <span className="text-xs font-medium text-muted-foreground block">Perfil de Acesso do novo usuário:</span>
-            <div className="flex items-center gap-4 mt-1.5">
-              <label className="flex items-center gap-2 text-xs cursor-pointer font-medium">
-                <input
-                  type="radio"
-                  name="new_user_profile"
-                  checked={!newUser.isAdmin}
-                  onChange={() => setNewUser((u) => ({ ...u, isAdmin: false }))}
-                  className="accent-primary w-4 h-4 cursor-pointer"
-                />
-                <span>Usuário Padrão</span>
-              </label>
-              <label className="flex items-center gap-2 text-xs cursor-pointer font-medium text-primary">
-                <input
-                  type="radio"
-                  name="new_user_profile"
-                  checked={newUser.isAdmin}
-                  onChange={() => setNewUser((u) => ({ ...u, isAdmin: true }))}
-                  className="accent-primary w-4 h-4 cursor-pointer"
-                />
-                <span className="flex items-center gap-1"><Shield size={13} /> Administrador</span>
-              </label>
-            </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-foreground">Usuário <span className="text-destructive">*</span></label>
+            <input value={newUser.username} onChange={(e) => setNewUser((form) => ({ ...form, username: normalizeUsername(e.target.value) }))}
+              placeholder="ex: vendedor_2"
+              className="w-full h-11 border border-border rounded-xl px-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
           </div>
-
-          <button
-            onClick={handleCreateUser}
-            disabled={loadingUser === "new"}
-            className="bg-primary text-primary-foreground px-5 py-2.5 rounded-xl text-sm font-medium hover:opacity-90 transition-opacity flex items-center justify-center gap-2 disabled:opacity-50"
-          >
-            {loadingUser === "new" ? <Spinner size={14} /> : <Plus size={16} />}
-            Cadastrar Usuário
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-foreground">Nome exibido</label>
+            <input value={newUser.label} onChange={(e) => setNewUser((form) => ({ ...form, label: e.target.value }))}
+              placeholder="Ex: Vendedor 2"
+              className="w-full h-11 border border-border rounded-xl px-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-foreground">Senha inicial <span className="text-destructive">*</span></label>
+            <input type="password" value={newUser.password} onChange={(e) => setNewUser((form) => ({ ...form, password: e.target.value }))}
+              placeholder="Senha inicial"
+              className="w-full h-11 border border-border rounded-xl px-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+          </div>
+        </div>
+        <div className="mt-5 pt-5 border-t border-border flex flex-col lg:flex-row lg:items-end justify-between gap-4">
+          <fieldset className="min-w-0">
+            <legend className="text-xs font-semibold mb-2">Perfil de acesso</legend>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button type="button" onClick={() => setNewUser((form) => ({ ...form, isAdmin: false }))}
+                aria-pressed={!newUser.isAdmin}
+                className={`flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors ${!newUser.isAdmin ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border hover:bg-muted/40"}`}>
+                <UserRound size={18} className={!newUser.isAdmin ? "text-primary" : "text-muted-foreground"} />
+                <span><span className="block text-sm font-semibold">Usuário</span><span className="block text-xs text-muted-foreground">Acesso aos próprios orçamentos</span></span>
+              </button>
+              <button type="button" onClick={() => setNewUser((form) => ({ ...form, isAdmin: true }))}
+                aria-pressed={newUser.isAdmin}
+                className={`flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors ${newUser.isAdmin ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border hover:bg-muted/40"}`}>
+                <ShieldCheck size={18} className={newUser.isAdmin ? "text-primary" : "text-muted-foreground"} />
+                <span><span className="block text-sm font-semibold">Administrador</span><span className="block text-xs text-muted-foreground">Acesso total ao sistema</span></span>
+              </button>
+            </div>
+          </fieldset>
+          <button onClick={handleCreateUser} disabled={savingUser === "new"}
+            className="h-11 bg-primary text-primary-foreground px-5 rounded-xl text-sm font-semibold hover:opacity-90 transition-opacity flex items-center justify-center gap-2 shrink-0 disabled:opacity-50">
+            {savingUser === "new" ? <Spinner size={15} /> : <UserPlus size={15} />} Criar usuário
           </button>
         </div>
       </div>
 
-      {/* Lista de Usuários Cadastrados */}
       <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-sm">
-        <div className="px-5 py-3 border-b border-border bg-muted/30 flex items-center justify-between">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-            {users.length} usuário{users.length !== 1 ? "s" : ""} cadastrado{users.length !== 1 ? "s" : ""}
-          </p>
-          <span className="text-xs text-muted-foreground flex items-center gap-1">
-            <Shield size={12} className="text-primary" /> Sempre é mantido ao menos 1 Administrador
-          </span>
+        <div className="px-5 py-3 border-b border-border bg-muted/30 flex flex-col sm:flex-row items-center justify-between gap-2">
+          <p className="text-xs text-muted-foreground">{users.length} usuário{users.length !== 1 ? "s" : ""} cadastrado{users.length !== 1 ? "s" : ""}</p>
+          <button onClick={handleSaveAdminRoles} disabled={savingUser !== null}
+            className="border border-border rounded-xl px-3 py-2 text-sm hover:bg-muted transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40">
+            {savingUser === "roles" ? <Spinner size={13} /> : <Save size={13} />} Salvar alterações
+          </button>
         </div>
-
         <div className="divide-y divide-border">
-          {users.map((u) => {
-            const isSelf = u.username === currentUser.username;
-            const isUpdatingAdmin = loadingUser === `admin_${u.username}`;
-
-            return (
-              <div key={u.username} className="p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                {/* Info do Usuário */}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-semibold text-sm">{u.label}</p>
-                    {u.isAdmin ? (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-primary/10 text-primary border border-primary/20 rounded-full px-2 py-0.5">
-                        <Shield size={11} /> Admin
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-muted text-muted-foreground border border-border rounded-full px-2 py-0.5">
-                        Padrão
-                      </span>
-                    )}
-                    {isSelf && (
-                      <span className="text-[10px] bg-amber-100 text-amber-800 border border-amber-200 rounded px-1.5 py-0.5 font-medium">
-                        Você
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground font-mono mt-0.5">@{u.username}</p>
+          {users.map((user) => (
+            <div key={user.username} className="p-5 space-y-4">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${draftAdminRoles[user.username] ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
+                  {draftAdminRoles[user.username] ? <ShieldCheck size={18} /> : <UserRound size={18} />}
                 </div>
-
-                {/* Seleção do Perfil (RADIO BUTTONS) */}
-                <div className="bg-muted/40 border border-border rounded-xl p-2.5 shrink-0 flex flex-col sm:flex-row items-start sm:items-center gap-3">
-                  <span className="text-xs font-semibold text-muted-foreground mr-1">Perfil:</span>
-                  <div className="flex items-center gap-3">
-                    <label className={`flex items-center gap-1.5 text-xs cursor-pointer select-none ${!u.isAdmin ? "font-semibold text-foreground" : "text-muted-foreground"}`}>
-                      <input
-                        type="radio"
-                        name={`user_role_${u.username}`}
-                        value="user"
-                        checked={!u.isAdmin}
-                        disabled={isUpdatingAdmin}
-                        onChange={() => handleToggleAdmin(u.username, false)}
-                        className="accent-primary w-4 h-4 cursor-pointer"
-                      />
-                      <span>Usuário Padrão</span>
-                    </label>
-
-                    <label className={`flex items-center gap-1.5 text-xs cursor-pointer select-none ${u.isAdmin ? "font-semibold text-primary" : "text-muted-foreground"}`}>
-                      <input
-                        type="radio"
-                        name={`user_role_${u.username}`}
-                        value="admin"
-                        checked={u.isAdmin}
-                        disabled={isUpdatingAdmin}
-                        onChange={() => handleToggleAdmin(u.username, true)}
-                        className="accent-primary w-4 h-4 cursor-pointer"
-                      />
-                      <span className="flex items-center gap-1"><Shield size={12} /> Admin</span>
-                    </label>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="font-semibold text-sm truncate">{user.label}</p>
+                    {user.username === currentUser.username && <span className="text-[10px] rounded-full bg-primary/10 text-primary px-2 py-0.5 font-semibold">Você</span>}
                   </div>
-                  {isUpdatingAdmin && <Spinner size={12} />}
+                  <p className="text-xs text-muted-foreground font-mono truncate">@{user.username}</p>
                 </div>
-
-                {/* Ações (Nova Senha e Excluir) */}
-                <div className="flex items-center gap-2 shrink-0 pt-2 lg:pt-0 border-t lg:border-t-0 border-border">
-                  <div className="flex items-center gap-1.5">
-                    <input
-                      type="password"
-                      value={passwords[u.username] || ""}
-                      onChange={(e) => setPasswords((p) => ({ ...p, [u.username]: e.target.value }))}
-                      onKeyDown={(e) => e.key === "Enter" && handleChangePassword(u.username)}
+              </div>
+              <div className="flex flex-col lg:flex-row gap-3 lg:items-center">
+                <fieldset className="grid grid-cols-2 rounded-xl bg-muted/60 p-1.5 h-12 w-full lg:w-80 shrink-0" disabled={savingUser !== null}>
+                  <legend className="sr-only">Perfil de {user.label}</legend>
+                  <label className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold transition-colors ${!draftAdminRoles[user.username] ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+                    <input type="radio" name={`role-${user.username}`} value="user" checked={!draftAdminRoles[user.username]}
+                      onChange={() => handleDraftAdminRoleChange(user.username, false)} className="sr-only" />
+                    <UserRound size={15} className="shrink-0" />
+                    Usuário
+                  </label>
+                  <label className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold transition-colors ${draftAdminRoles[user.username] ? "bg-card text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+                    <input type="radio" name={`role-${user.username}`} value="admin" checked={draftAdminRoles[user.username] === true}
+                      onChange={() => handleDraftAdminRoleChange(user.username, true)} className="sr-only" />
+                    <ShieldCheck size={15} className="shrink-0" />
+                    Administrador
+                  </label>
+                </fieldset>
+                <div className="grid grid-cols-1 sm:grid-cols-[minmax(220px,1fr)_auto_auto] gap-2 flex-1">
+                  <div className="relative">
+                    <KeyRound size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                    <input type="password" value={editingPasswords[user.username] || ""}
+                      onChange={(e) => setEditingPasswords((prev) => ({ ...prev, [user.username]: e.target.value }))}
+                      onKeyDown={(e) => e.key === "Enter" && handleSavePassword(user.username)}
                       placeholder="Nova senha"
-                      className="border border-border rounded-xl px-3 py-1.5 text-xs bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 w-32 font-mono"
-                    />
-                    <button
-                      onClick={() => handleChangePassword(u.username)}
-                      disabled={loadingUser === u.username}
-                      className="border border-border rounded-xl px-3 py-1.5 text-xs font-medium hover:bg-muted transition-colors flex items-center gap-1"
-                      title="Alterar senha"
-                    >
-                      {loadingUser === u.username ? <Spinner size={12} /> : <Save size={12} />}
-                      Salvar
-                    </button>
+                      className="w-full h-12 border border-border rounded-xl pl-9 pr-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
                   </div>
-
-                  <button
-                    onClick={() => handleRemoveUser(u.username)}
-                    disabled={u.username === "admin" || u.username === currentUser.username || loadingUser === u.username}
-                    className="p-2 text-muted-foreground hover:text-destructive hover:bg-red-50 rounded-xl transition-colors disabled:opacity-30"
-                    title={u.username === "admin" ? "Usuário admin não pode ser removido" : "Remover usuário"}
-                  >
-                    <Trash2 size={15} />
+                  <button onClick={() => handleSavePassword(user.username)} disabled={savingUser === user.username}
+                    className="h-12 shrink-0 whitespace-nowrap border border-border rounded-xl px-4 text-sm hover:bg-muted transition-colors flex items-center justify-center gap-1.5">
+                    {savingUser === user.username ? <Spinner size={13} /> : <Save size={13} />} Salvar senha
+                  </button>
+                  <button onClick={() => handleRemoveUser(user.username)} disabled={savingUser === user.username || user.username === "admin" || user.username === currentUser.username}
+                    className="h-12 border border-border rounded-xl px-4 text-sm text-muted-foreground hover:text-destructive hover:bg-red-50 transition-colors disabled:opacity-40 disabled:hover:text-muted-foreground disabled:hover:bg-transparent flex items-center justify-center gap-1.5">
+                    <Trash2 size={13} /> Remover
                   </button>
                 </div>
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
       </div>
     </div>
   );
 }
 
-function LoginScreen({ users, onLogin }: { users: AppUser[]; onLogin: (u: string, p: string) => Promise<void> }) {
-  const [username, setUsername] = useState(users[0]?.username || "admin");
-  const [password, setPassword] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+// ── Customer Search (Home) ────────────────────────────────────────
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setSubmitting(true);
-    try {
-      await onLogin(username, password);
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <div className="min-h-screen bg-primary flex items-center justify-center px-4 py-8">
-      <div className="w-full max-w-sm bg-card border border-white/10 rounded-3xl p-7 shadow-2xl">
-        <div className="text-center mb-6">
-          <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-4">
-            <Lock size={25} className="text-primary" />
-          </div>
-          <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-serif)" }}>
-            Entrar no Paviment
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Selecione seu usuário e informe sua senha.
-          </p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="text-xs font-medium text-muted-foreground block mb-1">Usuário</label>
-            <select
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="w-full border border-border rounded-xl px-3 py-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25 font-medium"
-            >
-              {users.map((u) => (
-                <option key={u.username} value={u.username}>
-                  {u.label} ({u.username}) {u.isAdmin ? "· Admin" : ""}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="text-xs font-medium text-muted-foreground block mb-1">Senha</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Digite a senha"
-              autoFocus
-              className="w-full border border-border rounded-xl px-3 py-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25"
-            />
-          </div>
-
-          <button
-            type="submit"
-            disabled={submitting}
-            className="w-full bg-primary text-primary-foreground py-3 rounded-xl text-sm font-medium hover:opacity-90 transition-opacity flex items-center justify-center gap-2 disabled:opacity-50"
-          >
-            {submitting ? <Spinner size={16} /> : null}
-            Entrar
-          </button>
-        </form>
-      </div>
-      <Toaster position="bottom-right" richColors />
-    </div>
-  );
-}
-
-function LogoutButton({ currentUser, onLogout }: { currentUser: AppUser; onLogout: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onLogout}
-      className="fixed right-4 top-4 z-50 flex items-center gap-2 rounded-full border border-white/20 bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-lg transition-all hover:scale-[1.02] hover:opacity-95 focus:outline-none focus:ring-2 focus:ring-primary/30"
-      title={`Sair do sistema (${currentUser.label})`}
-    >
-      <LogOut size={14} />
-      <span>Sair</span>
-      <span className="hidden sm:inline opacity-60">· {currentUser.username}</span>
-      {currentUser.isAdmin && (
-        <span className="bg-white/20 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">
-          ADMIN
-        </span>
-      )}
-    </button>
-  );
-}
-
-function CustomerSearch({
-  currentUser,
-  users,
-  onUsersReload,
-  onSelect,
-  allProducts,
-  pricingSettings,
-  onPricingSettingsChange,
-  onProductsChange,
-  onOpenBudgetById,
-}: {
+function CustomerSearch({ currentUser, users, onUsersReload, onSelect, allProducts, pricingSettings, onPricingSettingsChange, onProductsChange, onOpenBudgetById }: {
   currentUser: AppUser;
   users: AppUser[];
-  onUsersReload: () => void;
+  onUsersReload: () => Promise<void>;
   onSelect: (c: Customer) => void;
   allProducts: Product[];
   pricingSettings: PricingSettings;
@@ -4248,11 +5016,13 @@ function CustomerSearch({
   const [filterDataFim, setFilterDataFim] = useState("");
   const [isFiltering, setIsFiltering] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [exportingId, setExportingId] = useState<string | null>(null);
+  const [budgetToDelete, setBudgetToDelete] = useState<BudgetSummary | null>(null);
 
   const hasFilter = !!(filterStatus || filterCliente || filterDataInicio || filterDataFim);
 
   useEffect(() => {
-    fetchRecentBudgets(5)
+    fetchRecentBudgets(currentUser, 5)
       .then(setRecentBudgets)
       .catch(() => {})
       .finally(() => setBudgetsLoading(false));
@@ -4266,12 +5036,12 @@ function CustomerSearch({
         setFilteredBudgets(await fetchBudgetsFiltered({
           status: filterStatus, customerQ: filterCliente,
           dataInicio: filterDataInicio, dataFim: filterDataFim,
-        }));
+        }, currentUser));
       } catch {}
       finally { setIsFiltering(false); }
     }, 300);
     return () => clearTimeout(t);
-  }, [filterStatus, filterCliente, filterDataInicio, filterDataFim]);
+  }, [filterStatus, filterCliente, filterDataInicio, filterDataFim, currentUser]);
 
   useEffect(() => {
     if (!q.trim()) { setResults([]); return; }
@@ -4326,13 +5096,11 @@ function CustomerSearch({
     } catch (e: any) { toast.error("Erro: " + e.message); setCreating(false); }
   }
 
-  const isUserAdmin = currentUser.isAdmin || currentUser.username === "admin";
-
   const tabs = [
     { key: "orcamentos", label: "Orçamentos" },
     { key: "clientes", label: "Clientes" },
     { key: "produtos", label: "Produtos" },
-    ...(isUserAdmin ? [{ key: "usuarios", label: "Usuários" } as const] : []),
+    ...(currentUser.isAdmin ? [{ key: "usuarios" as const, label: "Usuários" }] : []),
   ] as const;
 
   return (
@@ -4357,10 +5125,10 @@ function CustomerSearch({
             <div className="w-6 h-px bg-white/25 mb-3" />
             <h1 className="text-2xl md:text-3xl whitespace-nowrap tracking-tight"
               style={{ fontFamily: "var(--font-serif)" }}>
-              Sistema de Orçamentos
+              Sistema de Orçamentos - Paviment Porcelanatos Premium
             </h1>
             <p className="mt-1.5 text-xs tracking-[0.18em] uppercase opacity-35 font-light">
-              Sala Técnica · Representante Comercial
+              Sala Técnica Villagres
             </p>
             <div className="w-6 h-px bg-white/25 mt-3" />
           </div>
@@ -4586,7 +5354,7 @@ function CustomerSearch({
                       ? <div className="py-10 text-center text-sm text-muted-foreground">Nenhum orçamento encontrado</div>
                       : <div className="divide-y divide-border">
                           {list.map((b) => {
-                            const canDelete = b.status === "rascunho";
+                            const canDelete = b.status === "rascunho" || b.status === "cancelado";
                             const locked = b.status === "enviado_fabrica" || b.status === "fechado";
                             return (
                               <div key={b.id} className="flex items-stretch group">
@@ -4597,6 +5365,7 @@ function CustomerSearch({
                                       <div className="flex items-center gap-2 flex-wrap">
                                         <span className="font-semibold text-sm">#{b.numero}</span>
                                         <StatusPill status={b.status} />
+                                        <BudgetOwnerPill createdBy={b.createdBy} />
                                         {locked && <span className="text-[10px] text-muted-foreground border border-border rounded px-1">bloqueado</span>}
                                       </div>
                                       <p className="text-sm font-medium mt-0.5 truncate">{b.customerNome}</p>
@@ -4611,23 +5380,34 @@ function CustomerSearch({
                                     </div>
                                   </div>
                                 </button>
+                                {currentUser.isAdmin && <button
+                                  disabled={exportingId === b.id}
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    setExportingId(b.id);
+                                    try {
+                                      await exportBudgetToExcel(b, b.customerNome, pricingSettings);
+                                      toast.success(`Orçamento #${b.numero} exportado para Excel.`);
+                                    } catch (error: any) {
+                                      toast.error("Erro ao exportar orçamento: " + error.message);
+                                    } finally {
+                                      setExportingId(null);
+                                    }
+                                  }}
+                                  className="px-3 flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-primary/5 transition-colors border-l border-border disabled:opacity-50"
+                                  title="Exportar orçamento para Excel"
+                                >
+                                  {exportingId === b.id ? <Spinner size={13} /> : <Download size={14} />}
+                                </button>}
                                 {canDelete && (
                                   <button
                                     disabled={deletingId === b.id}
-                                    onClick={async (e) => {
+                                    onClick={(e) => {
                                       e.stopPropagation();
-                                      if (!confirm(`Excluir orçamento #${b.numero}? Esta ação não pode ser desfeita.`)) return;
-                                      setDeletingId(b.id);
-                                      try {
-                                        await deleteBudget(b.id);
-                                        setRecentBudgets((prev) => prev.filter((x) => x.id !== b.id));
-                                        setFilteredBudgets((prev) => prev.filter((x) => x.id !== b.id));
-                                        toast.success(`Orçamento #${b.numero} excluído.`);
-                                      } catch (e: any) { toast.error("Erro: " + e.message); }
-                                      finally { setDeletingId(null); }
+                                      setBudgetToDelete(b);
                                     }}
                                     className="px-3 flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-red-50 transition-colors border-l border-border"
-                                    title="Excluir rascunho">
+                                    title={`Excluir orçamento ${b.status === "rascunho" ? "em rascunho" : "cancelado"}`}>
                                     {deletingId === b.id ? <Spinner size={13} /> : <Trash2 size={14} />}
                                   </button>
                                 )}
@@ -4645,8 +5425,106 @@ function CustomerSearch({
 
         {tab === "clientes" && <AllCustomersTab onSelect={onSelect} />}
         {tab === "produtos" && <AllProductsTab allProducts={allProducts} pricingSettings={pricingSettings} onPricingSettingsChange={onPricingSettingsChange} onProductsChange={onProductsChange} />}
-        {tab === "usuarios" && isUserAdmin && <UsersTab users={users} currentUser={currentUser} onUsersReload={onUsersReload} />}
+        {tab === "usuarios" && currentUser.isAdmin && <UsersTab users={users} currentUser={currentUser} onUsersReload={onUsersReload} />}
       </div>
+
+      {budgetToDelete && (
+        <BudgetDeleteDialog
+          budgetNumber={budgetToDelete.numero}
+          deleting={deletingId === budgetToDelete.id}
+          onCancel={() => setBudgetToDelete(null)}
+          onConfirm={async () => {
+            setDeletingId(budgetToDelete.id);
+            try {
+              await deleteBudget(budgetToDelete.id);
+              setRecentBudgets((prev) => prev.filter((x) => x.id !== budgetToDelete.id));
+              setFilteredBudgets((prev) => prev.filter((x) => x.id !== budgetToDelete.id));
+              toast.success(`Orçamento #${budgetToDelete.numero} excluído.`);
+              setBudgetToDelete(null);
+            } catch (e: any) { toast.error("Erro: " + e.message); }
+            finally { setDeletingId(null); }
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+
+
+function SystemLogoutButton({ currentUser, onLogout }: { currentUser: AppUser; onLogout: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onLogout}
+      className="fixed right-4 top-4 z-50 flex items-center gap-2 rounded-full border border-white/20 bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-lg transition-all hover:scale-[1.02] hover:opacity-95 focus:outline-none focus:ring-2 focus:ring-primary/30"
+      title={`Sair do sistema (${currentUser.label})`}
+    >
+      <LogOut size={14} />
+      <span>Sair</span>
+      <span className="hidden sm:inline opacity-60">· {currentUser.username}</span>
+    </button>
+  );
+}
+
+// ── Login Screen ─────────────────────────────────────────────────
+
+function LoginScreen({ users, onLogin }: { users: AppUser[]; onLogin: (username: string, password: string) => Promise<void> }) {
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("");
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    await onLogin(username, password);
+  }
+
+  return (
+    <div className="relative min-h-screen overflow-hidden bg-primary flex items-center justify-center px-4 py-10">
+      <div className="pointer-events-none absolute -left-32 -top-32 h-80 w-80 rounded-full bg-white/5" />
+      <div className="pointer-events-none absolute -bottom-40 -right-24 h-96 w-96 rounded-full border border-white/10" />
+
+      <main className="relative z-10 w-full max-w-3xl">
+        <div className="text-center text-primary-foreground mb-8">
+          <p className="text-xs font-semibold uppercase tracking-[0.3em] opacity-60 mb-3">Sala Técnica Villagres</p>
+          <h1 className="text-3xl md:text-5xl font-semibold leading-tight tracking-tight"
+            style={{ fontFamily: "var(--font-serif)" }}>
+            Sistema de Orçamentos
+            <span className="block mt-2 text-2xl md:text-3xl font-medium opacity-90">Paviment Porcelanatos Premium</span>
+          </h1>
+          <div className="mx-auto mt-5 h-px w-16 bg-white/35" />
+        </div>
+
+      <div className="w-full max-w-sm mx-auto bg-card border border-white/10 rounded-3xl p-7 shadow-2xl">
+        <div className="text-center mb-6">
+          <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-4">
+            <LockKeyhole size={25} className="text-primary" />
+          </div>
+          <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-serif)" }}>Entrar no Paviment</h1>
+          <p className="text-sm text-muted-foreground mt-1">Use seu usuário para acessar os orçamentos.</p>
+        </div>
+
+        <form onSubmit={submit} className="space-y-4">
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Usuário</label>
+            <select value={username} onChange={(e) => setUsername(e.target.value)}
+              className="w-full mt-1 border border-border rounded-xl px-3 py-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25">
+              {users.map((user) => <option key={user.username} value={user.username}>{user.label} ({user.username})</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Senha</label>
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+              placeholder="Digite a senha" autoFocus
+              className="w-full mt-1 border border-border rounded-xl px-3 py-3 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25" />
+          </div>
+          <button type="submit" className="w-full bg-primary text-primary-foreground py-3 rounded-xl text-sm font-medium hover:opacity-90 transition-opacity">
+            Entrar
+          </button>
+        </form>
+
+      </div>
+      </main>
+      <Toaster position="bottom-right" richColors />
     </div>
   );
 }
@@ -4658,17 +5536,15 @@ type View =
   | { type: "customer"; customer: Customer }
   | { type: "budget"; budget: Budget; customer: Customer };
 
-const CURRENT_USER_KEY = "paviment_current_user";
-
 export default function App() {
+  const [appUsers, setAppUsers] = useState<AppUser[]>([]);
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const [view, setView] = useState<View>({ type: "home" });
   const [appState, setAppState] = useState<"loading" | "setup" | "seeding" | "ready" | "error">("loading");
   const [initMsg, setInitMsg] = useState("Verificando banco de dados...");
   const [initError, setInitError] = useState<string | null>(null);
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [pricingSettings, setPricingSettings] = useState<PricingSettings>({ impostoPercentual: 0, taxaCartaoPercentual: 0, fretePor100Kg: 4 });
-  const [users, setUsers] = useState<AppUser[]>([]);
-  const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
 
   async function init() {
     setAppState("loading");
@@ -4680,14 +5556,10 @@ export default function App() {
       if (!tablesOk) { setAppState("setup"); return; }
 
       setInitMsg("Carregando usuários...");
-      const loadedUsers = await fetchAppUsers();
-      setUsers(loadedUsers);
-
-      const savedUsername = localStorage.getItem(CURRENT_USER_KEY);
-      if (savedUsername) {
-        const found = loadedUsers.find((u) => u.username === savedUsername);
-        if (found) setCurrentUser(found);
-      }
+      const users = await fetchAppUsers();
+      setAppUsers(users);
+      localStorage.removeItem("paviment.currentUser");
+      setCurrentUser(null);
 
       setInitMsg("Carregando composição interna do preço...");
       setPricingSettings(await loadPricingSettings());
@@ -4700,6 +5572,7 @@ export default function App() {
         const parsed = buildProductsFromCSV(csvRaw);
         await seedProducts(parsed);
         setAllProducts(parsed.map((p, i) => ({ ...p, id: `_${i}` })));
+        // Reload from DB with real IDs
         setInitMsg("Finalizando...");
         setAllProducts(await fetchAllProducts());
       } else {
@@ -4716,33 +5589,24 @@ export default function App() {
   useEffect(() => { init(); }, []);
 
   function handleLogout() {
-    localStorage.removeItem(CURRENT_USER_KEY);
+    localStorage.removeItem("paviment.currentUser");
     setCurrentUser(null);
     setView({ type: "home" });
   }
 
   async function reloadUsers() {
-    const loadedUsers = await fetchAppUsers();
-    setUsers(loadedUsers);
-    if (currentUser) {
-      const updatedSelf = loadedUsers.find((u) => u.username === currentUser.username);
-      if (updatedSelf) setCurrentUser(updatedSelf);
-    }
+    const users = await fetchAppUsers();
+    setAppUsers(users);
+    setCurrentUser((user) => user ? users.find((candidate) => candidate.username === user.username) || null : null);
   }
 
-  async function handleLogin(username: string, pass: string) {
+  async function handleLogin(username: string, password: string) {
     try {
-      const user = await loginUser(username, pass);
-      if (!user) {
-        toast.error("Usuário ou senha incorretos.");
-        return;
-      }
-      localStorage.setItem(CURRENT_USER_KEY, user.username);
+      const user = await authenticateAppUser(username, password);
+      if (!user) { toast.error("Usuário ou senha inválidos."); return; }
       setCurrentUser(user);
       toast.success(`Bem-vindo, ${user.label}!`);
-    } catch (e: any) {
-      toast.error("Erro ao realizar login: " + e.message);
-    }
+    } catch (e: any) { toast.error("Erro ao entrar: " + e.message); }
   }
 
   if (appState === "setup") {
@@ -4777,7 +5641,7 @@ export default function App() {
   }
 
   if (!currentUser) {
-    return <LoginScreen users={users} onLogin={handleLogin} />;
+    return <LoginScreen users={appUsers} onLogin={handleLogin} />;
   }
 
   return (
@@ -4785,7 +5649,7 @@ export default function App() {
       {view.type === "home" && (
         <CustomerSearch
           currentUser={currentUser}
-          users={users}
+          users={appUsers}
           onUsersReload={reloadUsers}
           onSelect={(c) => setView({ type: "customer", customer: c })}
           allProducts={allProducts}
@@ -4798,6 +5662,10 @@ export default function App() {
                 getBudgetWithItems(budgetId),
                 supabase.from("customers").select("*").eq("id", customerId).single(),
               ]);
+              if (!canAccessBudget(currentUser, full.createdBy)) {
+                toast.error("Você não tem permissão para acessar este orçamento.");
+                return;
+              }
               if (cData) setView({ type: "budget", budget: full, customer: mapCustomer(cData) });
             } catch (e: any) { toast.error("Erro ao abrir orçamento: " + e.message); }
           }}
@@ -4808,6 +5676,7 @@ export default function App() {
           customer={view.customer}
           allProducts={allProducts}
           pricingSettings={pricingSettings}
+          currentUser={currentUser}
           onBack={() => setView({ type: "home" })}
           onOpenBudget={(b, c) => setView({ type: "budget", budget: b, customer: c })}
         />
@@ -4818,13 +5687,14 @@ export default function App() {
           allProducts={allProducts}
           pricingSettings={pricingSettings}
           customer={view.customer}
+          currentUser={currentUser}
           onBack={() => setView({ type: "customer", customer: view.customer })}
           onGoHome={() => setView({ type: "home" })}
           onBudgetChange={(b) => setView({ type: "budget", budget: b, customer: view.customer })}
           onOpenBudget={(b) => setView({ type: "budget", budget: b, customer: view.customer })}
         />
       )}
-      <LogoutButton currentUser={currentUser} onLogout={handleLogout} />
+      <SystemLogoutButton currentUser={currentUser} onLogout={handleLogout} />
       <Toaster position="bottom-right" richColors />
     </>
   );

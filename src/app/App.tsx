@@ -1976,6 +1976,8 @@ function BudgetEditor({
     finally { setDuplicating(false); }
   }
   const canSaveDraft = !isLocked && (budget.status === "rascunho" || isDirty);
+  const hasPendingChanges = isDirty || editFinancials || editingItemId !== null;
+  const canPrintBudget = !hasPendingChanges && !saving;
 
   function markDirty() { setIsDirty(true); }
 
@@ -2280,7 +2282,7 @@ function BudgetEditor({
   }
 
   async function printBudget() {
-    if (editFinancials || editingItemId || isDirty) {
+    if (!canPrintBudget) {
       toast.error("Existem alterações pendentes. Salve o orçamento antes de gerar o PDF.", {
         id: "budget-pdf-unsaved",
         duration: 8000,
@@ -3005,7 +3007,7 @@ ${budget.observacoes ? `
             )}
 
             <div className="mt-5 pt-4 border-t border-border space-y-2">
-              {isDirty && (
+              {hasPendingChanges && (
                 <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                   Há alterações pendentes. Salve o rascunho antes de gerar o PDF.
                 </div>
@@ -3015,8 +3017,9 @@ ${budget.observacoes ? `
                 title={!canSaveDraft ? "Faça uma alteração para salvar novamente como rascunho" : undefined}>
                 {saving ? <Spinner size={14} /> : <Save size={14} />} Salvar Rascunho
               </button>
-              <button onClick={printBudget}
-                className="w-full flex items-center justify-center gap-2 border border-border py-2.5 rounded-xl text-xs hover:bg-muted transition-colors text-muted-foreground hover:text-foreground">
+              <button onClick={printBudget} disabled={!canPrintBudget}
+                title={!canPrintBudget ? "Salve todas as alterações antes de imprimir ou gerar o PDF" : "Imprimir ou gerar o PDF do orçamento"}
+                className={`w-full flex items-center justify-center gap-2 border py-2.5 rounded-xl text-xs font-semibold transition-colors ${canPrintBudget ? "bg-primary text-primary-foreground border-primary hover:opacity-90" : "bg-muted/60 text-muted-foreground/50 border-border cursor-not-allowed opacity-60"}`}>
                 <Printer size={13} /> Imprimir / Gerar PDF
               </button>
             </div>

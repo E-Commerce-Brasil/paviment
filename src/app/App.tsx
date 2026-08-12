@@ -61,7 +61,6 @@ interface AppUser {
   active: boolean;
 }
 
-const AUTH_STORAGE_KEY = "paviment.currentUser";
 const DEFAULT_PASSWORD_HASHES = {
   admin: "79416c9685c6baf019b311c43844d8d13e1b1c05c8bfcd814048b8719ddf2ee1",
   vendas: "e95677a8dc1e007ad2de15c4a87042c39592c8d358a26b5d0130b9e6440297f4",
@@ -5559,8 +5558,8 @@ export default function App() {
       setInitMsg("Carregando usuários...");
       const users = await fetchAppUsers();
       setAppUsers(users);
-      const savedUsername = localStorage.getItem(AUTH_STORAGE_KEY);
-      if (savedUsername) setCurrentUser(users.find((user) => user.username === savedUsername) || null);
+      localStorage.removeItem("paviment.currentUser");
+      setCurrentUser(null);
 
       setInitMsg("Carregando composição interna do preço...");
       setPricingSettings(await loadPricingSettings());
@@ -5590,7 +5589,7 @@ export default function App() {
   useEffect(() => { init(); }, []);
 
   function handleLogout() {
-    localStorage.removeItem(AUTH_STORAGE_KEY);
+    localStorage.removeItem("paviment.currentUser");
     setCurrentUser(null);
     setView({ type: "home" });
   }
@@ -5605,7 +5604,6 @@ export default function App() {
     try {
       const user = await authenticateAppUser(username, password);
       if (!user) { toast.error("Usuário ou senha inválidos."); return; }
-      localStorage.setItem(AUTH_STORAGE_KEY, user.username);
       setCurrentUser(user);
       toast.success(`Bem-vindo, ${user.label}!`);
     } catch (e: any) { toast.error("Erro ao entrar: " + e.message); }

@@ -1979,6 +1979,18 @@ function BudgetEditor({
 
   function markDirty() { setIsDirty(true); }
 
+  function remindToSave(message: string) {
+    toast.warning(`${message} Clique em “Salvar Rascunho” antes de gerar o PDF.`, {
+      id: "budget-save-reminder",
+      duration: 8000,
+    });
+  }
+
+  function handleEditTableChange(table: PriceTableOption) {
+    setEditTabela(table);
+    remindToSave("A tabela de preço do item foi alterada.");
+  }
+
   function getSentBudgetDraftPatch(): Partial<Budget> {
     if (budget.status !== "enviado_cliente") return {};
     toast.warning("Este orçamento já foi enviado ao cliente e voltará para Rascunho. Reenvie o PDF após concluir as alterações.");
@@ -2126,6 +2138,7 @@ function BudgetEditor({
   function handlePixDiscountChange(value: string) {
     if (value.trim() === "") {
       setDescontoPix("");
+      remindToSave("O desconto PIX foi alterado.");
       return;
     }
 
@@ -2137,6 +2150,7 @@ function BudgetEditor({
     }
 
     setDescontoPix(value);
+    remindToSave("O desconto PIX foi alterado.");
   }
 
   async function handleSaveFinancials() {
@@ -2259,6 +2273,13 @@ function BudgetEditor({
   }
 
   async function printBudget() {
+    if (editFinancials || editingItemId || isDirty) {
+      toast.error("Existem alterações pendentes. Salve o orçamento antes de gerar o PDF.", {
+        id: "budget-pdf-unsaved",
+        duration: 8000,
+      });
+      return;
+    }
     const fmtBRLStr = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
     // Convert logo to base64 using the Vite-resolved URL
@@ -2582,12 +2603,12 @@ ${budget.observacoes ? `
                             <div className="space-y-1">
                               <div className="grid grid-cols-6 gap-1">
                                 {([1, 2, 3, 4, 5] as const).map((t) => (
-                                  <button key={t} type="button" onClick={() => setEditTabela(t)}
+                                  <button key={t} type="button" onClick={() => handleEditTableChange(t)}
                                     className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
                                     T{t}
                                   </button>
                                 ))}
-                                <button type="button" onClick={() => setEditTabela("TE")}
+                                <button type="button" onClick={() => handleEditTableChange("TE")}
                                   className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === "TE" ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
                                   TE
                                 </button>
@@ -2702,12 +2723,12 @@ ${budget.observacoes ? `
                                 <div className="space-y-1">
                                   <div className="grid grid-cols-6 gap-1">
                                     {([1, 2, 3, 4, 5] as const).map((t) => (
-                                      <button key={t} type="button" onClick={() => setEditTabela(t)}
+                                      <button key={t} type="button" onClick={() => handleEditTableChange(t)}
                                         className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === t ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
                                         T{t}
                                       </button>
                                     ))}
-                                    <button type="button" onClick={() => setEditTabela("TE")}
+                                    <button type="button" onClick={() => handleEditTableChange("TE")}
                                       className={`rounded px-1.5 py-1 text-[10px] font-semibold border transition-colors ${editTabela === "TE" ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
                                       TE
                                     </button>
@@ -2789,7 +2810,10 @@ ${budget.observacoes ? `
                 <div className="grid sm:grid-cols-2 gap-3">
                   <div>
                     <label className="text-xs font-medium text-muted-foreground block mb-1">Forma de pagamento</label>
-                    <select value={formaPagamento} onChange={(e) => setFormaPagamento(e.target.value as FormaPagamento)}
+                    <select value={formaPagamento} onChange={(e) => {
+                      setFormaPagamento(e.target.value as FormaPagamento);
+                      remindToSave("A forma de pagamento foi alterada.");
+                    }}
                       className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25">
                       <option value="avista">Débito</option>
                       <option value="avista_pix">PIX</option>
@@ -2799,7 +2823,10 @@ ${budget.observacoes ? `
                   {formaPagamento === "cartao" ? (
                     <div>
                       <label className="text-xs font-medium text-muted-foreground block mb-1">Parcelas no cartão</label>
-                      <select value={parcelasCartao} onChange={(e) => setParcelasCartao(e.target.value)}
+                      <select value={parcelasCartao} onChange={(e) => {
+                        setParcelasCartao(e.target.value);
+                        remindToSave("A quantidade de parcelas foi alterada.");
+                      }}
                         className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25">
                         {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}x</option>)}
                       </select>
@@ -2971,6 +2998,11 @@ ${budget.observacoes ? `
             )}
 
             <div className="mt-5 pt-4 border-t border-border space-y-2">
+              {isDirty && (
+                <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  Há alterações pendentes. Salve o rascunho antes de gerar o PDF.
+                </div>
+              )}
               <button onClick={handleSaveDraft} disabled={saving || !canSaveDraft}
                 className="w-full flex items-center justify-center gap-2 bg-primary text-primary-foreground py-2.5 rounded-xl text-sm font-medium hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
                 title={!canSaveDraft ? "Faça uma alteração para salvar novamente como rascunho" : undefined}>
@@ -4509,12 +4541,19 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
                 <th className="text-left px-3 py-2.5 font-medium hidden lg:table-cell">Superfície</th>
                 <th className="text-right px-3 py-2.5 font-medium hidden sm:table-cell">Unidade</th>
                 <th className="text-right px-3 py-2.5 font-medium">Preço-base</th>
+                <th className="text-right px-3 py-2.5 font-medium">Preço c/ taxas</th>
                 <th className="w-10 px-3 py-2.5"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {filtered.slice(0, 200).map((p) => {
                 const price = p[pk] as number | null;
+                const priceWithTaxes = price == null ? null : applyArgamassaCardFee(
+                  calculateProductFinalPrice(p, price, pricingSettings.impostoPercentual, pricingSettings.taxaCartaoPercentual),
+                  p,
+                  "cartao",
+                  pricingSettings,
+                );
                 return (
                   <tr key={p.id} className={`transition-colors group ${p.descontinuado ? "bg-amber-50/50 hover:bg-amber-50" : "hover:bg-muted/20"}`}>
                     <td className="px-5 py-2.5">
@@ -4538,8 +4577,13 @@ function AllProductsTab({ allProducts: initProducts, pricingSettings, onPricingS
                     <td className="px-3 py-2.5 text-xs text-muted-foreground hidden lg:table-cell">{p.superficie?.trim() || "-"}</td>
                     <td className="px-3 py-2.5 text-right text-xs font-mono hidden sm:table-cell">{isLinearMeterProduct(p) ? "m linear" : p.m2PorCaixa}</td>
                     <td className="px-3 py-2.5 text-right">
-                      {price
+                      {price != null
                         ? <span className="font-mono text-muted-foreground">{fmtBRL(price)}</span>
+                        : <span className="text-xs text-amber-600">Consultar</span>}
+                    </td>
+                    <td className="px-3 py-2.5 text-right">
+                      {priceWithTaxes != null
+                        ? <span className="font-mono font-semibold text-primary">{fmtBRL(priceWithTaxes)}</span>
                         : <span className="text-xs text-amber-600">Consultar</span>}
                     </td>
                     <td className="px-3 py-2.5 text-center">

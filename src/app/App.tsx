@@ -1281,14 +1281,14 @@ function inferExportItemPriceTable(item: BudgetItem, pricingSettings: PricingSet
   return "TE";
 }
 
-async function exportBudgetToExcel(budgetSummary: BudgetSummary, pricingSettings: PricingSettings): Promise<void> {
+async function exportBudgetToExcel(budgetSummary: Budget, customerName: string, pricingSettings: PricingSettings): Promise<void> {
   const XLSX = await import("xlsx");
   const budget = await getBudgetWithItems(budgetSummary.id);
   const productSubtotal = round2(budget.items.reduce((sum, item) =>
     sum + applyArgamassaCardFee(item.subtotal, item.product, budget.formaPagamento, pricingSettings), 0));
   const rows: (string | number)[][] = [
     ["ORÇAMENTO", `#${budget.numero}`],
-    ["Cliente", budgetSummary.customerNome],
+    ["Cliente", customerName],
     ["Data", fmtDate(budget.createdAt)],
     ["Status", STATUS_LABELS[budget.status]],
     ["Condição de pagamento", budget.formaPagamento === "cartao" ? `Cartão ${budget.parcelasCartao}x` : budget.formaPagamento === "avista_pix" ? "PIX" : "Débito"],
@@ -3189,6 +3189,7 @@ function CustomerView({
   const [creating, setCreating] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [deletingBudgetId, setDeletingBudgetId] = useState<string | null>(null);
+  const [exportingBudgetId, setExportingBudgetId] = useState<string | null>(null);
   const [budgetToDelete, setBudgetToDelete] = useState<Budget | null>(null);
   const [editForm, setEditForm] = useState({
     ...initCustomer,
@@ -3391,6 +3392,26 @@ function CustomerView({
                     </div>
                   </div>
                 </button>
+                {currentUser.isAdmin && (
+                  <button
+                    onClick={async () => {
+                      setExportingBudgetId(b.id);
+                      try {
+                        await exportBudgetToExcel(b, customer.nome, pricingSettings);
+                        toast.success(`Orçamento #${b.numero} exportado para Excel.`);
+                      } catch (error: any) {
+                        toast.error("Erro ao exportar orçamento: " + error.message);
+                      } finally {
+                        setExportingBudgetId(null);
+                      }
+                    }}
+                    disabled={exportingBudgetId === b.id}
+                    className="px-4 flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-primary/5 transition-colors border-l border-border disabled:opacity-50"
+                    title="Exportar orçamento para Excel"
+                  >
+                    {exportingBudgetId === b.id ? <Spinner size={14} /> : <Download size={15} />}
+                  </button>
+                )}
                 {canDeleteBudget && (
                   <button
                     onClick={() => setBudgetToDelete(b)}
@@ -5263,7 +5284,7 @@ function CustomerSearch({ currentUser, users, onUsersReload, onSelect, allProduc
                                     e.stopPropagation();
                                     setExportingId(b.id);
                                     try {
-                                      await exportBudgetToExcel(b, pricingSettings);
+                                      await exportBudgetToExcel(b, b.customerNome, pricingSettings);
                                       toast.success(`Orçamento #${b.numero} exportado para Excel.`);
                                     } catch (error: any) {
                                       toast.error("Erro ao exportar orçamento: " + error.message);

@@ -1986,6 +1986,13 @@ function BudgetEditor({
     });
   }
 
+  function remindToSavePaymentChanges(message: string) {
+    toast.warning(`${message} Primeiro clique em “Salvar” para visualizar as alterações na tela e, depois, em “Salvar Rascunho” antes de Imprimir, Enviar ou Finalizar.`, {
+      id: "budget-save-reminder",
+      duration: 10000,
+    });
+  }
+
   function handleEditTableChange(table: PriceTableOption) {
     setEditTabela(table);
     remindToSave("A tabela de preço do item foi alterada.");
@@ -2138,7 +2145,7 @@ function BudgetEditor({
   function handlePixDiscountChange(value: string) {
     if (value.trim() === "") {
       setDescontoPix("");
-      remindToSave("O desconto PIX foi alterado.");
+      remindToSavePaymentChanges("O desconto PIX foi alterado.");
       return;
     }
 
@@ -2150,7 +2157,7 @@ function BudgetEditor({
     }
 
     setDescontoPix(value);
-    remindToSave("O desconto PIX foi alterado.");
+    remindToSavePaymentChanges("O desconto PIX foi alterado.");
   }
 
   async function handleSaveFinancials() {
@@ -2812,7 +2819,7 @@ ${budget.observacoes ? `
                     <label className="text-xs font-medium text-muted-foreground block mb-1">Forma de pagamento</label>
                     <select value={formaPagamento} onChange={(e) => {
                       setFormaPagamento(e.target.value as FormaPagamento);
-                      remindToSave("A forma de pagamento foi alterada.");
+                      remindToSavePaymentChanges("A forma de pagamento foi alterada.");
                     }}
                       className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25">
                       <option value="avista">Débito</option>
@@ -2825,7 +2832,7 @@ ${budget.observacoes ? `
                       <label className="text-xs font-medium text-muted-foreground block mb-1">Parcelas no cartão</label>
                       <select value={parcelasCartao} onChange={(e) => {
                         setParcelasCartao(e.target.value);
-                        remindToSave("A quantidade de parcelas foi alterada.");
+                        remindToSavePaymentChanges("A quantidade de parcelas foi alterada.");
                       }}
                         className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/25">
                         {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}x</option>)}

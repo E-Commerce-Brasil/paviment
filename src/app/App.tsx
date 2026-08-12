@@ -1284,14 +1284,56 @@ function inferExportItemPriceTable(item: BudgetItem, pricingSettings: PricingSet
 async function exportBudgetToExcel(budgetSummary: Budget, customerName: string, pricingSettings: PricingSettings): Promise<void> {
   const XLSX = await import("xlsx");
   const budget = await getBudgetWithItems(budgetSummary.id);
-  const productSubtotal = round2(budget.items.reduce((sum, item) =>
-    sum + applyArgamassaCardFee(item.subtotal, item.product, budget.formaPagamento, pricingSettings), 0));
+  const { data: customerData } = await supabase.from("customers").select("*").eq("id", budget.customerId).maybeSingle();
+  const customer = customerData ? mapCustomer(customerData) : null;
+  const pixOnlyCategories = ["Rejunte", "Niveladores/Cunhas"];
+  const villagresItems = budget.items.filter((item) => !isVillacolProduct(item.product));
+  const argamassaItems = budget.items.filter((item) => item.product?.categoriaComplementar === "Argamassa");
+  const pixOnlyItems = budget.items.filter((item) => pixOnlyCategories.includes(item.product?.categoriaComplementar || ""));
+  const paymentAdjustedSubtotal = (item: BudgetItem) => {
+    const subtotalWithCardFee = applyArgamassaCardFee(item.subtotal, item.product, budget.formaPagamento, pricingSettings);
+    return round2(subtotalWithCardFee * (budget.formaPagamento === "avista_pix" ? getProductPixPaymentFactor(item.product, pricingSettings) : 1));
+  };
+  const removePricingFactor = (item: BudgetItem) => {
+    const factor = getProductPricingFactor(item.product, pricingSettings);
+    return factor > 0 ? 1 / factor : 1;
+  };
+  const villagresSubtotal = round2(villagresItems.reduce((sum, item) => sum + paymentAdjustedSubtotal(item), 0));
+  const argamassaSubtotal = round2(argamassaItems.reduce((sum, item) => sum + paymentAdjustedSubtotal(item), 0));
+  const pixOnlyProductsSubtotal = round2(pixOnlyItems.reduce((sum, item) => sum + item.subtotal * removePricingFactor(item), 0));
+  const pixDiscount = budget.formaPagamento === "avista_pix"
+    ? round2(villagresSubtotal * Math.min(budget.descontoPixPercentual, 3) / 100)
+    : 0;
+  const villagresTotal = round2(villagresSubtotal - pixDiscount);
+  const pixOnlyTotal = round2(pixOnlyProductsSubtotal + budget.frete);
+  const generalTotal = round2(villagresTotal + argamassaSubtotal + pixOnlyTotal);
+  const paymentLabel = budget.formaPagamento === "cartao"
+    ? `Cartão de crédito - ${budget.parcelasCartao}x`
+    : budget.formaPagamento === "avista_pix" ? "À vista PIX" : "Débito";
+  const installmentLabel = (total: number) => budget.formaPagamento === "cartao" && budget.parcelasCartao > 1
+    ? `${budget.parcelasCartao} x ${fmtBRL(round2(total / budget.parcelasCartao))}`
+    : fmtBRL(total);
+  const totalWeight = calculateBudgetWeightKg(budget.items);
+  const totalBoxes = budget.items.reduce((sum, item) => sum + item.caixas, 0);
+  const totalAreaM2 = round2(budget.items
+    .filter((item) => !isLinearMeterProduct(item.product) && !isVillacolProduct(item.product))
+    .reduce((sum, item) => sum + item.areaM2, 0));
+  const totalLinearMeters = round2(budget.items
+    .filter((item) => isLinearMeterProduct(item.product))
+    .reduce((sum, item) => sum + calculateRealLinearMeters(item.product, item.areaM2, item.caixas), 0));
+  const deliveryAddress = budget.enderecoEntrega || [
+    budget.entregaLogradouro, budget.entregaNumero, budget.entregaComplemento, budget.entregaBairro,
+    budget.entregaCidade, budget.entregaEstado, budget.entregaCep,
+  ].filter(Boolean).join(", ");
   const rows: (string | number)[][] = [
     ["ORÇAMENTO", `#${budget.numero}`],
     ["Cliente", customerName],
+    ["CPF", customer?.cpf || "-"],
+    ["Telefone", customer?.telefone || "-"],
+    ["E-mail", customer?.email || "-"],
     ["Data", fmtDate(budget.createdAt)],
     ["Status", STATUS_LABELS[budget.status]],
-    ["Condição de pagamento", budget.formaPagamento === "cartao" ? `Cartão ${budget.parcelasCartao}x` : budget.formaPagamento === "avista_pix" ? "PIX" : "Débito"],
+    ["Condição de pagamento", paymentLabel],
     ["Tabela padrão do orçamento", `Tabela ${budget.tabelaPreco}`],
     ["Imposto configurado (%)", pricingSettings.impostoPercentual],
     ["Taxa de cartão configurada (%)", pricingSettings.taxaCartaoPercentual],
@@ -1342,10 +1384,10 @@ async function exportBudgetToExcel(budgetSummary: Budget, customerName: string, 
 
   rows.push(
     [],
-    [...Array(17).fill(""), "SUBTOTAL DOS PRODUTOS", productSubtotal],
+    [...Array(17).fill(""), "SUBTOTAL DOS PRODUTOS", round2(villagresSubtotal + argamassaSubtotal + pixOnlyProductsSubtotal)],
     [...Array(17).fill(""), "FRETE", budget.frete],
-    [...Array(17).fill(""), "DESCONTO PIX (%)", budget.descontoPixPercentual],
-    [...Array(17).fill(""), "TOTAL FINAL", budget.totalFinal],
+    [...Array(17).fill(""), `DESCONTO PIX (${budget.descontoPixPercentual}%)`, -pixDiscount],
+    [...Array(17).fill(""), "TOTAL FINAL", generalTotal],
   );
 
   const worksheet = XLSX.utils.aoa_to_sheet(rows);
@@ -1354,20 +1396,81 @@ async function exportBudgetToExcel(budgetSummary: Budget, customerName: string, 
     { wch: 18 }, { wch: 14 }, { wch: 13 }, { wch: 17 }, { wch: 16 }, { wch: 18 }, { wch: 20 },
     { wch: 21 }, { wch: 18 }, { wch: 17 }, { wch: 17 }, { wch: 16 },
   ];
-  worksheet["!autofilter"] = { ref: `A10:S${Math.max(10, 10 + budget.items.length)}` };
-  for (let row = 11; row <= 10 + budget.items.length; row += 1) {
+  const productHeaderRow = 13;
+  worksheet["!autofilter"] = { ref: `A${productHeaderRow}:S${Math.max(productHeaderRow, productHeaderRow + budget.items.length)}` };
+  for (let row = productHeaderRow + 1; row <= productHeaderRow + budget.items.length; row += 1) {
     for (const column of ["I", "K", "M", "N", "S"]) {
       const cell = worksheet[`${column}${row}`];
       if (cell) cell.z = 'R$ #,##0.00';
     }
   }
-  for (const row of [12 + budget.items.length, 13 + budget.items.length, 15 + budget.items.length]) {
+  for (const row of [productHeaderRow + budget.items.length + 2, productHeaderRow + budget.items.length + 3, productHeaderRow + budget.items.length + 5]) {
     const cell = worksheet[`S${row}`];
     if (cell) cell.z = 'R$ #,##0.00';
   }
 
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "Orçamento");
+
+  const financialRows: (string | number)[][] = [
+    ["RESUMO DO ORÇAMENTO", `#${budget.numero}`],
+    ["Cliente", customerName],
+    ["CPF", customer?.cpf || "-"],
+    ["Telefone", customer?.telefone || "-"],
+    ["E-mail", customer?.email || "-"],
+    ["Vendedor", budget.createdBy || "-"],
+    ["Data", fmtDate(budget.createdAt)],
+    ["Status", STATUS_LABELS[budget.status]],
+    ["Tabela padrão", `Tabela ${budget.tabelaPreco}`],
+    ["Endereço de entrega", deliveryAddress || "-"],
+    ["Observações", budget.observacoes || "-"],
+    [],
+    ["RESUMO FINANCEIRO"],
+    [],
+    ["PRODUTOS VILLAGRES / VILLA VINÍLICOS"],
+    ["Total do item", villagresSubtotal],
+    ["Condição de pagamento", paymentLabel],
+    ["Valor das parcelas", installmentLabel(villagresTotal)],
+    ...(pixDiscount > 0 ? [[`Desconto PIX (${budget.descontoPixPercentual}%)`, -pixDiscount] as (string | number)[]] : []),
+    [budget.formaPagamento === "cartao" ? `Subtotal Cartão ${budget.parcelasCartao}x` : budget.formaPagamento === "avista_pix" ? "Subtotal PIX" : "Subtotal Débito", villagresTotal],
+    [],
+    ...(argamassaSubtotal > 0 ? [
+      ["ARGAMASSAS"],
+      ["Total do item", argamassaSubtotal],
+      ["Condição de pagamento", paymentLabel],
+      ["Valor das parcelas", installmentLabel(argamassaSubtotal)],
+      ["Informação", "Cliente receberá um Link de Pagamento"],
+      ["Subtotal", argamassaSubtotal],
+      [],
+    ] as (string | number)[][] : []),
+    ["FRETE + REJUNTES/NIVELADORES VILLACOL (PIX)"],
+    ["Total do item", pixOnlyProductsSubtotal],
+    ["Frete", budget.frete],
+    ["Condição de pagamento", "PIX"],
+    ["Subtotal PIX", pixOnlyTotal],
+    [],
+    ["TOTAL GERAL", generalTotal],
+    [],
+    ["RESUMO DE ENTREGA"],
+    ["Total de caixas/embalagens", totalBoxes],
+    ["Total de m²", totalAreaM2],
+    ["Total de metros lineares", totalLinearMeters],
+    ["Peso total da carga (kg)", totalWeight],
+    [],
+    ["PARÂMETROS APLICADOS"],
+    ["Imposto configurado (%)", pricingSettings.impostoPercentual],
+    ["Taxa de cartão configurada (%)", pricingSettings.taxaCartaoPercentual],
+    ["Desconto PIX configurado (%)", budget.descontoPixPercentual],
+  ];
+  const financialWorksheet = XLSX.utils.aoa_to_sheet(financialRows);
+  financialWorksheet["!cols"] = [{ wch: 42 }, { wch: 42 }];
+  financialRows.forEach((row, index) => {
+    if (typeof row[1] === "number" && !String(row[0]).includes("(%)") && !String(row[0]).includes("caixas") && !String(row[0]).includes("m²") && !String(row[0]).includes("metros") && !String(row[0]).includes("kg")) {
+      const cell = financialWorksheet[`B${index + 1}`];
+      if (cell) cell.z = 'R$ #,##0.00';
+    }
+  });
+  XLSX.utils.book_append_sheet(workbook, financialWorksheet, "Resumo Financeiro");
   XLSX.writeFile(workbook, `orcamento-${budget.numero}.xlsx`);
 }
 
